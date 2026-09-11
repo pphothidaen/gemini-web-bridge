@@ -1,0 +1,9 @@
+model: openai:gemini-web
+clients:
+  - type: openai
+    name: gemini-bridge
+    api_base: http://127.0.0.1:8787/v1
+    api_key: dummy
+    models:
+      - name: gemini-web
+        max_input_tokens: 1000000
