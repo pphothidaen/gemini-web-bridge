@@ -88,8 +88,22 @@
   const registry = new EvidenceRegistryClass();
 
   // ─── 1. Floating UI Status Indicator ────────────────────────
+  let lastIndicatorStatus = null;
+  let lastIndicatorText = null;
+
   function createOrUpdateIndicator(status, text) {
-    if (typeof document === "undefined" || !document.body) return;
+    lastIndicatorStatus = status;
+    lastIndicatorText = text;
+    if (typeof document === "undefined" || !document.body) {
+      if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+        document.addEventListener("DOMContentLoaded", () => {
+          if (lastIndicatorStatus && lastIndicatorText) {
+            createOrUpdateIndicator(lastIndicatorStatus, lastIndicatorText);
+          }
+        }, { once: true });
+      }
+      return;
+    }
 
     if (!indicatorEl) {
       indicatorEl = document.createElement("div");
@@ -793,10 +807,13 @@
   }
 
   // ─── 7. DOM Mutation Observer ───────────────────────────────
-  if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
-    document.addEventListener("click", () => {
-      setTimeout(syncModelsToWorker, 600);
-    });
+  function initDomObserver() {
+    if (typeof document === "undefined" || !document.body) {
+      if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+        document.addEventListener("DOMContentLoaded", initDomObserver, { once: true });
+      }
+      return;
+    }
 
     try {
       let debounceTimer = null;
@@ -807,10 +824,15 @@
         }, 500);
       });
 
-      if (document.body) {
-        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-checked", "aria-selected"] });
-      }
+      observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-checked", "aria-selected"] });
     } catch (e) {}
+  }
+
+  if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    document.addEventListener("click", () => {
+      setTimeout(syncModelsToWorker, 600);
+    });
+    initDomObserver();
   }
 
   // ─── 8. Initialization ─────────────────────────────────────
