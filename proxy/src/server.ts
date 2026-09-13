@@ -17,6 +17,14 @@ export function createServer(bridge: WebSocketBridge, queue: RequestQueue) {
     choiceId: null
   };
 
+  app.get("/health", (req: Request, res: Response) => {
+    res.json({
+      status: "ok",
+      bridgeReady: bridge.isReady(),
+      uptime: process.uptime()
+    });
+  });
+
   app.get("/v1/models", (req: Request, res: Response) => {
     res.json({
       object: "list",

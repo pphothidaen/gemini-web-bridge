@@ -3,12 +3,18 @@ import { BridgeMessage, BridgeSessionTokens } from "./types";
 
 export class WebSocketBridge {
   private wss: WebSocketServer;
+  private heartbeatInterval: NodeJS.Timeout;
   private activeSocket: WebSocket | null = null;
   private currentTokens: BridgeSessionTokens | null = null;
   private activeStreams = new Map<string, (msg: BridgeMessage) => void>();
 
   constructor(port: number) {
     this.wss = new WebSocketServer({ port, path: "/bridge" });
+    this.heartbeatInterval = setInterval(() => {
+      if (this.activeSocket && this.activeSocket.readyState === WebSocket.OPEN) {
+        this.activeSocket.send(JSON.stringify({ type: "PING" }));
+      }
+    }, 15000);
     this.init();
   }
 
@@ -23,6 +29,8 @@ export class WebSocketBridge {
           if (msg.type === "SESSION_READY" && msg.tokens) {
             this.currentTokens = msg.tokens;
             console.log("[Proxy Bridge] Active session tokens synchronized (at token acquired).");
+          } else if (msg.type === "PONG") {
+            // hearbeat ACK — silently drop, client is alive
           } else if (msg.requestId && this.activeStreams.has(msg.requestId)) {
             const handler = this.activeStreams.get(msg.requestId);
             if (handler) handler(msg);
@@ -37,13 +45,6 @@ export class WebSocketBridge {
         if (this.activeSocket === ws) this.activeSocket = null;
       });
     });
-
-    // Heartbeat ตรวจสถานะทุก 15 วินาที
-    setInterval(() => {
-      if (this.activeSocket && this.activeSocket.readyState === WebSocket.OPEN) {
-        this.activeSocket.send(JSON.stringify({ type: "PING" }));
-      }
-    }, 15000);
   }
 
   public isReady(): boolean {
@@ -64,5 +65,12 @@ export class WebSocketBridge {
 
   public cleanupStream(requestId: string) {
     this.activeStreams.delete(requestId);
+  }
+
+  public close(): void {
+    clearInterval(this.heartbeatInterval);
+    this.wss.close(() => {
+      console.log("[Proxy Bridge] WebSocket server closed.");
+    });
   }
 }
