@@ -5,3 +5,13 @@ dist/
 .DS_Store
 __pycache__/
 *.pyc
+
+.wrangler/
+orchestration/*.log
+orchestration/*.exit
+**/orchestration/*.log
+**/orchestration/*.exit
+artifacts/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

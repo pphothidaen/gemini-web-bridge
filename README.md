@@ -1,211 +1,273 @@
-# Gemini Web-Bridge
+# ⚡ Gemini Web Bridge (Cloudflare Durable Objects Edition)
 
-**Gemini Web-Bridge** เป็นระบบบริดจ์โปรโตคอลระดับท้องถิ่น (Local-First Protocol Bridge) ที่ทำหน้าที่เป็นตัวกลางเชื่อมระหว่างเซสชันเว็บเบราว์เซอร์ที่มีการยืนยันตัวตนแล้วของ Google Gemini (ผ่าน Google Account) เข้ากับเครื่องมือคอมมานด์ไลน์ (CLI), ไลบรารีมาตรฐานระดับอุตสาหกรรม, และระบบอัตโนมัติภายนอก ผ่าน REST API ที่เข้ากันได้กับมาตรฐาน OpenAI (`/v1/chat/completions` และ `/v1/models`)
+> **Transform Google Gemini Web Sessions into Remote MCP Server and OpenAI-Compatible REST API with Tool Emulation via Cloudflare Workers Durable Objects.**
 
----
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers%20Durable%20Objects-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension%20MV3%20Protocol%20v2-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/)
+[![MCP Protocol](https://img.shields.io/badge/MCP-2024--11--05-8A2BE2)](https://modelcontextprotocol.io/)
+[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991?logo=openai&logoColor=white)](https://platform.openai.com/docs/api-reference)
 
-## 1. วัตถุประสงค์ในการสร้าง (Project Purpose & Objectives)
+**Gemini Web Bridge (v4.2.0)** คือระบบ Edge AI Gateway และ Chrome Extension (Protocol v2) ที่เชื่อมต่อเซสชันการทำงานจริงของ Google Gemini Web เข้าสู่ระบบ **Cloudflare Durable Objects** เพื่อให้บริการเป็น **OpenAI-Compatible REST API** (พร้อม SSE Streaming & Tool Emulation) และ **Remote Model Context Protocol (MCP) Server**
 
-1. **เชื่อมต่อ Web Session สู่ Terminal / Code Integration**:
-   ช่วยให้นักพัฒนาและผู้ใช้งานสามารถเรียกใช้ความสามารถของโมเดล Google Gemini จากเว็บเบราว์เซอร์ผ่าน CLI (เช่น `aichat`, `mods`), Python OpenAI SDK, TypeScript, cURL, หรือ Framework ต่างๆ (เช่น LangChain, AutoGen) ได้โดยตรง โดยไม่ต้องสมัครหรือเสียค่าบริการ API เพิ่มเติม
-2. **ความปลอดภัยแบบ Local-First (Zero Credential Leakage)**:
-   ไม่มีการส่งรหัสผ่าน คุกกี้ หรือโทเคนการยืนยันตัวตนออกไปยังเซิร์ฟเวอร์ภายนอก ระบบทำงานบนเครื่องของผู้ใช้งานเท่านั้น (Localhost `127.0.0.1:8787`) การยืนยันตัวตนใช้ First-Party Cookies เดิมของเบราว์เซอร์ที่เปิดใช้งานอยู่
-3. **OpenAI-Compatible Standard Interface**:
-   จำลอง Endpoint และ Payload Schema ตามมาตรฐาน OpenAI ทั้งแบบ Non-streaming (JSON) และ Real-time Streaming (Server-Sent Events: SSE) ทำให้สามารถสลับใช้งานกับเครื่องมือที่รองรับ OpenAI ได้ทันทีโดยไม่ต้องแก้ไขโค้ดฝั่ง Client
-4. **ความเสถียรและความต่อเนื่องของการสนทนา (Session State & Single-Flight Queue)**:
-   รองรับการจำสถานะ Context บทสนทนาต่อเนื่อง (`conversationId`, `responseId`, `choiceId`) พร้อมระบบ Single-Flight Mutex Queue เพื่อเรียงลำดับคิวคำขอ ป้องกันสภาวะ Race Condition และปัญหาเซสชันตัดสลับ
+ทำให้ AI Agents ภายนอก เช่น **Hermes Agent**, **Cursor**, **Cline**, และ **Claude Code** สามารถเรียกใช้ความสามารถคิดวิเคราะห์เชิงลึก (Deep Thinking) และรัน Agentic Tool Loops บน Google Gemini Web Session จริง 100% ได้อย่างปลอดภัย รวดเร็ว และไร้การ Mock หลอก
 
 ---
 
-## 2. โครงสร้างโปรเจกต์ (Project Directory Tree)
+## 🌟 จุดเด่นหลัก (Key Highlights)
+
+- **⚡ Cloudflare Durable Objects Hub**: สถาปัตยกรรม Stateful In-Memory Coordination (`GeminiBridgeDO`) ผสาน WebSocket จากเบราว์เซอร์และ HTTP/REST จาก AI Client เข้าสู่ RAM เดียวกันบน Cloudflare Edge พร้อมการันตี FIFO queueing และ isolation
+- **🔄 Dynamic Browser Model Sync & Catalog Mapping**: ซิงก์รายการโมเดลจริงที่พร้อมใช้งานจากหน้าเว็บ Gemini แบบเรียลไทม์ (เช่น `gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro`, `gemini-web-thinking`) ผ่าน `/v1/models` พร้อมสถานะการตรวจสอบ (`discovered`, `learning`, `verified`, `stale`, `unsupported`)
+- **🛠️ OpenAI-Compatible Tool Emulation**: รองรับ Tool / Function Calling สำหรับ Agentic Workflows (เช่น `terminal`, `git`, `read_file`, `write_file`, หรือ Custom Client Schemas) โดยแปลงเป็น Prompt Directives และถอดรหัสผลลัพธ์กลับเป็น OpenAI SSE `tool_calls` chunks พร้อม `finish_reason: "tool_calls"`
+- **🛡️ Chrome Extension Protocol v2 & Dedicated-Tab Coordinator**: Background Service Worker ทำหน้าที่เลือก Leader Tab อัตโนมัติ ป้องกันหลายแท็บแย่งการเชื่อมต่อ พร้อม Failover ทันทีหากแท็บปิดตัว
+- **🔒 Privacy-First Security (Zero-Token-Leak)**: Google CSRF Token (`SNlM0e`) ถูกเก็บรักษาไว้ในหน่วยความจำของ MAIN World ในเบราว์เซอร์เท่านั้น ไม่มีการส่งข้ามไปยัง Content Script หรือส่งผ่านเครือข่ายไปยัง Cloudflare Worker
+- **🛡️ Strict Fail-Fast Architecture**: ขจัดปัญหา Canned/Mock หลอก หาก Extension ออฟไลน์ หรือโมเดลยังไม่ผ่านการ Verify ในเบราว์เซอร์ ระบบจะตอบกลับอย่างซื่อสัตย์ด้วย HTTP 503 หรือ 422 ทันที
+- **🌊 Full SSE Streaming**: รองรับ `stream: true` ตามมาตรฐาน OpenAI ตอบกลับแบบ Chunk เรียลไทม์ พร้อมปิดด้วย `data: [DONE]`
+- **🔧 Remote MCP Server**: รองรับ JSON-RPC 2.0 พร้อมชุดเครื่องมือ SDLC Solution Architect เต็มรูปแบบ
+
+---
+
+## 🏗️ สถาปัตยกรรมระบบ (Architecture Overview)
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                          Clients (HTTPS / REST)                        │
+│   • Hermes Agent (Primary Model, Agentic Tool Loops & MCP Tools)       │
+│   • Cursor / Cline / Continue (OpenAI-Compatible API + SSE)            │
+│   • Gemini Spark / Claude Code (Remote MCP Server)                     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ (Bearer Token Auth + SSE Stream)
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│              Cloudflare Worker (gemini-web-bridge)                     │
+│                                                                        │
+│   GET  /                    Health Check & Status Dashboard (Public)   │
+│   POST /v1/chat/completions OpenAI Chat Completions (SSE Streaming)    │
+│   GET  /v1/models           Dynamic Model Catalog & Recommendations    │
+│   POST /mcp                 Model Context Protocol (JSON-RPC 2.0)      │
+│   GET  /bridge              WebSocket Secure (WSS) Stateful Hub        │
+│                                                                        │
+│   ┌────────────────────────────────────────────────────────────────┐   │
+│   │            Durable Object: GeminiBridgeDO                      │   │
+│   │   • Stateful RAM Coordination: WSS Tab ↔ Client HTTP Req       │   │
+│   │   • Dynamic Model Catalog & Revision Tracking                  │   │
+│   │   • Tool Emulation Engine (OpenAI Tools ↔ System Directives)   │   │
+│   │   • FIFO Request Queue (Max 10 waiters, 60s timeout)           │   │
+│   │   • Strict Fail-Fast: 503 on Extension Disconnect              │   │
+│   └────────────────────────────────────────────────────────────────┘   │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ (WSS Bi-directional Protocol v2)
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ Chrome Extension (Protocol v2 — Manifest V3)                           │
+│ ├─ background.js       Dedicated-Tab Coordinator (Leader/Standby)      │
+│ ├─ content.js          Isolated World: WSS Client, Model UI Selector   │
+│ ├─ injected.js         MAIN World: Native RPC Interceptor (CSP-Immune) │
+│ ├─ model-adapter.js    Safe Replay Payload Builder                     │
+│ └─ evidence-registry.js Session Epoch Bound Evidence (Fail-Closed)     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ (First-Party Session Cookies)
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ Google Gemini Web Session (https://gemini.google.com/)                 │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📁 โครงสร้างโปรเจกต์ (Repository Structure)
 
 ```text
 gemini-web-bridge/
-├── README.md                      # เอกสารคู่มือการใช้งาน วัตถุประสงค์ และรายละเอียดโปรเจกต์
-├── ARCHITECTURE.md                # รายละเอียดสถาปัตยกรรมระบบ Data Flow และ Wire-Protocol
-├── extension/                     # Chrome Extension (Manifest V3)
-│   ├── manifest.json              # กำหนดสิทธิ์ Permission และ Context ขอบเขต
-│   ├── content.js                 # Content Script ทำหน้าที่เป็น Bi-directional WebSocket Relay
-│   └── injected.js                # สคริปต์ Main World ดึง Token และยิง Fetch API ภายใต้บริบทเว็บ
-├── proxy/                         # Local Proxy Server (Node.js & TypeScript)
-│   ├── package.json               # รายการ Dependencies และ Build Scripts
-│   ├── package-lock.json          # Lockfile สำหรับ Node.js
-│   ├── tsconfig.json              # การตั้งค่า TypeScript Compiler
-│   ├── src/                       # ซอร์สโค้ดภาษา TypeScript
-│   │   ├── types.ts               # โครงสร้าง Type Interfaces ทั้ง OpenAI และ Google RPC
-│   │   ├── protocol-decoder.ts    # ตัวเข้ารหัสและถอดรหัสข้อความ Wire-Protocol (f.req / wrb.fr)
-│   │   ├── queue.ts               # ระบบ Single-Flight Mutex Queue (FIFO)
-│   │   ├── ws-bridge.ts           # WebSocket Bridge Server พร้อมกลไก Heartbeat
-│   │   ├── server.ts              # Express Server ให้บริการ REST Endpoints (/v1/models, /v1/chat/completions)
-│   │   └── index.ts               # Entrypoint หลัก เริ่มการทำงานบนพอร์ต 8787
-│   └── dist/                      # ผลลัพธ์การคอมไพล์เป็น JavaScript สำหรับ Production
-│       ├── types.js
-│       ├── protocol-decoder.js
-│       ├── queue.js
-│       ├── ws-bridge.js
-│       ├── server.js
-│       └── index.js
-└── tests/                         # ไฟล์สำหรับทดสอบระบบและการตั้งค่า Client
-    ├── test_bridge.py             # สคริปต์ทดสอบสตรีมมิ่งผ่าน Python OpenAI SDK
-    └── config-aichat.yaml         # ไฟล์ Config ตัวอย่างสำหรับ aichat CLI
+├── cloudflare-worker/             # Cloudflare Worker Edge Gateway (Durable Objects)
+│   ├── wrangler.toml              # การตั้งค่า DO Bindings, Migrations, Env Vars
+│   ├── README.md                  # คู่มือทางเทคนิคของ Worker & Tool Emulator
+│   ├── src/
+│   │   ├── index.js               # Core Worker: GeminiBridgeDO, REST API, MCP, WSS Hub
+│   │   ├── model-catalog.js       # Dynamic Catalog Normalization & Recommendation
+│   │   └── tool-emulator.ts       # OpenAI Tool Calling Emulation & SSE Transformer
+│   ├── tests/                     # Unit & Integration Tests (Worker + Extension)
+│   ├── scripts/                   # Verification Scripts (Production, Hermes, Chat)
+│   └── patches/                   # Hermes Provider Patches
+├── extension-cloudflare/          # Chrome Extension Manifest V3 (Protocol v2)
+│   ├── manifest.json              # กำหนด declarative MAIN world scripts และ permissions
+│   ├── background.js              # Centralized Dedicated-Tab Coordinator
+│   ├── content.js                 # Isolated World WSS Client & Model Selector
+│   ├── injected.js                # MAIN World Interceptor (CSP-immune, Zero CSRF leak)
+│   ├── model-adapter.js           # Structural Adapter สำหรับ Replay Payload
+│   ├── evidence-registry.js       # Session-bound Evidence & Model Verification
+│   ├── tab-coordinator.js         # Tab election fallback logic
+│   ├── settings.js / options.*    # Settings resolution & Diagnostics UI
+│   └── icons/                     # Extension Icons
+├── docs/                          # คู่มือและเอกสารการใช้งาน
+│   └── client-configs.md          # คู่มือการตั้งค่า Client แต่ละประเภทโดยละเอียด
+├── tests/                         # End-to-End & Integration Test Scripts
+├── ARCHITECTURE.md                # รายละเอียดเชิงลึกของสถาปัตยกรรมและ Protocol Spec
+├── IDEA.md                        # บันทึกแนวคิดและ Roadmap ของระบบ
+└── README.md                      # เอกสารแนะนำและคู่มือเริ่มต้นใช้งาน
 ```
 
 ---
 
-## 3. สถาปัตยกรรมและการทำงานของระบบ (System Architecture & Workflow)
+## 🚀 เริ่มต้นใช้งานอย่างรวดเร็ว (Quickstart)
 
-ระบบทำงานประสานกันผ่าน 4 เลเยอร์หลัก:
+### 1. Deploy Cloudflare Worker
 
-```text
-+-------------------------------------------------------------------------+
-|                              Client Layer                               |
-|        (Python OpenAI SDK, aichat CLI, mods, cURL, LangChain)           |
-+------------------------------------+------------------------------------+
-                                     | HTTP POST /v1/chat/completions (SSE)
-                                     v
-+-------------------------------------------------------------------------+
-|                           Bridge Proxy Server                           |
-|                      (Node.js + Express + ws :8787)                     |
-|  - RequestQueue: จัดการคิวคำขอแบบ Single-Flight FIFO                    |
-|  - ProtocolDecoder: แปลง OpenAI Schema <-> Google RPC (f.req / wrb.fr)  |
-|  - WebSocket Server: จัดการการเชื่อมต่อกับ Extension + Heartbeat Ping/Pong|
-+------------------------------------+------------------------------------+
-                                     | WebSocket Frame (ws://127.0.0.1:8787/bridge)
-                                     v
-+-------------------------------------------------------------------------+
-|                        Chrome MV3 Extension                             |
-|                           (content.js)                                  |
-|  - เชื่อมต่อ WebSocket ไปยัง Local Proxy                                |
-|  - ส่งต่อคำขอและผลลัพธ์ผ่าน window.postMessage                          |
-+------------------------------------+------------------------------------+
-                                     | window.postMessage
-                                     v
-+-------------------------------------------------------------------------+
-|                      In-Page Execution Engine                           |
-|                      (injected.js in Main World)                        |
-|  - เข้าถึง window.WIZ_global_data สกัดโทเคน SNlM0e, FdrFJe, cfb2h       |
-|  - ส่งคำขอ Native fetch() ไปยัง Google Web RPC                          |
-|  - สตรีม Response Chunks กลับมายัง Content Script                       |
-+------------------------------------+------------------------------------+
-                                     | HTTPS POST (พร้อม First-Party Cookies)
-                                     v
-+-------------------------------------------------------------------------+
-|                     Google Gemini Web Backend Service                   |
-|       (https://gemini.google.com/_/BardChatUi/data/assistant...)        |
-+-------------------------------------------------------------------------+
-```
-
----
-
-## 4. ความต้องการของระบบ (Prerequisites)
-
-- **Node.js**: เวอร์ชัน 18.0.0 ขึ้นไป
-- **Google Chrome / Chromium**: รองรับ Manifest V3
-- **Python**: เวอร์ชัน 3.8 ขึ้นไป (สำหรับการรัน `test_bridge.py`) พร้อมติดตั้งแพ็กเกจ `openai` (`pip install openai`)
-- **บัญชี Google**: ลงชื่อเข้าใช้งานบน https://gemini.google.com เรียบร้อยแล้ว
-
----
-
-## 5. คู่มือเริ่มต้นใช้งาน (Quickstart Guide)
-
-### ขั้นตอนที่ 1: รัน Local Bridge Proxy Server
-1. เข้าไปที่โฟลเดอร์ `proxy/`:
-   ```bash
-   cd gemini-web-bridge/proxy
-   ```
-2. ติดตั้ง Dependencies และคอมไพล์โค้ด:
-   ```bash
-   npm install
-   npm run build
-   ```
-3. เริ่มต้นรันเซิร์ฟเวอร์:
-   ```bash
-   npm start
-   ```
-   ระบบจะแสดงข้อความว่าเซิร์ฟเวอร์ทำงานอยู่ที่ `127.0.0.1:8787`:
-   ```text
-   =================================================
-    Gemini Web-Bridge Proxy running on 127.0.0.1:8787
-    Endpoint: http://127.0.0.1:8787/v1/chat/completions
-    Ready for aichat, mods, and OpenAI SDK.
-   =================================================
-   ```
-
-### ขั้นตอนที่ 2: ติดตั้ง Chrome Extension
-1. เปิด Google Chrome แล้วไปที่ `chrome://extensions/`
-2. เปิดสวิตช์ **Developer mode** ที่มุมขวาบนของหน้าจอ
-3. คลิกปุ่ม **Load unpacked** (โหลดส่วนขยายที่ยังไม่ได้แพ็ก)
-4. เลือกโฟลเดอร์ `gemini-web-bridge/extension`
-5. ส่วนขยาย "Gemini Web-Bridge Extension" จะปรากฏในรายการ
-
-### ขั้นตอนที่ 3: เปิดเซสชันเว็บ Gemini
-1. เปิดแท็บเบราว์เซอร์ไปที่ https://gemini.google.com/
-2. ตรวจสอบว่าลงชื่อเข้าใช้บัญชี Google เรียบร้อยแล้ว
-3. สคริปต์ Extension จะตรวจจับหน้าเว็บ สกัดโทเคน `SNlM0e` และเชื่อมต่อกับ Proxy Server ที่รันอยู่โดยอัตโนมัติ (จะปรากฏข้อความยืนยันใน Console ของ Proxy: `Active session tokens synchronized`)
-
-### ขั้นตอนที่ 4: ทดสอบการใช้งานผ่านไคลเอนต์
-
-#### ตัวเลือก ก: ทดสอบด้วย Python OpenAI SDK
 ```bash
-cd gemini-web-bridge
-python3 tests/test_bridge.py
+cd cloudflare-worker
+npm install
+npx wrangler deploy
 ```
-สคริปต์จะยิงคำขอไปยัง Proxy และสตรีมข้อความคำตอบออกมาทาง Terminal แบบเรียลไทม์
+*Worker จะถูก Deploy ไปที่ `https://gemini-web-bridge.<account>.workers.dev`*
 
-#### ตัวเลือก ข: ใช้งานผ่าน aichat CLI
-1. คัดลอกการตั้งค่าใน `tests/config-aichat.yaml` ไปไว้ที่ `~/.config/aichat/config.yaml`
-2. เรียกใช้งานได้ทันที:
-   ```bash
-   aichat "เขียนบทกวีสั้นเกี่ยวกับท้องฟ้ายามเย็น"
+#### ตั้งค่าตัวแปรความปลอดภัย (Secrets / Vars)
+ใน `cloudflare-worker/wrangler.toml` หรือผ่าน Cloudflare Dashboard:
+- `BRIDGE_SECRET`: รหัสลับสำหรับยืนยันตัวตนระหว่าง Extension และ Worker
+- `CLIENT_API_KEY`: รหัส Bearer Token สำหรับ Client เรียกใช้งาน (เช่น `hermes-secret-key-2026`)
+- `GEMINI_API_KEY`: (ตัวเลือก) Google Gemini API Key สำหรับระบบ Secondary Fallback
+
+---
+
+### 2. ติดตั้ง Chrome Extension (Cloud Edition)
+
+1. เปิดเบราว์เซอร์ Google Chrome ไปที่ `chrome://extensions/`
+2. เปิดสวิตช์ **Developer mode** ที่มุมขวาบน
+3. คลิกปุ่ม **Load unpacked**
+4. เลือกโฟลเดอร์ `gemini-web-bridge/extension-cloudflare`
+5. เปิดหน้าเว็บ https://gemini.google.com/ แล้วล็อกอินบัญชี Google ให้เรียบร้อย
+6. กดดู Console (F12) จะพบข้อความ:
+   ```text
+   [Bridge] 🔌 Connecting to Worker: wss://gemini-web-bridge.../bridge
+   [Bridge] ✅ Bridge Connected Successfully
+   [Bridge] ✅ Session Ready: Tokens synchronized
    ```
 
-#### ตัวเลือก ค: ใช้งานผ่าน cURL
-- **ตรวจสอบรายชื่อโมเดล**:
-  ```bash
-  curl http://127.0.0.1:8787/v1/models
-  ```
-- **ส่งคำขอแบบ Streaming**:
-  ```bash
-  curl -N http://127.0.0.1:8787/v1/chat/completions     -H "Content-Type: application/json"     -d '{
-      "model": "gemini-web",
-      "messages": [{"role": "user", "content": "สวัสดี Gemini Web-Bridge"}],
-      "stream": true
-    }'
-  ```
-
 ---
 
-## 6. ข้อมูลจำเพาะ API (API Specifications)
+### 3. เชื่อมต่อ Client
 
-### 1. `GET /v1/models`
-- **Output**: รายการโมเดลจำลองที่รองรับ
-```json
-{
-  "object": "list",
-  "data": [
-    { "id": "gemini-web", "object": "model", "created": 1700000000, "owned_by": "google-web" },
-    { "id": "gemini-web-thinking", "object": "model", "created": 1700000000, "owned_by": "google-web" }
-  ]
-}
+#### ก. Hermes Agent (ใช้เป็น Primary Model Provider & MCP Tools)
+แก้ไขไฟล์ `~/.hermes/config.yaml`:
+```yaml
+model:
+  default: gemini-web-thinking
+  provider: gemini-web-bridge
+  base_url: https://gemini-web-bridge.taijustarrett417.workers.dev/v1
+  api_key: hermes-secret-key-2026
+
+providers:
+  gemini-web-bridge:
+    capabilities:
+      reasoning: false
+    type: custom
+    name: gemini-web-bridge
+    base_url: https://gemini-web-bridge.taijustarrett417.workers.dev/v1
+    api_key: hermes-secret-key-2026
+    discover_models: true
+    refresh_models_on_connect: true
+    default_model: gemini-web-thinking
+    models: []
+    timeout: 120
+    connect_timeout: 30
+
+mcp_servers:
+  gemini-web-bridge:
+    url: https://gemini-web-bridge.taijustarrett417.workers.dev/mcp
+    headers:
+      Authorization: "Bearer hermes-secret-key-2026"
 ```
 
-### 2. `POST /v1/chat/completions`
-- **Headers**: `Content-Type: application/json`
-- **Request Body**:
-  - `model` *(string)*: รหัสโมเดล เช่น `"gemini-web"`
-  - `messages` *(array)*: รายการข้อความในรูปแบบ `[{"role": "user"|"system"|"assistant", "content": "..."}]`
-  - `stream` *(boolean)*: `true` สำหรับ Server-Sent Events (SSE) หรือ `false` สำหรับคำตอบ JSON ตัวเต็ม
-- **Responses**:
-  - `200 OK`: สตรีมข้อมูล SSE หรือ JSON ตามสกีมา OpenAI
-  - `503 Service Unavailable`: แจ้งเตือนเมื่อ Extension หรือเซสชันเบราว์เซอร์ยังไม่ได้เชื่อมต่อ
+> [!TIP]
+> **Dynamic Model Catalog & Tool Emulation**: เมื่อเปิดหน้าเว็บ Gemini ขึ้นมา ระบบจะซิงก์โมเดลที่มีในเบราว์เซอร์ (`gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro`, `gemini-web-thinking`) เข้ามายัง Hermes โดยอัตโนมัติ พร้อมรองรับ Agentic Tool Loop ผ่านระบบ Tool Emulation ในตัว
+
+ทดสอบการใช้งานใน Terminal:
+```bash
+# คุยกับ Hermes ผ่านโมเดลหลัก
+hermes -z "ออกแบบระบบ Distributed Cache ด้วย Redis และ Go"
+
+# เรียกใช้ MCP Tool เฉพาะทาง
+hermes -z "ออกแบบ System Architecture" -t gemini-web-bridge
+```
+
+#### ข. Cursor / Cline
+- **Base URL**: `https://gemini-web-bridge.taijustarrett417.workers.dev/v1`
+- **API Key**: `hermes-secret-key-2026`
+- **Model**: `gemini-web-thinking` หรือ `gemini-web`
+
+#### ค. Python OpenAI SDK
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://gemini-web-bridge.taijustarrett417.workers.dev/v1",
+    api_key="hermes-secret-key-2026"
+)
+
+response = client.chat.completions.create(
+    model="gemini-web-thinking",
+    messages=[{"role": "user", "content": "วิเคราะห์ข้อดีข้อเสียของ Microservices vs Monolith"}],
+    stream=True
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
 
 ---
 
-## 7. การรับมือความเสี่ยงและการแก้ไขปัญหา (Troubleshooting & Risk Matrix)
+## 🛠️ การรองรับ Tool Calling & Function Emulation
 
-| อาการที่พบ (Symptoms) | สาเหตุที่เป็นไปได้ (Causes) | แนวทางแก้ไข (Mitigation) |
-| :--- | :--- | :--- |
-| **HTTP 503 Service Unavailable** | เบราว์เซอร์ยังไม่ได้เปิดหน้า Gemini หรือ Extension ยังไม่เชื่อมต่อ | 1. ตรวจสอบว่า Proxy รันอยู่<br>2. เปิดหน้า https://gemini.google.com/ ค้างไว้<br>3. Refresh หน้า Gemini หนึ่งครั้งเพื่อให้ Extension ทำการเชื่อมต่อใหม่ |
-| **Missing SNlM0e token** | เซสชันบัญชี Google หมดอายุ หรือหน้าเว็บยังโหลดไม่เสร็จ | ทำการลงชื่อเข้าใช้ Google ใหม่ในเบราว์เซอร์ และรีเฟรชหน้าเว็บ |
-| **Response หยุดนิ่ง หรือข้อความขาด** | Google ปรับเปลี่ยนโครงสร้าง RPC Payload | ตรวจสอบฟังก์ชัน `decodeChunk` ใน `proxy/src/protocol-decoder.ts` เพื่อปรับรูปแบบการแกะ Array ของ JSON ให้ตรงกับ Payload ล่าสุด |
-| **คำขอหลายรายการประมวลผลพร้อมกัน** | มีการส่ง Request ซ้อนกันจากหลายโปรแกรม | ระบบมี `RequestQueue` ควบคุมแบบ Single-Flight Mutex FIFO อยู่แล้ว คำขอจะถูกต่อคิวและทำงานทีละรายการโดยอัตโนมัติ |
+นอกเหนือจาก MCP Server แล้ว Gemini Web Bridge ยังมี **Built-in Tool Calling Emulator** (`cloudflare-worker/src/tool-emulator.ts`) ที่เปิดให้โมเดลเว็บรัน Tool Loops ของ OpenAI Function Calling API ได้:
+
+| Emulated Tool | คำอธิบายการทำงาน |
+|:---|:---|
+| `terminal` | สั่งรันคำสั่ง Shell / Terminal ในเครื่อง Client |
+| `git` | จัดการ Git Commands (`status`, `diff`, `commit`, `push`, etc.) |
+| `read_file` | อ่านเนื้อหาไฟล์ใน Disk จากพาธที่กำหนด |
+| `write_file` | เขียนและบันทึกเนื้อหาลงไฟล์ |
+| *Custom Tools* | รองรับ JSON Schema ของ Tools ใดๆ ที่ Client กำหนดส่งผ่านพารามิเตอร์ `tools` |
+
+- **Streaming & SSE**: แปลงคำตอบของ Gemini ออกมาเป็น Chunk ของ `tool_calls` ตามมาตรฐาน OpenAI พร้อม `finish_reason: "tool_calls"`
+- **Multi-turn History**: จัดเก็บและรักษาลำดับบทสนทนารวมทั้ง `role: "tool"` และ `tool_call_id` ข้าม Turn ได้อย่างสมบูรณ์
+
+---
+
+## 🧰 รายการ MCP Tools ที่มีให้ใช้งาน
+
+| Tool Name | คำอธิบาย |
+|:---|:---|
+| `sdlc_solution_architect` | วิเคราะห์ปัญหา ออกแบบสถาปัตยกรรมระบบ Component Model, Data Flow และ Implementation Roadmap |
+| `orchestrate_sdlc_plan` | วางแผน Roadmap และแตก Task ย่อยตามวงจร SDLC (Plan → Arch → Code → Test → Deploy) |
+| `code_review_and_debug` | ตรวจสอบโค้ด หาสาเหตุของ Bug (Root Cause), แนะนำ Patch แก้ไข และตรวจสอบ Security |
+| `evaluate_tech_tradeoffs` | วิเคราะห์เปรียบเทียบข้อดี-ข้อเสียของเทคโนโลยี (Trade-off Matrix) เพื่อประกอบการตัดสินใจ |
+| `ping` | ตรวจสอบสถานะการเชื่อมต่อของ Cloud Hub, Chrome Extension และ Engine Mode |
+
+---
+
+## 🔍 การตรวจสอบและดีบัก (Verification & Monitoring)
+
+- **Real-time Logs ผ่าน Cloudflare Wrangler:**
+  ```bash
+  cd cloudflare-worker
+  npx wrangler tail --format pretty
+  ```
+- **Health Check ผ่าน cURL:**
+  ```bash
+  curl -s https://gemini-web-bridge.taijustarrett417.workers.dev/ | jq
+  ```
+- **ทดสอบ MCP Tools ผ่าน Hermes:**
+  ```bash
+  hermes mcp test gemini-web-bridge
+  ```
+
+---
+
+## 📄 เอกสารเพิ่มเติม (Documentation Links)
+- [คู่มือการตั้งค่า Client ทั้งหมด (docs/client-configs.md)](docs/client-configs.md)
+- [รายละเอียดสถาปัตยกรรมและ Data Flow (ARCHITECTURE.md)](ARCHITECTURE.md)
+- [แนวคิดและการออกแบบระบบ (IDEA.md)](IDEA.md)
+
+---
+
+## 📜 License
+MIT License. พัฒนาขึ้นเพื่อการศึกษาและการบูรณาการระบบ AI ภายในองค์กรอย่างมีประสิทธิภาพ

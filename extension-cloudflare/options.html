@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Web-Bridge Cloudflare - Settings & Diagnostics</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; background: #f8fafc; color: #1e293b; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    h1 { font-size: 24px; margin-bottom: 8px; color: #0f172a; }
+    h2 { font-size: 16px; margin-top: 0; margin-bottom: 16px; color: #1e293b; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; }
+    .subtitle { color: #64748b; margin-bottom: 24px; font-size: 14px; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 13px; color: #334155; }
+    input[type="text"], input[type="password"], select { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; box-sizing: border-box; margin-bottom: 12px; background: #fff; }
+    input[type="text"]:focus, input[type="password"]:focus, select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+    .btn { background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.2s; }
+    .btn:hover { background: #1d4ed8; }
+    .btn:disabled { background: #94a3b8; cursor: not-allowed; }
+    .btn-secondary { background: #64748b; margin-left: 8px; }
+    .btn-secondary:hover { background: #475569; }
+    .status { padding: 12px; border-radius: 8px; margin-top: 16px; font-size: 14px; display: none; line-height: 1.5; }
+    .status.success { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; display: block; }
+    .status.error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; display: block; }
+    .help-text { font-size: 12px; color: #64748b; margin-top: -8px; margin-bottom: 16px; line-height: 1.4; }
+    .current-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 6px; word-break: break-all; white-space: pre-wrap; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; margin-left: 6px; }
+    .badge-strict { background: #fee2e2; color: #991b1b; }
+    .badge-permissive { background: #fef3c7; color: #92400e; }
+  </style>
+</head>
+<body>
+  <h1>Gemini Web-Bridge Cloudflare</h1>
+  <p class="subtitle">Connection settings, verification protocol, and diagnostics</p>
+
+  <div class="card">
+    <h2>Worker & Authentication</h2>
+    <label for="workerUrl">Worker URL</label>
+    <input type="text" id="workerUrl" placeholder="https://gemini-web-bridge.taijustarrett417.workers.dev" value="https://gemini-web-bridge.taijustarrett417.workers.dev">
+    <div class="help-text">Deployed Cloudflare Worker URL (must be HTTPS / WSS)</div>
+
+    <label for="bridgeToken">Bridge Token</label>
+    <input type="password" id="bridgeToken" placeholder="Leave empty for built-in compatibility">
+    <div class="help-text">Must match the Worker BRIDGE_AUTH_TOKEN secret. Empty retains the built-in migration secret.</div>
+
+    <label for="enforcementMode">Enforcement Mode</label>
+    <select id="enforcementMode">
+      <option value="strict">Strict (Default — Fail closed 422 if model unverified)</option>
+      <option value="permissive">Permissive (Fallback to verified model with X-Model-Degraded header)</option>
+    </select>
+    <div class="help-text">Controls bridge behavior when a requested model has no proven native RPC mapping.</div>
+
+    <button class="btn" id="saveBtn">Save Settings</button>
+    <div id="saveStatus" class="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>Connection Diagnostics</h2>
+    <p style="font-size: 13px; color: #64748b; margin-top: 0; margin-bottom: 16px;">
+      Validate bridge credentials and protocol version against Worker's authenticated endpoint.
+    <div style="display: flex; gap: 8px;">
+      <button class="btn btn-secondary" id="testBtn">Test Connection</button>
+      <button class="btn btn-secondary" id="exportEvidenceBtn">Export Sanitized Evidence</button>
+    </div>
+    <div id="testStatus" class="status"></div>
+    <div id="connectionInfo" style="margin-top: 16px; display: none;">
+      <label id="infoLabel">Diagnostic Response:</label>
+      <div id="workerInfo" class="current-value"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Effective Configuration</h2>
+    <div id="currentSettings" class="current-value">Loading...</div>
+  </div>
+
+  <script src="settings.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

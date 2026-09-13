@@ -1,9 +1,11 @@
-model: openai:gemini-web
+model: openai:gemini-web-thinking
 clients:
   - type: openai
     name: gemini-bridge
-    api_base: http://127.0.0.1:8787/v1
-    api_key: dummy
+    api_base: https://gemini-web-bridge.taijustarrett417.workers.dev/v1
+    api_key: hermes-secret-key-2026
     models:
+      - name: gemini-web-thinking
+        max_input_tokens: 1000000
       - name: gemini-web
         max_input_tokens: 1000000

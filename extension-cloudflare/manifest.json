@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Web-Bridge Cloudflare",
+  "version": "1.2.0",
+  "description": "Bridge active authenticated Gemini web session to Cloudflare Worker (Protocol v2 Verified RPC)",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://gemini.google.com/*",
+    "https://gemini-web-bridge.taijustarrett417.workers.dev/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["injected.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": [
+        "settings.js",
+        "model-adapter.js",
+        "evidence-registry.js",
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "options_page": "options.html"
+}
