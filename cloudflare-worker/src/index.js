@@ -107,6 +107,7 @@ export class GeminiBridgeDO extends DurableObject {
       responseId: null,
       choiceId: null
     };
+    this.mcpSessions = new Map();
 
     this.resetModelCatalog();
 
@@ -139,6 +140,17 @@ export class GeminiBridgeDO extends DurableObject {
           this.activeSocket.send(JSON.stringify({ type: "PING" }));
         } catch (e) {
           console.warn("[Bridge DO] PING send error:", e.message);
+        }
+      }
+      if (this.mcpSessions && this.mcpSessions.size > 0) {
+        for (const [sessionId, session] of this.mcpSessions.entries()) {
+          try {
+            session.writer.write(session.encoder.encode(": keepalive\n\n")).catch(() => {
+              this.mcpSessions.delete(sessionId);
+            });
+          } catch (e) {
+            this.mcpSessions.delete(sessionId);
+          }
         }
       }
     }, 15000);
@@ -248,7 +260,7 @@ export class GeminiBridgeDO extends DurableObject {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS, DELETE, PUT",
       "Access-Control-Allow-Headers": "*",
-      "Access-Control-Expose-Headers": "Mcp-Session-Id, Content-Type, X-Model-Degraded, X-Requested-Model, X-Resolved-Model",
+      "Access-Control-Expose-Headers": "Mcp-Session-Id, Mcp-Protocol-Version, Content-Type, X-Model-Degraded, X-Requested-Model, X-Resolved-Model",
       "Access-Control-Max-Age": "86400",
     };
 
@@ -350,7 +362,10 @@ export class GeminiBridgeDO extends DurableObject {
       }
     }
 
-    const clientSessionId = request.headers.get("Mcp-Session-Id") || `session-${crypto.randomUUID()}`;
+    const clientSessionId = request.headers.get("Mcp-Session-Id") ||
+                            url.searchParams.get("sessionId") ||
+                            url.searchParams.get("session_id") ||
+                            `session-${crypto.randomUUID()}`;
 
     // ─── 2. OpenAI-Compatible API: /v1/models ───
     if (url.pathname === "/v1/models" && request.method === "GET") {
@@ -575,120 +590,365 @@ export class GeminiBridgeDO extends DurableObject {
       }
     ];
 
+    // Helper to send message over active SSE connection for a session
+    const sendSseMessage = (sessionId, msgObj) => {
+      if (!this.mcpSessions) return;
+      const sess = this.mcpSessions.get(sessionId);
+      if (sess) {
+        try {
+          const sseData = `event: message\ndata: ${JSON.stringify(msgObj)}\n\n`;
+          sess.writer.write(sess.encoder.encode(sseData)).catch(() => {
+            this.mcpSessions.delete(sessionId);
+          });
+        } catch (e) {
+          this.mcpSessions.delete(sessionId);
+        }
+      }
+    };
+
+    // ─── 4. Remote Model Context Protocol (MCP): /mcp ───
+    if (url.pathname === "/mcp" && request.method === "GET") {
+      const sessionId = request.headers.get("Mcp-Session-Id") ||
+                        url.searchParams.get("sessionId") ||
+                        url.searchParams.get("session_id") ||
+                        `session-${crypto.randomUUID()}`;
+      const encoder = new TextEncoder();
+      const { readable, writable } = new TransformStream();
+      const writer = writable.getWriter();
+
+      if (!this.mcpSessions) this.mcpSessions = new Map();
+      this.mcpSessions.set(sessionId, { writer, encoder });
+
+      if (request.signal) {
+        request.signal.addEventListener("abort", () => {
+          this.mcpSessions.delete(sessionId);
+          try { writer.close().catch(() => {}); } catch (e) {}
+        });
+      }
+
+      // In MCP SSE transport: emit the endpoint URI for POST messages
+      const endpointPath = `/mcp?sessionId=${encodeURIComponent(sessionId)}`;
+      const initSseData = `event: endpoint\ndata: ${endpointPath}\n\n`;
+      writer.write(encoder.encode(initSseData)).catch(() => {});
+
+      return new Response(readable, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          "Connection": "keep-alive",
+          "Mcp-Session-Id": sessionId,
+          "Mcp-Protocol-Version": "2024-11-05"
+        }
+      });
+    }
+
+    if (url.pathname === "/mcp" && request.method === "DELETE") {
+      const targetSessionId = url.searchParams.get("sessionId") ||
+                              url.searchParams.get("session_id") ||
+                              request.headers.get("Mcp-Session-Id");
+      if (targetSessionId && this.mcpSessions && this.mcpSessions.has(targetSessionId)) {
+        const sess = this.mcpSessions.get(targetSessionId);
+        try { sess.writer.close().catch(() => {}); } catch (e) {}
+        this.mcpSessions.delete(targetSessionId);
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+          ...(targetSessionId ? { "Mcp-Session-Id": targetSessionId } : {})
+        }
+      });
+    }
+
     if (url.pathname === "/mcp" && request.method === "POST") {
       let body;
-      try { body = await request.json(); } catch (e) { body = {}; }
-
-      const id = body.id !== undefined ? body.id : null;
-      const method = body.method;
-      const params = body.params || {};
-      const mcpHeaders = { ...corsHeaders, "Content-Type": "application/json", "Mcp-Session-Id": clientSessionId };
-
-      if (method === "initialize") {
+      try {
+        body = await request.json();
+      } catch (e) {
         return new Response(JSON.stringify({
           jsonrpc: "2.0",
-          id,
-          result: {
-            protocolVersion: params.protocolVersion || "2024-11-05",
-            capabilities: { tools: { listChanged: false } },
-            serverInfo: { name: "gemini-web-bridge-cloud-hub", version: "4.2.0" }
-          }
-        }), { status: 200, headers: mcpHeaders });
+          id: null,
+          error: { code: -32700, message: "Parse error: Invalid JSON" }
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
 
-      if (method === "notifications/initialized") {
-        return new Response(null, { status: 200, headers: mcpHeaders });
-      }
-
-      if (method === "tools/list") {
+      if (!body || typeof body !== "object") {
         return new Response(JSON.stringify({
           jsonrpc: "2.0",
-          id,
-          result: { tools }
-        }), { status: 200, headers: mcpHeaders });
+          id: null,
+          error: { code: -32600, message: "Invalid Request" }
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
       }
 
-      if (method === "tools/call") {
-        const toolName = params.name;
-        const args = params.arguments || {};
+      if (Array.isArray(body) && body.length === 0) {
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32600, message: "Invalid Request: Empty batch" }
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
 
-        if (toolName === "ping") {
-          const extStatus = this.isExtensionReady() ? "ONLINE (Session Ready)" : "DISCONNECTED (Please open gemini.google.com in Chrome)";
-          const pongText = `Pong! Cloud Hub v4.2.0 is running.\n• Active Browser Model: ${this.activeBrowserModel} (Extended Thinking: ${this.extendedThinkingActive ? "ON" : "OFF"})\n• Chrome Extension Bridge: ${extStatus}`;
-          return new Response(JSON.stringify({
-            jsonrpc: "2.0",
-            id,
-            result: { content: [{ type: "text", text: pongText }] }
-          }), { status: 200, headers: mcpHeaders });
-        }
+      const sseQuerySessionId = url.searchParams.get("sessionId") || url.searchParams.get("session_id");
+      const isLegacySseSession = Boolean(sseQuerySessionId);
 
-        if (!this.isExtensionReady()) {
-          return new Response(JSON.stringify({
-            jsonrpc: "2.0",
-            id,
-            error: {
-              code: -32000,
-              message: "Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session."
+      if (isLegacySseSession && (!this.mcpSessions || !this.mcpSessions.has(sseQuerySessionId))) {
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0",
+          id: Array.isArray(body) ? null : (body?.id ?? null),
+          error: { code: -32001, message: `MCP SSE session not found: ${sseQuerySessionId}` }
+        }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      const clientSessionId = isLegacySseSession
+        ? sseQuerySessionId
+        : (request.headers.get("Mcp-Session-Id") || `session-${crypto.randomUUID()}`);
+
+      const mcpHeaders = {
+        ...corsHeaders,
+        "Mcp-Session-Id": clientSessionId,
+        "Mcp-Protocol-Version": "2024-11-05"
+      };
+
+      const handleSingleMcp = async (msg) => {
+        if (!msg || typeof msg !== "object") {
+          return {
+            response: {
+              jsonrpc: "2.0",
+              id: null,
+              error: { code: -32600, message: "Invalid Request" }
             }
-          }), { status: 200, headers: mcpHeaders });
+          };
         }
 
-        let prompt = "";
-        if (toolName === "sdlc_solution_architect") {
-          prompt = `[Role: Senior Solution Architect]\nProblem: ${args.problem_description}\nTech Stack: ${args.tech_stack || "Modern Cloud-Native"}\nConstraints: ${args.constraints || "High Availability"}\n\nTask: Design full solution architecture, component model, data flow, and actionable implementation steps.`;
-        } else if (toolName === "orchestrate_sdlc_plan") {
-          prompt = `[Role: SDLC Orchestrator]\nGoal: ${args.feature_or_goal}\nCurrent Stage: ${args.current_stage || "Planning"}\n\nTask: Decompose into sequential SDLC tasks across Planning, Architecture, Implementation, QA, and CI/CD.`;
-        } else if (toolName === "code_review_and_debug") {
-          prompt = `[Role: Expert Code Reviewer & Debugger]\nLanguage: ${args.language || "Auto"}\nError Log: ${args.error_log || "None"}\nCode:\n\`\`\`\n${args.code_snippet}\n\`\`\`\n\nTask: Find root cause of the bug, check security, and provide clean code patch.`;
-        } else if (toolName === "evaluate_tech_tradeoffs") {
-          prompt = `[Role: Tech Lead]\nContext: ${args.decision_context}\nOptions: ${args.options}\n\nTask: Detailed architectural trade-off analysis across Scalability, Performance, DX, and Maintenance.`;
+        const hasId = "id" in msg && msg.id !== undefined && msg.id !== null;
+        const id = hasId ? msg.id : undefined;
+        const method = typeof msg.method === "string" ? msg.method : "";
+        const params = (msg && typeof msg.params === "object" && msg.params !== null) ? msg.params : {};
+
+        // In JSON-RPC 2.0 & MCP: a notification has no id or is an explicit notification method
+        const isNotification = !hasId || method.startsWith("notifications/") || method === "initialized";
+
+        if (isNotification) {
+          // Accepted notifications do not generate a JSON-RPC response object
+          return { isNotification: true };
+        }
+
+        if (method === "initialize") {
+          const protoVersion = params.protocolVersion || "2024-11-05";
+          const res = {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              protocolVersion: protoVersion,
+              capabilities: {
+                tools: { listChanged: false },
+                logging: {}
+              },
+              serverInfo: { name: "gemini-web-bridge-cloud-hub", version: "4.2.0" }
+            }
+          };
+          return { response: res, protocolVersion: protoVersion };
+        }
+
+        if (method === "ping") {
+          const res = { jsonrpc: "2.0", id, result: {} };
+          return { response: res };
+        }
+
+        if (method === "tools/list") {
+          const res = {
+            jsonrpc: "2.0",
+            id,
+            result: { tools }
+          };
+          return { response: res };
+        }
+
+        if (method === "prompts/list") {
+          const res = { jsonrpc: "2.0", id, result: { prompts: [] } };
+          return { response: res };
+        }
+
+        if (method === "resources/list") {
+          const res = { jsonrpc: "2.0", id, result: { resources: [] } };
+          return { response: res };
+        }
+
+        if (method === "resources/templates/list") {
+          const res = { jsonrpc: "2.0", id, result: { resourceTemplates: [] } };
+          return { response: res };
+        }
+
+        if (method === "tools/call") {
+          const toolName = params.name;
+          const args = params.arguments || {};
+
+          if (toolName === "ping") {
+            const extStatus = this.isExtensionReady() ? "ONLINE (Session Ready)" : "DISCONNECTED (Please open gemini.google.com in Chrome)";
+            const pongText = `Pong! Cloud Hub v4.2.0 is running.\n• Active Browser Model: ${this.activeBrowserModel || "None"} (Extended Thinking: ${this.extendedThinkingActive ? "ON" : "OFF"})\n• Chrome Extension Bridge: ${extStatus}`;
+            const res = {
+              jsonrpc: "2.0",
+              id,
+              result: { content: [{ type: "text", text: pongText }] }
+            };
+            return { response: res };
+          }
+
+          const knownSdlcTools = ["sdlc_solution_architect", "orchestrate_sdlc_plan", "code_review_and_debug", "evaluate_tech_tradeoffs"];
+          if (!knownSdlcTools.includes(toolName)) {
+            const res = {
+              jsonrpc: "2.0",
+              id,
+              error: { code: -32602, message: `Tool not found: ${toolName}` }
+            };
+            return { response: res };
+          }
+
+          if (!this.isExtensionReady()) {
+            const res = {
+              jsonrpc: "2.0",
+              id,
+              error: {
+                code: -32000,
+                message: "Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session."
+              }
+            };
+            return { response: res };
+          }
+
+          let prompt = "";
+          if (toolName === "sdlc_solution_architect") {
+            prompt = `[Role: Senior Solution Architect]\nProblem: ${args.problem_description}\nTech Stack: ${args.tech_stack || "Modern Cloud-Native"}\nConstraints: ${args.constraints || "High Availability"}\n\nTask: Design full solution architecture, component model, data flow, and actionable implementation steps.`;
+          } else if (toolName === "orchestrate_sdlc_plan") {
+            prompt = `[Role: SDLC Orchestrator]\nGoal: ${args.feature_or_goal}\nCurrent Stage: ${args.current_stage || "Planning"}\n\nTask: Decompose into sequential SDLC tasks across Planning, Architecture, Implementation, QA, and CI/CD.`;
+          } else if (toolName === "code_review_and_debug") {
+            prompt = `[Role: Expert Code Reviewer & Debugger]\nLanguage: ${args.language || "Auto"}\nError Log: ${args.error_log || "None"}\nCode:\n\`\`\`\n${args.code_snippet}\n\`\`\`\n\nTask: Find root cause of the bug, check security, and provide clean code patch.`;
+          } else if (toolName === "evaluate_tech_tradeoffs") {
+            prompt = `[Role: Tech Lead]\nContext: ${args.decision_context}\nOptions: ${args.options}\n\nTask: Detailed architectural trade-off analysis across Scalability, Performance, DX, and Maintenance.`;
+          }
+
+          try {
+            const resultText = await this.executeThroughExtension([{ role: "user", content: prompt }], null, recommendedModel(this.dynamicModels) || "");
+            const res = {
+              jsonrpc: "2.0",
+              id,
+              result: { content: [{ type: "text", text: resultText }] }
+            };
+            return { response: res };
+          } catch (err) {
+            const res = {
+              jsonrpc: "2.0",
+              id,
+              error: { code: -32000, message: `Tool execution failed: ${err.message}` }
+            };
+            return { response: res };
+          }
+        }
+
+        // Unknown method returns JSON-RPC method not found (-32601)
+        const res = {
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32601,
+            message: `Method not found: ${method}`
+          }
+        };
+        return { response: res };
+      };
+
+      if (isLegacySseSession) {
+        if (Array.isArray(body)) {
+          for (const msg of body) {
+            const out = await handleSingleMcp(msg);
+            if (out.response) {
+              sendSseMessage(sseQuerySessionId, out.response);
+            }
+          }
         } else {
-          prompt = args.prompt || "Hello";
+          const outcome = await handleSingleMcp(body);
+          if (outcome.response) {
+            sendSseMessage(sseQuerySessionId, outcome.response);
+          }
         }
-
-        try {
-          const resultText = await this.executeThroughExtension([{ role: "user", content: prompt }], null, recommendedModel(this.dynamicModels) || "");
-          return new Response(JSON.stringify({
-            jsonrpc: "2.0",
-            id,
-            result: { content: [{ type: "text", text: resultText }] }
-          }), { status: 200, headers: mcpHeaders });
-        } catch (err) {
-          return new Response(JSON.stringify({
-            jsonrpc: "2.0",
-            id,
-            error: { code: -32000, message: `Tool execution failed: ${err.message}` }
-          }), { status: 200, headers: mcpHeaders });
-        }
+        return new Response(null, { status: 202, headers: mcpHeaders });
       }
 
-      return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: {} }), { status: 200, headers: mcpHeaders });
+      // Modern POST response behavior
+      if (Array.isArray(body)) {
+        const results = [];
+        for (const msg of body) {
+          const out = await handleSingleMcp(msg);
+          if (out.response) results.push(out.response);
+        }
+        if (results.length === 0) {
+          return new Response(null, { status: 202, headers: mcpHeaders });
+        }
+        return new Response(JSON.stringify(results), {
+          status: 200,
+          headers: { ...mcpHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      const outcome = await handleSingleMcp(body);
+      if (outcome.protocolVersion) {
+        mcpHeaders["Mcp-Protocol-Version"] = outcome.protocolVersion;
+      }
+      if (outcome.isNotification) {
+        return new Response(null, { status: 202, headers: mcpHeaders });
+      }
+      return new Response(JSON.stringify(outcome.response), {
+        status: 200,
+        headers: { ...mcpHeaders, "Content-Type": "application/json" }
+      });
     }
 
     // ─── 5. Status Dashboard (GET / หรือ /health) ───
-    const isReady = this.isExtensionReady();
-    return new Response(JSON.stringify({
-      status: "ok",
-      service: "gemini-web-bridge-cloud-hub",
-      version: "4.2.0",
-      architecture: "Cloudflare Durable Objects (Stateful Unified WSS + HTTP)",
-      extension_status: isReady ? "CONNECTED_AND_READY" : "DISCONNECTED",
-      browser_models: {
-        active_model: this.activeBrowserModel,
-        extended_thinking: this.extendedThinkingActive
-      },
-      conversation_state: {
-        active: Boolean(this.conversationState.conversationId),
-        conversationId: this.conversationState.conversationId || null
-      },
-      endpoints: {
-        mcp: `https://${url.host}/mcp`,
-        openai: `https://${url.host}/v1/chat/completions`,
-        models: `https://${url.host}/v1/models`,
-        bridge: `wss://${url.host}/bridge`
-      }
-    }, null, 2), {
-      status: 200,
+    if (url.pathname === "/" || url.pathname === "/health") {
+      const isReady = this.isExtensionReady();
+      return new Response(JSON.stringify({
+        status: "ok",
+        service: "gemini-web-bridge-cloud-hub",
+        version: "4.2.0",
+        architecture: "Cloudflare Durable Objects (Stateful Unified WSS + HTTP)",
+        extension_status: isReady ? "CONNECTED_AND_READY" : "DISCONNECTED",
+        browser_models: {
+          active_model: this.activeBrowserModel,
+          extended_thinking: this.extendedThinkingActive
+        },
+        conversation_state: {
+          active: Boolean(this.conversationState.conversationId),
+          conversationId: this.conversationState.conversationId || null
+        },
+        endpoints: {
+          mcp: `https://${url.host}/mcp`,
+          openai: `https://${url.host}/v1/chat/completions`,
+          models: `https://${url.host}/v1/models`,
+          bridge: `wss://${url.host}/bridge`
+        }
+      }, null, 2), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    return new Response(JSON.stringify({ error: { message: "Not Found", code: "not_found" } }), {
+      status: 404,
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   }
