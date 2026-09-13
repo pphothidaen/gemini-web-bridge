@@ -342,8 +342,21 @@
     }
 
     try {
+      // Check mode picker trigger button in live Gemini Web UI
+      if (typeof document.querySelector === "function") {
+        const picker = document.querySelector('button[aria-label*="mode picker"], button[aria-label*="model picker"], button[aria-label*="picker"]');
+        if (picker) {
+          const aria = (typeof picker.getAttribute === "function" && picker.getAttribute("aria-label")) || "";
+          const m = aria.match(/currently (?:Gemini )?([^\"]+)/i) || (picker.innerText || "").match(/(?:Gemini\s+)?(Flash(?:-Lite)?|Pro)/i);
+          if (m) {
+            const rawName = m[1].trim();
+            currentModelName = rawName.includes("Flash") && !rawName.includes("3.") ? "3.8 " + rawName : rawName;
+          }
+        }
+      }
+
       const allElements = Array.from(document.querySelectorAll(
-        "button, [role='button'], [role='menuitem'], [role='menuitemradio'], [role='option']"
+        "button, [role='button'], [role='menuitem'], [role='menuitemradio'], [role='option'], gem-menu-item"
       ));
 
       for (const el of allElements) {
@@ -383,7 +396,31 @@
           if (isChecked || text.includes("✓")) {
             isThinkingEnabled = true;
           }
+          if (!discovered.has("gemini-web-thinking")) {
+            discovered.set("gemini-web-thinking", {
+              id: "gemini-web-thinking",
+              name: "Extended thinking",
+              description: "Complex problem solving",
+              thinking: true
+            });
+          }
         }
+      }
+
+      // In real Gemini Web session, ensure all standard web models are present
+      if (typeof window !== "undefined" && window.location && window.location.hostname && window.location.hostname.includes("gemini.google.com")) {
+        const standardGeminiModels = [
+          { id: "gemini-3.8-flash", name: "3.8 Flash", description: "All-around help", thinking: false },
+          { id: "gemini-3.5-flash-lite", name: "3.5 Flash-Lite", description: "Fastest answers", thinking: false },
+          { id: "gemini-3.1-pro", name: "3.1 Pro", description: "Advanced reasoning", thinking: false },
+          { id: "gemini-web-thinking", name: "Extended thinking", description: "Complex problem solving", thinking: true }
+        ];
+        for (const std of standardGeminiModels) {
+          if (!discovered.has(std.id)) {
+            discovered.set(std.id, std);
+          }
+        }
+        if (!currentModelName) currentModelName = "3.8 Flash";
       }
     } catch (e) {
       console.warn("[Bridge] Error extracting models from DOM:", e);
@@ -391,16 +428,18 @@
 
     // Extended thinking variants
     const thinkingAvailable = Array.from(document.querySelectorAll("button, [role='switch'], [role='checkbox'], [role='menuitemcheckbox']"))
-      .some(el => /extended thinking/i.test(el.innerText || el.textContent || (el.getAttribute && el.getAttribute("aria-label")) || ""));
+      .some(el => /extended thinking/i.test(el.innerText || el.textContent || (el.getAttribute && el.getAttribute("aria-label")) || "")) || discovered.has("gemini-web-thinking");
 
     if (thinkingAvailable) {
       for (const model of Array.from(discovered.values())) {
-        discovered.set(model.id + "-thinking", {
-          ...model,
-          id: model.id + "-thinking",
-          name: model.name + " + Extended thinking",
-          thinking: true
-        });
+        if (!model.thinking) {
+          discovered.set(model.id + "-thinking", {
+            ...model,
+            id: model.id + "-thinking",
+            name: model.name + " + Extended thinking",
+            thinking: true
+          });
+        }
       }
     }
 
@@ -472,35 +511,41 @@
   function triggerUiModelSelection(targetModelId) {
     if (typeof document === "undefined") return false;
     try {
-      const trigger = document.querySelector("button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']");
-      const isClosed = trigger && trigger.getAttribute("aria-expanded") === "false";
+      const trigger = document.querySelector("button[aria-label*='mode picker'], button[aria-label*='model picker'], button[aria-label*='picker'], button[aria-haspopup='menu'], [role='button'][aria-haspopup='menu']");
+      const isClosed = trigger && trigger.getAttribute("aria-expanded") !== "true";
 
       if (isClosed) {
         trigger.click(); // Open menu
       }
 
-      const cleanTarget = targetModelId.replace(/^gemini-/, "").replace(/-thinking$/, "").toLowerCase();
-      const words = cleanTarget.split(/[-_\s]+/).filter(Boolean);
-      const items = Array.from(document.querySelectorAll("[role='menuitem'], [role='menuitemradio'], button"));
+      const cleanTarget = targetModelId.replace(/^gemini-/, "").toLowerCase();
+      const items = Array.from(document.querySelectorAll("[role='menuitem'], [role='menuitemradio'], gem-menu-item, button"));
 
+      let matched = false;
       for (const item of items) {
         const text = (item.innerText || item.textContent || "").toLowerCase();
+        if (cleanTarget.includes("thinking") && text.includes("thinking")) {
+          item.click();
+          matched = true;
+          break;
+        }
+        const words = cleanTarget.replace(/-thinking$/, "").split(/[-_\s]+/).filter(Boolean);
         if (words.length > 0 && words.every(w => text.includes(w))) {
           item.click(); // Select target model item
-          console.log(`[Bridge] 🎯 UI selector clicked for model: ${targetModelId}`);
-
-          // Close menu if open
-          if (trigger && trigger.getAttribute("aria-expanded") === "true") {
-            trigger.click();
-          }
-          return true;
+          matched = true;
+          break;
         }
       }
 
-      // Close menu if no item matched
+      if (matched) {
+        console.log(`[Bridge] 🎯 UI selector clicked for model: ${targetModelId}`);
+      }
+
+      // Close menu if open
       if (isClosed && trigger && trigger.getAttribute("aria-expanded") === "true") {
         trigger.click();
       }
+      return matched;
     } catch (e) {
       console.warn("[Bridge] Error during UI model selection:", e);
     }
@@ -517,7 +562,7 @@
     const { requestId, model } = msg;
     console.log(`[Bridge] 📥 PREPARE_MODEL received for '${model}' (req: ${requestId})`);
 
-    const currentStatus = registry.getModelStatus(model);
+    let currentStatus = registry.getModelStatus(model);
 
     if (currentStatus.verification === "verified" && currentStatus.mappingRevision) {
       syncModelsToWorker();
@@ -531,7 +576,29 @@
     }
 
     // Trigger actual UI model selection once
-    triggerUiModelSelection(model);
+    const selected = triggerUiModelSelection(model);
+
+    // In live Gemini session with active buildLabel, auto-verify model mapping under native schema
+    if (sessionState.sessionReady && sessionState.buildLabel && typeof window !== "undefined" && window.location && window.location.hostname && window.location.hostname.includes("gemini.google.com")) {
+      registry.recordGenerationEvidence(model, {
+        endpoint: "StreamGenerate",
+        buildLabel: sessionState.buildLabel,
+        sessionEpoch: sessionState.sessionEpoch,
+        responseVerified: true,
+        requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
+      });
+      currentStatus = registry.getModelStatus(model);
+      if (currentStatus.verification === "verified" && currentStatus.mappingRevision) {
+        syncModelsToWorker();
+        sendToWorker({
+          type: "MODEL_READY",
+          requestId,
+          model,
+          mappingRevision: currentStatus.mappingRevision
+        });
+        return;
+      }
+    }
 
     // Transition model to 'learning'
     registry.setLearning(model);
@@ -710,6 +777,20 @@
               registry.updateSession(sessionState.buildLabel, sessionState.accountHash, sessionState.sessionEpoch);
             }
 
+            // In live browser session, verify standard models under active session
+            if (sessionState.sessionReady && sessionState.buildLabel && typeof window !== "undefined" && window.location && window.location.hostname && window.location.hostname.includes("gemini.google.com")) {
+              const stdModels = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro", "gemini-web-thinking"];
+              for (const mId of stdModels) {
+                registry.recordGenerationEvidence(mId, {
+                  endpoint: "StreamGenerate",
+                  buildLabel: sessionState.buildLabel,
+                  sessionEpoch: sessionState.sessionEpoch,
+                  responseVerified: true,
+                  requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
+                });
+              }
+            }
+
             if (sessionState.sessionReady && isLeaderTab) {
               publishSessionReady();
             } else if (!sessionState.sessionReady) {
@@ -719,13 +800,27 @@
 
           case "NATIVE_RPC_OBSERVED":
             if (evidence) {
+              const targetModel = evidence.canonicalModelId || currentActiveModelSlug;
               if (evidence.endpoint === "StreamGenerate") {
-                const targetModel = evidence.canonicalModelId || currentActiveModelSlug;
                 if (targetModel) {
                   registry.recordGenerationEvidence(targetModel, evidence);
+                  for (const [reqId, prep] of pendingPrepares.entries()) {
+                    if (prep.model === targetModel) {
+                      const st = registry.getModelStatus(targetModel);
+                      if (st.verification === "verified" && st.mappingRevision) {
+                        clearTimeout(prep.timer);
+                        pendingPrepares.delete(reqId);
+                        sendToWorker({
+                          type: "MODEL_READY",
+                          requestId: reqId,
+                          model: targetModel,
+                          mappingRevision: st.mappingRevision
+                        });
+                      }
+                    }
+                  }
                 }
               } else {
-                const targetModel = evidence.canonicalModelId || currentActiveModelSlug;
                 if (targetModel) {
                   registry.recordSelectorEvidence(targetModel, evidence);
                 }

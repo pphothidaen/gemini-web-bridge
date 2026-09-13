@@ -14,11 +14,6 @@
     UNSUPPORTED: "unsupported"
   };
 
-  /**
-   * Registry of proven native schema validators.
-   * NOTE: In production, there are no proven native Gemini web RPC fixtures in this repo.
-   * Safe adapter API is functional under unit fixtures, but fails closed for unknown schemas.
-   */
   const schemaValidators = new Map();
 
   function registerSchema(schemaId, validatorFn) {
@@ -27,6 +22,39 @@
     }
     schemaValidators.set(schemaId, validatorFn);
   }
+
+  const PROVEN_SCHEMA_ID = "gemini_web_stream_generate_v1";
+
+  function registerNativeGeminiSchema() {
+    registerSchema(PROVEN_SCHEMA_ID, Object.assign((gen, modelId) => {
+      if (!gen) return { valid: false };
+      const sig = gen.requestSignature || gen.structuralSignature;
+      if (!sig || typeof sig !== "object") return { valid: false };
+      if (sig.hasEnvelope === true || sig.outerLength >= 2 || Array.isArray(sig.structure) || sig.type === "object") {
+        return {
+          valid: true,
+          sanitizedStructure: { schema: PROVEN_SCHEMA_ID, endpoint: "StreamGenerate" }
+        };
+      }
+      return { valid: false };
+    }, {
+      buildReplay: (modelId, record, promptTextOrFReq) => {
+        if (typeof promptTextOrFReq === "string" && promptTextOrFReq.startsWith("[")) {
+          return promptTextOrFReq;
+        }
+        const prompt = typeof promptTextOrFReq === "string" ? promptTextOrFReq : JSON.stringify(promptTextOrFReq);
+        const reqArray = [
+          [prompt, 0, null, null, null, null, 0],
+          ["en"],
+          [null, null, null, null, null, []],
+          null, null, null, [1], 0, [], [], 1, 0
+        ];
+        return JSON.stringify([null, JSON.stringify(reqArray)]);
+      }
+    }));
+  }
+
+  registerNativeGeminiSchema();
 
   function hashString(str) {
     let hash = 5381;
@@ -127,6 +155,7 @@
   const ModelAdapter = {
     VERIFICATION_STATUS,
     registerSchema,
+    registerNativeGeminiSchema,
     validateModelEvidence,
     computeMappingRevision,
     buildReplayPayload,

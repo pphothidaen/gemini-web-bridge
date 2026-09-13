@@ -400,6 +400,12 @@ export class GeminiBridgeDO extends DurableObject {
       if (this.protocolVersion !== 2) return this.failure(503,"extension_upgrade_required","Reload the updated extension (protocol v2 required)");
       let rawModel = !requestedModel || ["gemini-web", "gemini-web-thinking"].includes(requestedModel)
         ? recommendedModel(this.dynamicModels) : requestedModel;
+      if (!rawModel && requestedModel === "gemini-web-thinking") {
+        rawModel = this.dynamicModels.find(m => m.thinking)?.id || (this.dynamicModels.some(m => m.id === "gemini-web-thinking") ? "gemini-web-thinking" : null);
+      }
+      if (!rawModel && (!requestedModel || requestedModel === "gemini-web")) {
+        rawModel = this.dynamicModels[0]?.id;
+      }
       if (!rawModel) return this.failure(422,"model_unverified","No verified default model is available");
       if (!this.dynamicModels.some(m=>m.id===rawModel)) return this.failure(404,"model_not_available","Requested model is absent from the current browser catalog");
       try {
