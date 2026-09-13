@@ -1,9 +1,27 @@
 import os
 import sys
+from pathlib import Path
 from openai import OpenAI
 
 BASE_URL = os.environ.get("BRIDGE_BASE_URL", "https://gemini-web-bridge.taijustarrett417.workers.dev/v1")
-API_KEY = os.environ.get("BRIDGE_API_KEY", "hermes-secret-key-2026")
+
+def _get_api_key():
+    if os.environ.get("BRIDGE_API_KEY"):
+        return os.environ.get("BRIDGE_API_KEY")
+    hermes_cfg = Path.home() / ".hermes" / "config.yaml"
+    if hermes_cfg.exists():
+        try:
+            import yaml
+            cfg = yaml.safe_load(hermes_cfg.read_text())
+            p = cfg.get("providers", {}).get("gemini-web-bridge", {})
+            k = p.get("api_key") or cfg.get("model", {}).get("api_key")
+            if k:
+                return k
+        except Exception:
+            pass
+    return "hermes-secret-key-2026"
+
+API_KEY = _get_api_key()
 
 client = OpenAI(
     base_url=BASE_URL,
