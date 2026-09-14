@@ -26,6 +26,8 @@
       "js": [
         "settings.js",
         "model-adapter.js",
+        "auto-model-selector.js",
+        "auto-thinking.js",
         "evidence-registry.js",
         "content.js"
       ],

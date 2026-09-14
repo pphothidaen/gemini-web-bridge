@@ -62,6 +62,62 @@
         saveToStorage() {}
       };
 
+  const AutoModelSelectorRef = (typeof globalThis !== "undefined" && globalThis.AutoModelSelector)
+    ? globalThis.AutoModelSelector
+    : null;
+
+  const AutoThinkingRef = (typeof globalThis !== "undefined" && globalThis.AutoThinking)
+    ? globalThis.AutoThinking
+    : null;
+
+  /**
+   * Auto-configure Gemini session: select newest model + enable thinking effort.
+   * Called on session ready and on explicit AUTO_SELECT_MODEL / ENABLE_THINKING events.
+   */
+  function autoConfigureGeminiSession(config = {}) {
+    const {
+      preferredFamily = "pro",
+      thinkingEffort = "high"
+    } = config;
+
+    // Auto-select newest model — default to Flash Thinking (newest thinking model available)
+    if (AutoModelSelectorRef && typeof AutoModelSelectorRef.autoSelectNewestModel === "function") {
+      try {
+        // Strip -thinking suffix for family matching (e.g. "gemini-3.8-flash-thinking" -> family "flash")
+        let effectiveFamily = preferredFamily;
+        if (preferredFamily === "flash" || preferredFamily === "pro") {
+          effectiveFamily = preferredFamily;
+        }
+        const result = AutoModelSelectorRef.autoSelectNewestModel(effectiveFamily);
+        if (result.success) {
+          currentActiveModelSlug = "gemini-" + result.selectedModel.toLowerCase().replace(/[\s_]+/g, "-");
+          console.log(`[Bridge] ✅ Auto-selected model: ${result.selectedModel}`);
+        } else {
+          console.warn("[Bridge] ⚠️ Auto model selection failed or no models found");
+        }
+      } catch (e) {
+        console.warn("[Bridge] Error in auto model selection:", e);
+      }
+    } else {
+      console.warn("[Bridge] AutoModelSelector not available");
+    }
+
+    // Auto-enable thinking effort
+    if (AutoThinkingRef && typeof AutoThinkingRef.setThinkingEffort === "function") {
+      try {
+        const thinkingResult = AutoThinkingRef.setThinkingEffort(thinkingEffort);
+        if (thinkingResult) {
+          isThinkingActive = thinkingEffort !== "off";
+          console.log(`[Bridge] ✅ Thinking effort set to: ${thinkingEffort}`);
+        }
+      } catch (e) {
+        console.warn("[Bridge] Error in auto thinking effort:", e);
+      }
+    } else {
+      console.warn("[Bridge] AutoThinking not available");
+    }
+  }
+
   // ─── State Variables ─────────────────────────────────────────
   let socket = null;
   let reconnectAttempts = 0;
@@ -300,6 +356,21 @@
             sendToWorker({ type: "PONG" });
             break;
 
+          case "AUTO_SELECT_MODEL":
+            console.log("[Bridge] 📡 AUTO_SELECT_MODEL received from worker");
+            autoConfigureGeminiSession({
+              preferredFamily: msg.preferredFamily || "pro",
+              thinkingEffort: msg.thinkingEffort || "high"
+            });
+            break;
+
+          case "ENABLE_THINKING":
+            console.log("[Bridge] 📡 ENABLE_THINKING received from worker");
+            if (AutoThinkingRef) {
+              AutoThinkingRef.setThinkingEffort(msg.effort || "high");
+            }
+            break;
+
           default:
             break;
         }
@@ -483,6 +554,12 @@
       extendedThinking: catalog.extendedThinking
     });
     createOrUpdateIndicator("connected", `Bridge: Online (${catalog.activeModel || "Gemini"}${catalog.extendedThinking ? " + Thinking" : ""})`);
+
+    // Auto-configure: select newest model (Pro > Flash) + enable thinking on session ready
+    autoConfigureGeminiSession({
+      preferredFamily: "pro",
+      thinkingEffort: "high"
+    });
   }
 
   function syncModelsToWorker() {
@@ -937,6 +1014,22 @@
   // Handshake with declarative MAIN world script
   if (typeof window !== "undefined" && typeof window.postMessage === "function") {
     window.postMessage({ source: "GEMINI_CONTENT", type: "REQUEST_SESSION_STATE" }, "*");
+  }
+
+  // Listen for auto-configure commands from worker/extension bridge
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("message", (event) => {
+      if (!event.data || event.source !== window) return;
+      const { source, type, payload } = event.data;
+      if (source === "GEMINI_CONTENT") {
+        if (type === "AUTO_SELECT_MODEL" || type === "ENABLE_THINKING") {
+          autoConfigureGeminiSession({
+            preferredFamily: payload?.preferredFamily || "pro",
+            thinkingEffort: payload?.thinkingEffort || "high"
+          });
+        }
+      }
+    });
   }
 
   initCentralCoordinator();
