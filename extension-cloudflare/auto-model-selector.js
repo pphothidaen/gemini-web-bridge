@@ -121,7 +121,8 @@
         return { success: false, selectedModel: null };
       }
 
-      // Sort by: 1) version descending (3.8 > 3.6), 2) family (pro > flash), 3) thinking model with effort high
+      // Sort priority: 1) version descending (3.8 > 3.6), 2) family (pro > flash > flash-lite),
+      // 3) thinking variant BEFORE non-thinking (Extended thinking first)
       const familyPriority = { pro: 3, flash: 2, "flash-lite": 1, unknown: 0 };
       options.sort((a, b) => {
         // Priority 1: version (newest first)
@@ -130,10 +131,10 @@
         const aFamily = familyPriority[a.family] || 0;
         const bFamily = familyPriority[b.family] || 0;
         if (aFamily !== bFamily) return bFamily - aFamily;
-        // Priority 3: thinking models with effort high (prefer thinking variant)
-        const aThinking = isThinkingModel(a.name) ? 1 : 0;
-        const bThinking = isThinkingModel(b.name) ? 1 : 0;
-        return bThinking - aThinking;
+        // Priority 3: thinking models BEFORE non-thinking (Extended thinking first)
+        const aThinking = isThinkingModel(a.name) ? 0 : 1;  // 0 = thinking (higher priority)
+        const bThinking = isThinkingModel(b.name) ? 0 : 1;  // 1 = non-thinking (lower priority)
+        return aThinking - bThinking;
       });
 
       // Filter by minimum version and preferred family (if specified)
