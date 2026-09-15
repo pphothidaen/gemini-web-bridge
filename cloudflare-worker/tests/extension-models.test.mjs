@@ -8,8 +8,17 @@ test('extension loads settings, discovers current labels, and resets catalog on 
  let labels = ['Fast', 'Thinking', 'Pro'];
  const messages = [], sockets = [], timers = [], handlers = {};
  const node = text => ({innerText:text, textContent:text, style:{}, classList:{contains:()=>false}, getAttribute:()=>null, querySelector:()=>null, addEventListener(){}, remove(){}});
- const document = {querySelectorAll:()=>labels.map(node), createElement:()=>node(''), body:{appendChild(){}}, head:{appendChild(){}}, addEventListener:(name,fn)=>{handlers[name]=fn;}};
- const window = {addEventListener:(name,fn)=>{handlers['window:'+name]=fn;},postMessage(){}};
+ const addHandler = (key, fn) => {
+   if (!handlers[key]) {
+     const list = [];
+     const dispatcher = (arg) => list.forEach(f => f(arg));
+     dispatcher._list = list;
+     handlers[key] = dispatcher;
+   }
+   handlers[key]._list.push(fn);
+ };
+ const document = {querySelectorAll:()=>labels.map(node), createElement:()=>node(''), body:{appendChild(){}}, head:{appendChild(){}}, addEventListener:(name,fn)=>addHandler(name,fn)};
+ const window = {addEventListener:(name,fn)=>addHandler('window:'+name,fn),postMessage(){}};
  class WebSocket {
   static OPEN=1; static CONNECTING=0;
   readyState=0;
@@ -19,16 +28,18 @@ test('extension loads settings, discovers current labels, and resets catalog on 
  }
  vm.runInNewContext(source,{console:{log(){},warn(){},error(){}},URL,Map,Array,Boolean,document,window,WebSocket,
   setTimeout:(fn)=>{timers.push(fn);return timers.length;},clearTimeout(){},
-  chrome:{runtime:{getURL:p=>p}, storage:{sync:{get:async()=>({workerUrl:'https://example.test',bridgeToken:'test-token'})},onChanged:{addListener(){}}}}});
+  chrome:{runtime:{getURL:p=>p, connect:()=>({onMessage:{addListener:(fn)=>fn({type:'COORDINATOR_STATE',role:'leader'})},onDisconnect:{addListener:()=>{}},postMessage:()=>{}})}, storage:{sync:{get:async()=>({workerUrl:'https://example.test',bridgeToken:'test-token'})},onChanged:{addListener(){}}}}});
  await Promise.resolve();
  handlers['window:message']({source:window,data:{source:'GEMINI_INJECTED',type:'TOKENS_EXTRACTED',payload:{at:'test'}}});
- sockets[0].readyState=1;sockets[0].onopen();
- assert.equal(new URL(sockets[0].url).host,'example.test');
- assert.equal(new URL(sockets[0].url).searchParams.get('token'),'test-token');
+ const activeWs = sockets.at(-1);
+ activeWs.readyState=1;activeWs.onopen();
+ assert.equal(new URL(activeWs.url).host,'example.test');
+ assert.equal(new URL(activeWs.url).searchParams.get('token'),'test-token');
  const ready=messages.find(m=>m.type==='SESSION_READY');
  assert.deepEqual(Array.from(ready.models,m=>m.id),['gemini-fast','gemini-thinking','gemini-pro']);
  assert.equal(ready.models.find(m=>m.id==='gemini-thinking').thinking,true);
- labels=[];sockets[0].close();timers.at(-1)();
- sockets[1].readyState=1;sockets[1].onopen();
+ labels=[];activeWs.close();timers.at(-1)();
+ const nextWs = sockets.at(-1);
+ nextWs.readyState=1;nextWs.onopen();
  assert.equal(messages.filter(m=>m.type==='SESSION_READY').at(-1).models.length,0);
 });

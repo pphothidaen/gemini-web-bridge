@@ -29,17 +29,27 @@ function setupExtensionVm(options = {}) {
     click() { clicks.push(text); }
   });
 
+  const addHandler = (key, fn) => {
+    if (!handlers[key]) {
+      const list = [];
+      const dispatcher = (arg) => list.forEach(f => f(arg));
+      dispatcher._list = list;
+      handlers[key] = dispatcher;
+    }
+    handlers[key]._list.push(fn);
+  };
+
   const document = {
     querySelectorAll: () => labels.map(node),
     querySelector: (sel) => node('Model Trigger Button'),
     createElement: () => node(''),
     body: { appendChild() {} },
     head: { appendChild() {} },
-    addEventListener: (name, fn) => { handlers[name] = fn; }
+    addEventListener: (name, fn) => addHandler(name, fn)
   };
 
   const window = {
-    addEventListener: (name, fn) => { handlers['window:' + name] = fn; },
+    addEventListener: (name, fn) => addHandler('window:' + name, fn),
     postMessage: (data) => {
       if (options.onWindowPostMessage) options.onWindowPostMessage(data);
     }
@@ -133,7 +143,7 @@ test('SESSION_READY and MODELS_DISCOVERED emit protocolVersion 2 without leaking
     }
   });
 
-  const ws = env.sockets[0];
+  const ws = env.sockets.at(-1);
   ws.readyState = 1;
   ws.onopen();
 
@@ -163,11 +173,11 @@ test('PREPARE_MODEL performs UI selector click, transitions to learning, and fai
     source: env.window,
     data: { source: 'GEMINI_INJECTED', type: 'SESSION_STATE', payload: { sessionReady: true } }
   });
-  env.sockets[0].readyState = 1;
-  env.sockets[0].onopen();
+  env.sockets.at(-1).readyState = 1;
+  env.sockets.at(-1).onopen();
 
   // Send PREPARE_MODEL for gemini-3.8-flash
-  env.sockets[0].onmessage({
+  env.sockets.at(-1).onmessage({
     data: JSON.stringify({
       type: 'PREPARE_MODEL',
       requestId: 'prep_101',
@@ -209,11 +219,11 @@ test('EXECUTE_REQUEST strictly rejects unverified model or revision mismatch', a
     source: env.window,
     data: { source: 'GEMINI_INJECTED', type: 'SESSION_STATE', payload: { sessionReady: true } }
   });
-  env.sockets[0].readyState = 1;
-  env.sockets[0].onopen();
+  env.sockets.at(-1).readyState = 1;
+  env.sockets.at(-1).onopen();
 
   // Attempt to execute unverified model
-  env.sockets[0].onmessage({
+  env.sockets.at(-1).onmessage({
     data: JSON.stringify({
       type: 'EXECUTE_REQUEST',
       requestId: 'exec_fail_1',
@@ -254,8 +264,8 @@ test('EXECUTE_REQUEST constructs replay payload via ModelAdapter under synthetic
     source: env.window,
     data: { source: 'GEMINI_INJECTED', type: 'SESSION_STATE', payload: { sessionReady: true, buildLabel: 'boq_1' } }
   });
-  env.sockets[0].readyState = 1;
-  env.sockets[0].onopen();
+  env.sockets.at(-1).readyState = 1;
+  env.sockets.at(-1).onopen();
 
   // Simulate verified generation evidence arriving
   env.handlers['window:message']({
@@ -280,7 +290,7 @@ test('EXECUTE_REQUEST constructs replay payload via ModelAdapter under synthetic
   assert.ok(verifiedModel.mapping_revision);
 
   // Execute request with verified model and matching revision
-  env.sockets[0].onmessage({
+  env.sockets.at(-1).onmessage({
     data: JSON.stringify({
       type: 'EXECUTE_REQUEST',
       requestId: 'exec_verified_1',
@@ -313,11 +323,11 @@ test('CANCEL_REQUEST aborts in-flight execution and cancels pending prepare', as
     source: env.window,
     data: { source: 'GEMINI_INJECTED', type: 'SESSION_STATE', payload: { sessionReady: true } }
   });
-  env.sockets[0].readyState = 1;
-  env.sockets[0].onopen();
+  env.sockets.at(-1).readyState = 1;
+  env.sockets.at(-1).onopen();
 
   // Start prepare
-  env.sockets[0].onmessage({
+  env.sockets.at(-1).onmessage({
     data: JSON.stringify({
       type: 'PREPARE_MODEL',
       requestId: 'prep_cancel',
@@ -326,7 +336,7 @@ test('CANCEL_REQUEST aborts in-flight execution and cancels pending prepare', as
   });
 
   // Cancel prepare
-  env.sockets[0].onmessage({
+  env.sockets.at(-1).onmessage({
     data: JSON.stringify({
       type: 'CANCEL_REQUEST',
       requestId: 'prep_cancel'

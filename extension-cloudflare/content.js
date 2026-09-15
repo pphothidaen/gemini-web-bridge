@@ -1038,6 +1038,10 @@
     chrome.storage.sync.get(["workerUrl", "bridgeToken", "enforcementMode"]).then(settings => {
       resolvedSettings = Settings.resolveSettings(settings);
       registry.init();
+      if (socket) {
+        socket.close(1000, "Settings loaded");
+        socket = null;
+      }
       connectWebSocket();
     });
 
