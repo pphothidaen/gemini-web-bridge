@@ -304,7 +304,10 @@
           throw new Error("Missing CSRF token in Gemini MAIN session.");
         }
 
-        const buildLabel = activeBuildLabel || "boq_assistant-bard-web-server_20260901.00_p0";
+        if (!activeBuildLabel) {
+          throw new Error("Missing build label (cfb2h) from Gemini session. Reload the page.");
+        }
+        const buildLabel = activeBuildLabel;
         const reqId = Math.floor(Math.random() * 900000) + 100000;
         const url = `https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=${encodeURIComponent(buildLabel)}&_reqid=${reqId}&rt=c`;
 
