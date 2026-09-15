@@ -1,8 +1,8 @@
 # 📋 Planning & Handoff — Future Roadmap
 
 > **เอกสารฉบับนี้เป็นแผนงานและ Handoff สำหรับ 3 ฟีเจอร์ใน Future Roadmap**  
-> สร้างเมื่อ: 2026-09-15 | Baseline: v4.2.0 (`e2ab850`)  
-> สถานะปัจจุบัน: Production Ready — ทุกฟีเจอร์ v4 เสร็จสมบูรณ์  
+> สร้างเมื่อ: 2026-09-15 | Updated: 2026-09-15 (Commit `b5b1a21`)  
+> สถานะปัจจุบัน: Production Ready — v4.2.0 + MCP Health Diagnostics (`check_bridge_health`, `list_bridge_models`) & GCP Hybrid Fallback เสร็จสมบูรณ์ (18/18 MCP Tests Passed)  
 
 ---
 
