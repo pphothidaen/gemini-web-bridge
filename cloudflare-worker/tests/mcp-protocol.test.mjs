@@ -206,7 +206,7 @@ test('MCP Protocol: notifications return HTTP 202 with empty body per official M
   assert.equal(await batchRes.text(), '');
 });
 
-test('MCP Protocol: tools/list returns all 5 actual tools with valid schemas', async () => {
+test('MCP Protocol: tools/list returns all 7 actual tools with valid schemas', async () => {
   const b = createBridge();
 
   const res = await b.fetch(new Request('https://test/mcp', {
@@ -227,12 +227,14 @@ test('MCP Protocol: tools/list returns all 5 actual tools with valid schemas', a
   const data = await res.json();
   assert.equal(data.id, 2);
   assert.ok(Array.isArray(data.result.tools));
-  assert.equal(data.result.tools.length, 5);
+  assert.equal(data.result.tools.length, 7);
 
   const toolNames = data.result.tools.map(t => t.name);
   assert.deepEqual(toolNames.sort(), [
+    'check_bridge_health',
     'code_review_and_debug',
     'evaluate_tech_tradeoffs',
+    'list_bridge_models',
     'orchestrate_sdlc_plan',
     'ping',
     'sdlc_solution_architect'
@@ -271,6 +273,63 @@ test('MCP Protocol: tools/call executes synthetic safe ping without requiring br
   assert.ok(Array.isArray(data.result.content));
   assert.equal(data.result.content[0].type, 'text');
   assert.match(data.result.content[0].text, /Pong! Cloud Hub v4\.2\.0 is running/);
+});
+
+test('MCP Protocol: tools/call executes check_bridge_health and returns diagnostics', async () => {
+  const b = createBridge();
+
+  const res = await b.fetch(new Request('https://test/mcp', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer secret-token-123',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: { name: 'check_bridge_health' }
+    })
+  }));
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.id, 4);
+  assert.ok(Array.isArray(data.result.content));
+  const healthJson = JSON.parse(data.result.content[0].text);
+  assert.ok(['healthy', 'degraded', 'critical'].includes(healthJson.status));
+  assert.ok(healthJson.catalog);
+  assert.ok(healthJson.queue);
+  assert.ok(healthJson.metrics);
+  assert.equal(healthJson.hybrid_fallback.has_gcp_fallback, false);
+});
+
+test('MCP Protocol: tools/call executes list_bridge_models and returns dynamic models', async () => {
+  const b = createBridge();
+  // Simulate active socket so isExtensionReady is true
+  b.activeSocket = { readyState: 1 };
+
+  const res = await b.fetch(new Request('https://test/mcp', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer secret-token-123',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'tools/call',
+      params: { name: 'list_bridge_models' }
+    })
+  }));
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.id, 5);
+  const modelData = JSON.parse(data.result.content[0].text);
+  assert.ok(Array.isArray(modelData.models));
+  assert.equal(modelData.models.length, 1);
+  assert.equal(modelData.models[0].id, 'gemini-web-thinking');
 });
 
 test('MCP Protocol: ping method returns empty result object per MCP spec', async () => {
@@ -460,7 +519,7 @@ test('MCP Transport Separation: legacy SSE query session delivers via SSE with 2
   const modernData = await modernPostRes.json();
   assert.equal(modernData.id, 203);
   assert.ok(Array.isArray(modernData.result.tools));
-  assert.equal(modernData.result.tools.length, 5);
+  assert.equal(modernData.result.tools.length, 7);
 });
 
 test('MCP Protocol: prompts/list and resources/list return empty arrays cleanly', async () => {
@@ -574,7 +633,7 @@ test('MCP Full Client Handshake: simulates complete client lifecycle', async () 
   assert.equal(toolsRes.status, 200);
   const toolsData = await toolsRes.json();
   assert.equal(toolsData.id, 3);
-  assert.equal(toolsData.result.tools.length, 5);
+  assert.equal(toolsData.result.tools.length, 7);
 
   // Step 5: Client calls ping tool
   const callRes = await b.fetch(new Request('https://test/mcp', {
@@ -613,3 +672,51 @@ test('MCP Routing: /health and / continue returning Status Dashboard while unkno
   }));
   assert.equal(unknownRes.status, 404);
 });
+
+test('MCP Health Metrics & GCP Fallback: verifies status dashboard health_metrics and fallback routing', async () => {
+  const b = createBridge();
+
+  // 1. Health metrics in dashboard
+  const healthRes = await b.fetch(new Request('https://test/health'));
+  const healthData = await healthRes.json();
+  assert.ok(healthData.health_metrics);
+  assert.equal(healthData.health_metrics.consecutive_errors, 0);
+  assert.equal(healthData.health_metrics.gcp_fallback_configured, false);
+
+  // 2. Extension disconnected without GCP key strictly fails closed with -32000
+  const noGcpRes = await b.fetch(new Request('https://test/mcp', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer secret-token-123', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 50,
+      method: 'tools/call',
+      params: { name: 'sdlc_solution_architect', arguments: { problem_description: 'test' } }
+    })
+  }));
+  const noGcpData = await noGcpRes.json();
+  assert.equal(noGcpData.error.code, -32000);
+  assert.match(noGcpData.error.message, /Chrome Extension is not connected/);
+
+  // 3. Extension disconnected WITH GCP key routes to GCP fallback
+  b.env.GEMINI_API_KEY = 'mock-gcp-key';
+  b.callGcpGemini = async (messages) => {
+    return 'GCP Architect Output';
+  };
+
+  const gcpRes = await b.fetch(new Request('https://test/mcp', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer secret-token-123', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 51,
+      method: 'tools/call',
+      params: { name: 'sdlc_solution_architect', arguments: { problem_description: 'test' } }
+    })
+  }));
+  const gcpData = await gcpRes.json();
+  assert.equal(gcpData.id, 51);
+  assert.ok(gcpData.result.content[0].text.includes('[Provider: GCP Gemini Fallback]'));
+  assert.ok(gcpData.result.content[0].text.includes('GCP Architect Output'));
+});
+

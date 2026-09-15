@@ -109,6 +109,13 @@ export class GeminiBridgeDO extends DurableObject {
     };
     this.mcpSessions = new Map();
 
+    this.healthState = {
+      lastSuccessfulGeneration: null,
+      consecutiveErrors: 0,
+      lastError: null,
+      lastHealthCheck: Date.now()
+    };
+
     this.resetModelCatalog();
 
     // Keepalive Ping Loop
@@ -160,6 +167,62 @@ export class GeminiBridgeDO extends DurableObject {
     return this.activeSocket !== null && this.currentTokens !== null && this.activeSocket.readyState === 1;
   }
 
+  async callGcpGemini(messages, model = "gemini-1.5-flash") {
+    const apiKey = this.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      const err = new Error("GCP Gemini API key not configured");
+      err.code = "gcp_not_configured";
+      throw err;
+    }
+
+    const contents = [];
+    let systemInstruction = null;
+
+    for (const m of messages) {
+      if (!m) continue;
+      if (m.role === "system") {
+        systemInstruction = { parts: [{ text: String(m.content || "") }] };
+      } else if (m.role === "user") {
+        contents.push({ role: "user", parts: [{ text: String(m.content || "") }] });
+      } else if (m.role === "assistant") {
+        contents.push({ role: "model", parts: [{ text: String(m.content || "") }] });
+      }
+    }
+
+    if (!contents.length) {
+      contents.push({ role: "user", parts: [{ text: "Hello" }] });
+    }
+
+    const targetModel = (model && model.includes("pro")) ? "gemini-1.5-pro" : "gemini-1.5-flash";
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+    const body = {
+      contents,
+      ...(systemInstruction ? { systemInstruction } : {})
+    };
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      this.healthState.consecutiveErrors++;
+      this.healthState.lastError = `GCP Error: ${res.status}`;
+      throw new Error(`GCP Gemini API error (${res.status}): ${errText}`);
+    }
+
+    const data = await res.json();
+    const candidate = data.candidates?.[0];
+    const text = candidate?.content?.parts?.[0]?.text || "";
+    this.healthState.lastSuccessfulGeneration = Date.now();
+    this.healthState.consecutiveErrors = 0;
+    this.healthState.lastError = null;
+    return text;
+  }
+
   async executeThroughExtension(messages, onChunk, model = "") {
     if (!this.isExtensionReady()) {
       const err = new Error("Extension not connected");
@@ -193,10 +256,15 @@ export class GeminiBridgeDO extends DurableObject {
           this.activeStreams.delete(requestId);
           const { deltaText } = ProtocolDecoder.decodeChunk(rpcBuffer);
           if (deltaText) fullText = deltaText;
+          this.healthState.lastSuccessfulGeneration = Date.now();
+          this.healthState.consecutiveErrors = 0;
+          this.healthState.lastError = null;
           Promise.resolve().then(() => onChunk?.(fullText, fullText)).then(() => resolve(fullText), reject);
         } else if (msg.type === "STREAM_ERROR") {
           clearTimeout(timer);
           this.activeStreams.delete(requestId);
+          this.healthState.consecutiveErrors++;
+          this.healthState.lastError = msg.error || "Execution error in extension";
           reject(Object.assign(new Error(msg.error || "Execution error in extension"), {code:msg.code || "execution_failed"}));
         }
       });
@@ -385,17 +453,6 @@ export class GeminiBridgeDO extends DurableObject {
 
     // ─── 3. OpenAI-Compatible API: /v1/chat/completions ───
     if (url.pathname === "/v1/chat/completions" && request.method === "POST") {
-      // ตรวจสอบสถานะการเชื่อมต่อของ Extension ก่อนแบบ Strict Fail-Fast
-      if (!this.isExtensionReady()) {
-        return new Response(JSON.stringify({
-          error: {
-            message: "Gemini Web-Bridge: Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session and the extension is loaded.",
-            type: "service_unavailable",
-            code: "extension_disconnected"
-          }
-        }), { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-
       let body;
       try {
         body = await request.json();
@@ -403,6 +460,43 @@ export class GeminiBridgeDO extends DurableObject {
         return new Response(JSON.stringify({
           error: { message: "Malformed JSON body", type: "invalid_request_error", code: "bad_json" }
         }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      // ตรวจสอบสถานะการเชื่อมต่อของ Extension ก่อนแบบ Strict Fail-Fast หรือ GCP Fallback
+      if (!this.isExtensionReady()) {
+        if (this.env.GEMINI_API_KEY && body?.stream !== true && Array.isArray(body?.messages)) {
+          try {
+            const promptTokens = body.messages.reduce((c, m) => c + Math.ceil((m?.content || "").length / 4), 0);
+            const gcpText = await this.callGcpGemini(body.messages, body.model || "gemini-1.5-flash");
+            corsHeaders["X-Provider"] = "google-cloud-fallback";
+            const responseObj = {
+              id: `chatcmpl-${crypto.randomUUID()}`,
+              object: "chat.completion",
+              created: Math.floor(Date.now() / 1000),
+              model: body.model || "gemini-1.5-flash",
+              choices: [{
+                index: 0,
+                message: { role: "assistant", content: gcpText },
+                finish_reason: "stop"
+              }],
+              usage: {
+                prompt_tokens: promptTokens,
+                completion_tokens: Math.ceil(gcpText.length / 4),
+                total_tokens: promptTokens + Math.ceil(gcpText.length / 4)
+              }
+            };
+            return new Response(JSON.stringify(responseObj), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+          } catch (gcpErr) {
+            console.error("[Bridge DO] GCP fallback error:", gcpErr);
+          }
+        }
+        return new Response(JSON.stringify({
+          error: {
+            message: "Gemini Web-Bridge: Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session and the extension is loaded.",
+            type: "service_unavailable",
+            code: "extension_disconnected"
+          }
+        }), { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
       if (!body || !Array.isArray(body.messages) || !body.messages.length) {
@@ -586,6 +680,22 @@ export class GeminiBridgeDO extends DurableObject {
         inputSchema: {
           type: "object",
           properties: { message: { type: "string" } }
+        }
+      },
+      {
+        name: "check_bridge_health",
+        description: "ตรวจสอบสถานะสุขภาพการทำงานเชิงลึกของ Bridge DO, สถานะ Extension, Metrics คิว และ Fallback Provider",
+        inputSchema: {
+          type: "object",
+          properties: {}
+        }
+      },
+      {
+        name: "list_bridge_models",
+        description: "ดึงรายการโมเดลจริงที่เชื่อมต่อจากหน้าเว็บเบราว์เซอร์ พร้อมสถานะ verification, mapping revision และ thinking capability",
+        inputSchema: {
+          type: "object",
+          properties: {}
         }
       }
     ];
@@ -800,11 +910,71 @@ export class GeminiBridgeDO extends DurableObject {
 
           if (toolName === "ping") {
             const extStatus = this.isExtensionReady() ? "ONLINE (Session Ready)" : "DISCONNECTED (Please open gemini.google.com in Chrome)";
-            const pongText = `Pong! Cloud Hub v4.2.0 is running.\n• Active Browser Model: ${this.activeBrowserModel || "None"} (Extended Thinking: ${this.extendedThinkingActive ? "ON" : "OFF"})\n• Chrome Extension Bridge: ${extStatus}`;
+            const gcpStatus = this.env.GEMINI_API_KEY ? "CONFIGURED (Hybrid Active)" : "DISABLED";
+            const pongText = `Pong! Cloud Hub v4.2.0 is running.\n• Active Browser Model: ${this.activeBrowserModel || "None"} (Extended Thinking: ${this.extendedThinkingActive ? "ON" : "OFF"})\n• Chrome Extension Bridge: ${extStatus}\n• GCP Fallback: ${gcpStatus}\n• Consecutive Errors: ${this.healthState.consecutiveErrors}`;
             const res = {
               jsonrpc: "2.0",
               id,
               result: { content: [{ type: "text", text: pongText }] }
+            };
+            return { response: res };
+          }
+
+          if (toolName === "check_bridge_health") {
+            const extStatus = this.isExtensionReady() ? "CONNECTED_AND_READY" : "DISCONNECTED";
+            const healthStatus = (!this.isExtensionReady() && !this.env.GEMINI_API_KEY)
+              ? "critical"
+              : (this.healthState.consecutiveErrors >= 3 ? "degraded" : "healthy");
+
+            const healthReport = {
+              status: healthStatus,
+              extension_status: extStatus,
+              active_browser_model: {
+                model: this.activeBrowserModel || "None",
+                extended_thinking: this.extendedThinkingActive
+              },
+              catalog: {
+                total_models: this.dynamicModels ? this.dynamicModels.length : 0,
+                verified_models: this.dynamicModels ? this.dynamicModels.filter(m => m.verification === "verified").length : 0,
+                default_recommended: recommendedModel(this.dynamicModels)
+              },
+              queue: {
+                busy: this.requestBusy,
+                pending_count: this.pendingRequests.length
+              },
+              metrics: {
+                last_successful_generation: this.healthState.lastSuccessfulGeneration,
+                consecutive_errors: this.healthState.consecutiveErrors,
+                last_error: this.healthState.lastError
+              },
+              hybrid_fallback: {
+                has_gcp_fallback: Boolean(this.env.GEMINI_API_KEY)
+              }
+            };
+
+            const res = {
+              jsonrpc: "2.0",
+              id,
+              result: { content: [{ type: "text", text: JSON.stringify(healthReport, null, 2) }] }
+            };
+            return { response: res };
+          }
+
+          if (toolName === "list_bridge_models") {
+            const models = this.isExtensionReady() ? this.dynamicModels : [];
+            const res = {
+              jsonrpc: "2.0",
+              id,
+              result: {
+                content: [{
+                  type: "text",
+                  text: JSON.stringify({
+                    models,
+                    default_recommended: recommendedModel(this.dynamicModels),
+                    catalog_revision: this.catalogRevision
+                  }, null, 2)
+                }]
+              }
             };
             return { response: res };
           }
@@ -815,18 +985,6 @@ export class GeminiBridgeDO extends DurableObject {
               jsonrpc: "2.0",
               id,
               error: { code: -32602, message: `Tool not found: ${toolName}` }
-            };
-            return { response: res };
-          }
-
-          if (!this.isExtensionReady()) {
-            const res = {
-              jsonrpc: "2.0",
-              id,
-              error: {
-                code: -32000,
-                message: "Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session."
-              }
             };
             return { response: res };
           }
@@ -842,6 +1000,40 @@ export class GeminiBridgeDO extends DurableObject {
             prompt = `[Role: Tech Lead]\nContext: ${args.decision_context}\nOptions: ${args.options}\n\nTask: Detailed architectural trade-off analysis across Scalability, Performance, DX, and Maintenance.`;
           }
 
+          if (!this.isExtensionReady()) {
+            if (this.env.GEMINI_API_KEY) {
+              try {
+                const gcpResult = await this.callGcpGemini([{ role: "user", content: prompt }]);
+                const res = {
+                  jsonrpc: "2.0",
+                  id,
+                  result: { content: [{ type: "text", text: `[Provider: GCP Gemini Fallback]\n\n${gcpResult}` }] }
+                };
+                return { response: res };
+              } catch (gcpErr) {
+                const res = {
+                  jsonrpc: "2.0",
+                  id,
+                  error: {
+                    code: -32000,
+                    message: `Extension disconnected and GCP fallback failed: ${gcpErr.message}`
+                  }
+                };
+                return { response: res };
+              }
+            }
+
+            const res = {
+              jsonrpc: "2.0",
+              id,
+              error: {
+                code: -32000,
+                message: "Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session."
+              }
+            };
+            return { response: res };
+          }
+
           try {
             const resultText = await this.executeThroughExtension([{ role: "user", content: prompt }], null, recommendedModel(this.dynamicModels) || "");
             const res = {
@@ -851,6 +1043,19 @@ export class GeminiBridgeDO extends DurableObject {
             };
             return { response: res };
           } catch (err) {
+            if (this.env.GEMINI_API_KEY && err.code === "extension_disconnected") {
+              try {
+                const gcpResult = await this.callGcpGemini([{ role: "user", content: prompt }]);
+                const res = {
+                  jsonrpc: "2.0",
+                  id,
+                  result: { content: [{ type: "text", text: `[Provider: GCP Gemini Fallback]\n\n${gcpResult}` }] }
+                };
+                return { response: res };
+              } catch (gcpErr) {
+                // fall through to error
+              }
+            }
             const res = {
               jsonrpc: "2.0",
               id,
@@ -930,6 +1135,12 @@ export class GeminiBridgeDO extends DurableObject {
         browser_models: {
           active_model: this.activeBrowserModel,
           extended_thinking: this.extendedThinkingActive
+        },
+        health_metrics: {
+          last_successful_generation: this.healthState.lastSuccessfulGeneration,
+          consecutive_errors: this.healthState.consecutiveErrors,
+          last_error: this.healthState.lastError,
+          gcp_fallback_configured: Boolean(this.env.GEMINI_API_KEY)
         },
         conversation_state: {
           active: Boolean(this.conversationState.conversationId),
