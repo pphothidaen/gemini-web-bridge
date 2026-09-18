@@ -39,8 +39,8 @@
     <div class="help-text">Deployed Cloudflare Worker URL (must be HTTPS / WSS)</div>
 
     <label for="bridgeToken">Bridge Token</label>
-    <input type="password" id="bridgeToken" placeholder="Leave empty for built-in compatibility">
-    <div class="help-text">Must match the Worker BRIDGE_AUTH_TOKEN secret. Empty retains the built-in migration secret.</div>
+    <input type="text" id="bridgeToken" placeholder="Enter your BRIDGE_AUTH_TOKEN (matches Worker secret)">
+    <div class="help-text">Must match the Worker's BRIDGE_AUTH_TOKEN secret. Empty = no authentication (not recommended).</div>
 
     <label for="enforcementMode">Enforcement Mode</label>
     <select id="enforcementMode">

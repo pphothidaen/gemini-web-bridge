@@ -9,10 +9,10 @@
     ? window.GeminiBridgeSettings
     : (typeof GeminiBridgeSettings !== "undefined" ? GeminiBridgeSettings : {
         DEFAULT_WORKER_URL: "https://gemini-web-bridge.pansakorn-pho.workers.dev",
-        DEFAULT_BRIDGE_SECRET: "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN",
+        DEFAULT_BRIDGE_SECRET: "",
         resolveSettings: (s = {}) => ({
           workerUrl: s.workerUrl || "https://gemini-web-bridge.pansakorn-pho.workers.dev",
-          bridgeToken: s.bridgeToken || "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN",
+          bridgeToken: s.bridgeToken || "",
           rawBridgeToken: s.bridgeToken || "",
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",
           isDefaultToken: !s.bridgeToken
@@ -50,7 +50,7 @@
   function updateCurrentSettingsDisplay(resolved) {
     const display = {
       workerUrl: resolved.workerUrl,
-      bridgeToken: resolved.rawBridgeToken ? "***** (custom token set)" : "(default built-in token)",
+      bridgeToken: resolved.rawBridgeToken ? "***** (custom token set)" : "(none — Worker auth required)",
       enforcementMode: resolved.enforcementMode,
       protocolVersion: 2,
       capabilities: { verifiedRpc: true }
@@ -130,7 +130,7 @@
           status: "authenticated",
           statusCode: 200,
           protocolVersion: body.protocolVersion || 2,
-          tokenType: resolved.isDefaultToken ? "built-in default" : "custom secret",
+          tokenType: resolved.isDefaultToken ? "none (Worker auth required)" : "custom secret",
           endpoint: authCheckUrl
         }, null, 2);
       } else if (response.status === 401) {

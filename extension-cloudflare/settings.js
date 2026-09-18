@@ -6,14 +6,14 @@
 (function (root) {
   "use strict";
 
-  const DEFAULT_BRIDGE_SECRET = "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN";
+  const DEFAULT_BRIDGE_SECRET = "";
   const DEFAULT_WORKER_URL = "https://gemini-web-bridge.pansakorn-pho.workers.dev";
   const MAX_BACKOFF_DELAY = 30000;
   const INITIAL_BACKOFF_DELAY = 1000;
 
   /**
    * Resolves effective settings from storage object.
-   * Empty bridgeToken retains built-in compatibility secret.
+   * Empty bridgeToken means no authentication (Worker must not require auth).
    * Default enforcementMode is 'strict'.
    */
   function resolveSettings(stored = {}) {
