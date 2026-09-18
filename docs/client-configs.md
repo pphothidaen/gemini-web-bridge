@@ -140,7 +140,7 @@ print(response.choices[0].message.tool_calls)
 ```bash
 curl -N -X POST https://gemini-web-bridge.pphothidaen.workers.dev/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN" \
+  -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
   -d '{
     "model": "gemini-web-thinking",
     "stream": true,
