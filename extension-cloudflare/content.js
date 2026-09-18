@@ -10,10 +10,10 @@
   const Settings = (typeof globalThis !== "undefined" && globalThis.GeminiBridgeSettings)
     ? globalThis.GeminiBridgeSettings
     : {
-        DEFAULT_WORKER_URL: "https://gemini-web-bridge.pphothidaen.workers.dev",
+        DEFAULT_WORKER_URL: "https://gemini-web-bridge.pansakorn-pho.workers.dev",
         DEFAULT_BRIDGE_SECRET: "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN",
         resolveSettings: (s = {}) => ({
-          workerUrl: (s.workerUrl || "https://gemini-web-bridge.pphothidaen.workers.dev").trim(),
+          workerUrl: (s.workerUrl || "https://gemini-web-bridge.pansakorn-pho.workers.dev").trim(),
           bridgeToken: (s.bridgeToken && s.bridgeToken.trim()) ? s.bridgeToken.trim() : "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN",
           rawBridgeToken: s.bridgeToken || "",
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",

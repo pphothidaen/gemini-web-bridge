@@ -16,7 +16,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const WORKER_URL = process.env.WORKER_URL || 'https://gemini-web-bridge.pphothidaen.workers.dev';
+const WORKER_URL = process.env.WORKER_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev';
 const CF_TOKEN = process.env.CF_TOKEN || '';
 const PROTOCOL_VERSION = 2;
 

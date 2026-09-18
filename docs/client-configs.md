@@ -4,10 +4,10 @@
 
 ## Base Endpoints
 
-- **Status Dashboard:** `https://gemini-web-bridge.pphothidaen.workers.dev/` (Public)
-- **OpenAI Compatible API:** `https://gemini-web-bridge.pphothidaen.workers.dev/v1`
-- **MCP Endpoint:** `https://gemini-web-bridge.pphothidaen.workers.dev/mcp`
-- **WebSocket Bridge:** `wss://gemini-web-bridge.pphothidaen.workers.dev/bridge`
+- **Status Dashboard:** `https://gemini-web-bridge.pansakorn-pho.workers.dev/` (Public)
+- **OpenAI Compatible API:** `https://gemini-web-bridge.pansakorn-pho.workers.dev/v1`
+- **MCP Endpoint:** `https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp`
+- **WebSocket Bridge:** `wss://gemini-web-bridge.pansakorn-pho.workers.dev/bridge`
 
 ---
 
@@ -19,7 +19,7 @@
 model:
   default: gemini-web-thinking
   provider: gemini-web-bridge
-  base_url: https://gemini-web-bridge.pphothidaen.workers.dev/v1
+  base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
   api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
 
 providers:
@@ -28,7 +28,7 @@ providers:
       reasoning: false
     type: custom
     name: gemini-web-bridge
-    base_url: https://gemini-web-bridge.pphothidaen.workers.dev/v1
+    base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
     api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
     discover_models: true
     refresh_models_on_connect: true
@@ -49,7 +49,7 @@ Cloudflare Worker มาพร้อมกับ **Tool Emulator Engine** ที
 ```yaml
 mcp_servers:
   gemini-web-bridge:
-    url: https://gemini-web-bridge.pphothidaen.workers.dev/mcp
+    url: https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp
     headers:
       Authorization: "Bearer REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
 ```
@@ -61,7 +61,7 @@ mcp_servers:
 ### Cursor
 - **Settings** → **Models** → **Add Custom Model**
 - **Model Name:** `gemini-web-thinking` หรือ `gemini-web`
-- **Base URL:** `https://gemini-web-bridge.pphothidaen.workers.dev/v1`
+- **Base URL:** `https://gemini-web-bridge.pansakorn-pho.workers.dev/v1`
 - **API Key:** `REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN`
 
 ### Cline / Claude Code (MCP Configuration)
@@ -70,7 +70,7 @@ mcp_servers:
 {
   "mcpServers": {
     "gemini-web-bridge": {
-      "url": "https://gemini-web-bridge.pphothidaen.workers.dev/mcp",
+      "url": "https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp",
       "headers": {
         "Authorization": "Bearer REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
       }
@@ -88,7 +88,7 @@ mcp_servers:
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://gemini-web-bridge.pphothidaen.workers.dev/v1",
+    base_url="https://gemini-web-bridge.pansakorn-pho.workers.dev/v1",
     api_key="REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
 )
 
@@ -138,7 +138,7 @@ print(response.choices[0].message.tool_calls)
 
 ### cURL
 ```bash
-curl -N -X POST https://gemini-web-bridge.pphothidaen.workers.dev/v1/chat/completions \
+curl -N -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
   -d '{

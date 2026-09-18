@@ -2,7 +2,7 @@ model: openai:gemini-web-thinking
 clients:
   - type: openai
     name: gemini-bridge
-    api_base: https://gemini-web-bridge.pphothidaen.workers.dev/v1
+    api_base: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
     api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
     models:
       - name: gemini-web-thinking

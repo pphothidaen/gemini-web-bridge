@@ -54,7 +54,7 @@ Gemini Web Bridge คือระบบเกตเวย์และสะพ�
 3.2 Transport Protocol Summary
 
 Extension ↔ Worker:
-  - WSS (WebSocket Secure) ผ่าน wss://gemini-web-bridge.pphothidaen.workers.dev/bridge
+  - WSS (WebSocket Secure) ผ่าน wss://gemini-web-bridge.pansakorn-pho.workers.dev/bridge
   - ใช้ content.js ใน Isolated World สร้าง WebSocket connection
   - ข้าม CSP ได้เนื่องจาก content script อยู่ใน Extension context ไม่อยู่ภายใต้ CSP ของหน้าเว็บ
   - Reconnect อัตโนมัติด้วย Exponential Backoff (1s → 30s cap)
@@ -115,7 +115,7 @@ OpenAI API Standard: รองรับโมเดล gemini-web และ gemi
 
 5.1 Gemini Spark
 ติดตั้งในฐานะ Custom App (@geminiwebbridge) ผ่าน Remote MCP URL:
-  URL: https://gemini-web-bridge.pphothidaen.workers.dev/mcp
+  URL: https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp
   Auth: Bearer Token (REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN)
 
 5.2 Hermes Agent (Nous Research) — [✅ PRODUCTION READY]
@@ -123,17 +123,17 @@ OpenAI API Standard: รองรับโมเดล gemini-web และ gemi
   model:
     default: gemini-web-thinking
     provider: gemini-web-bridge
-    base_url: https://gemini-web-bridge.pphothidaen.workers.dev/v1
+    base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
     api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
   mcp_servers:
     gemini-web-bridge:
-      url: https://gemini-web-bridge.pphothidaen.workers.dev/mcp
+      url: https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp
       headers:
         Authorization: "Bearer REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
 
 5.3 Cursor / Cline
 ตั้งค่าใน Settings → Models:
-  Base URL: https://gemini-web-bridge.pphothidaen.workers.dev/v1
+  Base URL: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
   API Key: <CLIENT_API_KEY>
   Model: gemini-web-thinking
 
@@ -142,7 +142,7 @@ OpenAI API Standard: รองรับโมเดล gemini-web และ gemi
   {
     "mcpServers": {
       "gemini-web-bridge": {
-        "url": "https://gemini-web-bridge.pphothidaen.workers.dev/mcp",
+        "url": "https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp",
         "headers": { "Authorization": "Bearer <CLIENT_API_KEY>" }
       }
     }

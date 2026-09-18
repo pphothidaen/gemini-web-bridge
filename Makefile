@@ -4,7 +4,7 @@
 SHELL := /bin/bash
 WORKER_DIR := cloudflare-worker
 WORKER_NAME := gemini-web-bridge
-WORKER_URL := https://gemini-web-bridge.pphothidaen.workers.dev
+WORKER_URL := https://gemini-web-bridge.pansakorn-pho.workers.dev
 NODE_VERSION := 20
 
 .PHONY: help install dev test test-watch lint deploy deploy-staging health health-deep secrets-check clean

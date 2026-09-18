@@ -40,7 +40,7 @@ if not auth_header.startswith('Bearer '):
     raise SystemExit("Missing Bearer Authorization in config")
 
 API_KEY = auth_header.replace('Bearer ', '').strip()
-BASE_URL = "https://gemini-web-bridge.pphothidaen.workers.dev"
+BASE_URL = "https://gemini-web-bridge.pansakorn-pho.workers.dev"
 
 results = {
     "target": BASE_URL,

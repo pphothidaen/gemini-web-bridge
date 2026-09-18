@@ -4,7 +4,7 @@
 // and manages conversation scope switching (app / notebook).
 // ============================================================
 
-const DEFAULT_WORKER_URL = "https://gemini-web-bridge.pphothidaen.workers.dev";
+const DEFAULT_WORKER_URL = "https://gemini-web-bridge.pansakorn-pho.workers.dev";
 const DEFAULT_BRIDGE_SECRET = "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN";
 const SCOPE_SWITCH_TIMEOUT_MS = 45000;
 

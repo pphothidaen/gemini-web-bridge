@@ -151,7 +151,7 @@ npx wrangler deploy
 model:
   default: gemini-web-thinking
   provider: gemini-web-bridge
-  base_url: https://gemini-web-bridge.pphothidaen.workers.dev/v1
+  base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
   api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
 
 providers:
@@ -160,7 +160,7 @@ providers:
       reasoning: false
     type: custom
     name: gemini-web-bridge
-    base_url: https://gemini-web-bridge.pphothidaen.workers.dev/v1
+    base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
     api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
     discover_models: true
     refresh_models_on_connect: true
@@ -171,7 +171,7 @@ providers:
 
 mcp_servers:
   gemini-web-bridge:
-    url: https://gemini-web-bridge.pphothidaen.workers.dev/mcp
+    url: https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp
     headers:
       Authorization: "Bearer REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
 ```
@@ -189,7 +189,7 @@ hermes -z "ออกแบบ System Architecture" -t gemini-web-bridge
 ```
 
 #### ข. Cursor / Cline
-- **Base URL**: `https://gemini-web-bridge.pphothidaen.workers.dev/v1`
+- **Base URL**: `https://gemini-web-bridge.pansakorn-pho.workers.dev/v1`
 - **API Key**: `REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN`
 - **Model**: `gemini-web-thinking` หรือ `gemini-web`
 
@@ -198,7 +198,7 @@ hermes -z "ออกแบบ System Architecture" -t gemini-web-bridge
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://gemini-web-bridge.pphothidaen.workers.dev/v1",
+    base_url="https://gemini-web-bridge.pansakorn-pho.workers.dev/v1",
     api_key="REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
 )
 
@@ -253,7 +253,7 @@ for chunk in response:
   ```
 - **Health Check ผ่าน cURL:**
   ```bash
-  curl -s https://gemini-web-bridge.pphothidaen.workers.dev/ | jq
+  curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/ | jq
   ```
 - **ทดสอบ MCP Tools ผ่าน Hermes:**
   ```bash

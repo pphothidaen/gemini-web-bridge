@@ -2,7 +2,7 @@
 
 > **Gemini Web Bridge (Edge AI Gateway & Hybrid Hub)**  
 > **Current Version:** `v4.3.0` (Background-Socket Sessions & Conversation Scopes Edition)  
-> **Repository:** `gemini-web-bridge` | **Production URL:** `https://gemini-web-bridge.pphothidaen.workers.dev`  
+> **Repository:** `gemini-web-bridge` | **Production URL:** `https://gemini-web-bridge.pansakorn-pho.workers.dev`  
 > **System Status:** Production Ready & 100% Operational  
 > **Test Pass Rate:** **69 / 69 Tests (100% GREEN)** across Unit, Protocol, and Red Team Adversarial Suites  
 > **Last Verified Date:** 2026-09-16  
@@ -286,7 +286,7 @@ sequenceDiagram
 
 ## 4. คู่มือการใช้งาน Remote MCP Tools ทั้ง 8 รายการ
 
-Remote Model Context Protocol (MCP) ให้บริการที่ Endpoint `POST https://gemini-web-bridge.pphothidaen.workers.dev/mcp` พร้อมรองรับทั้ง JSON-RPC 2.0 แบบ Single POST และ Streamed SSE Session
+Remote Model Context Protocol (MCP) ให้บริการที่ Endpoint `POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp` พร้อมรองรับทั้ง JSON-RPC 2.0 แบบ Single POST และ Streamed SSE Session
 
 ### 4.1 รายการเครื่องมือและ Input Schemas
 
@@ -307,7 +307,7 @@ Remote Model Context Protocol (MCP) ให้บริการที่ Endpoin
 
 #### ตัวอย่าง 1: ตรวจสอบ Ping และ Scope ปัจจุบัน (`ping`)
 ```bash
-curl -s -X POST https://gemini-web-bridge.pphothidaen.workers.dev/mcp \
+curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -338,7 +338,7 @@ curl -s -X POST https://gemini-web-bridge.pphothidaen.workers.dev/mcp \
 
 #### ตัวอย่าง 2: กำหนด Scope ไปยัง NotebookLM (`set_bridge_scope`)
 ```bash
-curl -s -X POST https://gemini-web-bridge.pphothidaen.workers.dev/mcp \
+curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -356,7 +356,7 @@ curl -s -X POST https://gemini-web-bridge.pphothidaen.workers.dev/mcp \
 
 #### ตัวอย่าง 3: สั่งวิเคราะห์สถาปัตยกรรมภายใต้ Scope ของ NotebookLM (`sdlc_solution_architect`)
 ```bash
-curl -s -X POST https://gemini-web-bridge.pphothidaen.workers.dev/mcp \
+curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -542,7 +542,7 @@ CREATE TABLE tool_executions (
 3. คลิกปุ่ม **Load unpacked (โหลดส่วนขยายที่คลายการบีบอัดแล้ว)**
 4. เลือกโฟลเดอร์โครงการ: `/Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare`
 5. คลิกที่ไอคอนส่วนขยายเพื่อเปิดหน้า **Options (ตั้งค่า)**:
-   * **Worker URL:** `https://gemini-web-bridge.pphothidaen.workers.dev`
+   * **Worker URL:** `https://gemini-web-bridge.pansakorn-pho.workers.dev`
    * **Bridge Token:** ใส่ Token ให้ตรงกับ Secret `BRIDGE_AUTH_TOKEN` (เช่น `REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN`)
    * **Enforcement Mode:** เลือก `Strict Verified`
 6. เปิดแท็บ `https://gemini.google.com/app` ล็อกอินบัญชี Google ให้เรียบร้อย จะเห็นไฟแสดงสถานะที่มุมล่างขวาขึ้นเป็น **สีเขียว (Bridge: Connected)**
@@ -591,22 +591,22 @@ cd cloudflare-worker && node --test tests/mcp-protocol.test.mjs
 
 ```bash
 # 1. ตรวจสอบสถานะ Dashboard
-curl -s https://gemini-web-bridge.pphothidaen.workers.dev/health | jq .
+curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/health | jq .
 
 # 2. ทดสอบ Ping ผ่าน MCP Tool
-curl -s -X POST https://gemini-web-bridge.pphothidaen.workers.dev/mcp \
+curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{}}}' | jq .
 
 # 3. ตรวจสอบรายชื่อโมเดลจริงที่เบราว์เซอร์เปิดใช้งาน
-curl -s -X POST https://gemini-web-bridge.pphothidaen.workers.dev/mcp \
+curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_bridge_models","arguments":{}}}' | jq .
 
 # 4. ทดสอบยิง OpenAI Chat Completion แบบ Real SSE Streaming
-curl -N -s -X POST https://gemini-web-bridge.pphothidaen.workers.dev/v1/chat/completions \
+curl -N -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions \
   -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -616,7 +616,7 @@ curl -N -s -X POST https://gemini-web-bridge.pphothidaen.workers.dev/v1/chat/com
   }'
 
 # 5. สลับ Scope ไปยัง NotebookLM
-curl -s -X POST https://gemini-web-bridge.pphothidaen.workers.dev/mcp \
+curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{

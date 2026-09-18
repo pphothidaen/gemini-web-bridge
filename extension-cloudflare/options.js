@@ -8,10 +8,10 @@
   const Settings = (typeof window !== "undefined" && window.GeminiBridgeSettings)
     ? window.GeminiBridgeSettings
     : (typeof GeminiBridgeSettings !== "undefined" ? GeminiBridgeSettings : {
-        DEFAULT_WORKER_URL: "https://gemini-web-bridge.pphothidaen.workers.dev",
+        DEFAULT_WORKER_URL: "https://gemini-web-bridge.pansakorn-pho.workers.dev",
         DEFAULT_BRIDGE_SECRET: "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN",
         resolveSettings: (s = {}) => ({
-          workerUrl: s.workerUrl || "https://gemini-web-bridge.pphothidaen.workers.dev",
+          workerUrl: s.workerUrl || "https://gemini-web-bridge.pansakorn-pho.workers.dev",
           bridgeToken: s.bridgeToken || "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN",
           rawBridgeToken: s.bridgeToken || "",
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",

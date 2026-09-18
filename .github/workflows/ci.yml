@@ -125,7 +125,7 @@ jobs:
       - name: Verify deployment
         run: |
           sleep 5
-          HEALTH=$(curl -s https://gemini-web-bridge.pphothidaen.workers.dev/health)
+          HEALTH=$(curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/health)
           echo "$HEALTH"
           echo "$HEALTH" | grep -q '"status": *"ok"' || (echo "Health check failed" && exit 1)
 
@@ -134,4 +134,4 @@ jobs:
         run: |
           echo "## 🚀 Deployed to Production" >> $GITHUB_STEP_SUMMARY
           echo "✅ Worker deployed successfully" >> $GITHUB_STEP_SUMMARY
-          echo "- URL: https://gemini-web-bridge.pphothidaen.workers.dev" >> $GITHUB_STEP_SUMMARY
+          echo "- URL: https://gemini-web-bridge.pansakorn-pho.workers.dev" >> $GITHUB_STEP_SUMMARY

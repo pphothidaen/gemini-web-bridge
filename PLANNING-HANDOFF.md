@@ -713,7 +713,7 @@ flowchart TD
 - [ ] เข้าใจ Protocol v2 message flow: `SESSION_READY` → `PREPARE_MODEL` → `MODEL_READY` → `EXECUTE_REQUEST` → `STREAM_CHUNK` → `STREAM_DONE`
 - [ ] ทำความเข้าใจ `GeminiBridgeDO` class ใน `index.js` — ทุก state อยู่ใน constructor lines 91-116
 - [ ] รัน test suite: `node --test cloudflare-worker/tests/*.test.mjs` (คาดหวัง 54 pass, 4 pre-existing fail)
-- [ ] ตรวจสอบ production health: `curl https://gemini-web-bridge.pphothidaen.workers.dev/`
+- [ ] ตรวจสอบ production health: `curl https://gemini-web-bridge.pansakorn-pho.workers.dev/`
 - [ ] ตรวจสอบ Cloudflare Dashboard: Durable Objects metrics, Worker analytics
 
 ### ไฟล์สำคัญที่ต้องรู้จัก

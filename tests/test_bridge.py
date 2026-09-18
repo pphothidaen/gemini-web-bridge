@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from openai import OpenAI
 
-BASE_URL = os.environ.get("BRIDGE_BASE_URL", "https://gemini-web-bridge.pphothidaen.workers.dev/v1")
+BASE_URL = os.environ.get("BRIDGE_BASE_URL", "https://gemini-web-bridge.pansakorn-pho.workers.dev/v1")
 
 def _get_api_key():
     if os.environ.get("BRIDGE_API_KEY"):

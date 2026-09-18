@@ -26,7 +26,7 @@ new_sqlite_classes = ["GeminiBridgeDO"]
 # Staging route (use wrangler deploy --env staging)
 [env.staging]
 name = "gemini-web-bridge-staging"
-route = "gemini-web-bridge-staging.pphothidaen.workers.dev"
+route = "gemini-web-bridge-staging.pansakorn-pho.workers.dev"
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
