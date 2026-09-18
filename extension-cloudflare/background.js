@@ -5,7 +5,7 @@
 // ============================================================
 
 const DEFAULT_WORKER_URL = "https://gemini-web-bridge.pansakorn-pho.workers.dev";
-const DEFAULT_BRIDGE_SECRET = "";
+const DEFAULT_BRIDGE_SECRET = "gemini-bridge-5ee24807fa35c8bca88ef89cc6401240";
 const SCOPE_SWITCH_TIMEOUT_MS = 45000;
 
 /**

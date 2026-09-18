@@ -11,10 +11,10 @@
     ? globalThis.GeminiBridgeSettings
     : {
         DEFAULT_WORKER_URL: "https://gemini-web-bridge.pansakorn-pho.workers.dev",
-        DEFAULT_BRIDGE_SECRET: "",
+        DEFAULT_BRIDGE_SECRET: "gemini-bridge-5ee24807fa35c8bca88ef89cc6401240",
         resolveSettings: (s = {}) => ({
           workerUrl: s.workerUrl || "https://gemini-web-bridge.pansakorn-pho.workers.dev",
-          bridgeToken: s.bridgeToken || "",
+          bridgeToken: s.bridgeToken || "gemini-bridge-5ee24807fa35c8bca88ef89cc6401240",
           rawBridgeToken: s.bridgeToken || "",
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",
           isDefaultToken: !s.bridgeToken
