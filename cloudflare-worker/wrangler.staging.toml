@@ -1,0 +1,39 @@
+# Staging Environment Configuration
+# Copy to wrangler.toml and modify for staging deployments
+
+name = "gemini-web-bridge-staging"
+main = "src/index.js"
+compatibility_date = "2026-09-12"
+compatibility_flags = ["nodejs_compat"]
+
+# Staging-specific vars (non-secret)
+[vars]
+ENVIRONMENT = "staging"
+BRIDGE_AUTH_TOKEN = "staging-token-change-me"
+LOG_LEVEL = "debug"
+ENABLE_DEBUG_ENDPOINTS = "true"
+
+# Durable Objects
+[durable_objects]
+bindings = [
+  { name = "BRIDGE_DO", class_name = "GeminiBridgeDO" }
+]
+
+[[migrations]]
+tag = "v1-staging"
+new_sqlite_classes = ["GeminiBridgeDO"]
+
+# Staging route (use wrangler deploy --env staging)
+[env.staging]
+name = "gemini-web-bridge-staging"
+route = "gemini-web-bridge-staging.pphothidaen.workers.dev"
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+LOG_LEVEL = "debug"
+ENABLE_DEBUG_ENDPOINTS = "true"
+
+# Observability
+[observability]
+enabled = true
+head_sample_rate = 1.0  # Sample all requests in staging for debugging

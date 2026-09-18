@@ -1,0 +1,138 @@
+diff --git a/hermes_cli/inventory.py b/hermes_cli/inventory.py
+index eefb2f853c..4ecdffb1a7 100644
+--- a/hermes_cli/inventory.py
++++ b/hermes_cli/inventory.py
+@@ -140,7 +140,7 @@ def build_models_payload(
+     if pricing:
+         _apply_pricing(rows, force_fresh_nous_tier=force_fresh_nous_tier, cached_only=pricing_cache_only)
+     if capabilities:
+-        _apply_capabilities(rows)
++        _apply_capabilities(rows, ctx.user_providers)
+     if featured:
+         _apply_featured(rows)
+     _apply_custom_aliases(rows)
+@@ -269,7 +269,16 @@ def _reasoning_catalog_reader(slug: str):
+     return read
+ 
+ 
+-def _apply_capabilities(rows: list[dict]) -> None:
++def provider_reasoning_override(user_providers: dict, provider: str):
++    """Explicit transport capability beats model-name inference for custom endpoints."""
++    key = str(provider or "").removeprefix("custom:")
++    config = (user_providers or {}).get(key, {})
++    capabilities = config.get("capabilities", {}) if isinstance(config, dict) else {}
++    value = capabilities.get("reasoning") if isinstance(capabilities, dict) else None
++    return value if isinstance(value, bool) else None
++
++
++def _apply_capabilities(rows: list[dict], user_providers: dict | None = None) -> None:
+     """Attach ``{model: {fast, reasoning, ...}}`` per row. ``reasoning`` defaults True when the catalog is
+     silent (the dial is a no-op on models that ignore it; hiding it from a capable model is worse). A
+     serving aggregator's detail overrides models.dev (adds ``can_disable_reasoning``). ``supported_efforts``
+@@ -310,6 +319,11 @@ def _apply_capabilities(rows: list[dict]) -> None:
+                 elif detail:
+                     entry["can_disable_reasoning"] = not detail.get("mandatory")
+ 
++            override = provider_reasoning_override(user_providers, slug)
++            if override is not None:
++                entry["reasoning"] = override
++                if not override:
++                    entry.pop("can_disable_reasoning", None)
+             caps[model] = entry
+ 
+         row["capabilities"] = caps
+diff --git a/hermes_cli/models.py b/hermes_cli/models.py
+index cbc288a69d..936a2843a1 100644
+--- a/hermes_cli/models.py
++++ b/hermes_cli/models.py
+@@ -2366,6 +2366,24 @@ def cached_fetch_api_models(
+     if not normalized_url:  # nothing to key the cache on
+         return None if cache_only else _live()
+ 
++    # Opt-in dynamic endpoints must never reuse a previous browser/session catalog.
++    from hermes_cli.config import load_config
++    configured = load_config().get("providers", {})
++    refresh_on_connect = any(
++        isinstance(entry, dict) and entry.get("refresh_models_on_connect") is True
++        and str(entry.get("base_url") or entry.get("api") or entry.get("url") or "").rstrip("/").lower() == normalized_url
++        for entry in configured.values()
++    )
++    if refresh_on_connect:
++        live = _live()
++        fp = _custom_endpoint_fingerprint(api_key, api_mode, headers)
++        cache_key = f"custom:{normalized_url}#{fp}"
++        cache = _load_provider_models_cache()
++        # An empty/disconnected catalog replaces old IDs as well.
++        fresh = _NativePickerModelList(live or [])
++        _store_cache_entry(cache_key, {**_cache_entry(fp, fresh), "native_catalog": True}, cache)
++        return fresh
++
+     # Key on URL AND credential fingerprint: N ``custom_providers`` rows can share one proxy URL
+     # with distinct keys (#106184). A URL-only key let the last probe overwrite its siblings'
+     # slot, so every other same-URL row failed the fingerprint check, got an empty catalog and
+diff --git a/hermes_cli/web_routers/models.py b/hermes_cli/web_routers/models.py
+index d2bdfe572d..36d67d5cdd 100644
+--- a/hermes_cli/web_routers/models.py
++++ b/hermes_cli/web_routers/models.py
+@@ -54,7 +54,8 @@ def get_model_info(profile: Optional[str] = None):
+     context length (so the UI can show "Auto-detected: 200K" beside the
+     override) plus models.dev capabilities when available."""
+     try:
+-        model_cfg = _load_config_scoped(profile).get("model", "")
++        config = _load_config_scoped(profile)
++        model_cfg = config.get("model", "")
+         model_name, provider = _main_model_fields(model_cfg)
+         base_url = model_cfg.get("base_url", "") if isinstance(model_cfg, dict) else ""
+         config_ctx = model_cfg.get("context_length") if isinstance(model_cfg, dict) else None
+@@ -81,6 +82,11 @@ def get_model_info(profile: Optional[str] = None):
+         except Exception:
+             pass
+ 
++        from hermes_cli.inventory import provider_reasoning_override
++        override = provider_reasoning_override(config.get("providers", {}), provider)
++        if override is not None:
++            caps["supports_reasoning"] = override
++
+         return {
+             "model": model_name, "provider": provider, "auto_context_length": auto_ctx,
+             "config_context_length": config_ctx_int,
+diff --git a/tests/hermes_cli/test_inventory_reasoning_caps.py b/tests/hermes_cli/test_inventory_reasoning_caps.py
+index a44878d2a6..b8c7ef370e 100644
+--- a/tests/hermes_cli/test_inventory_reasoning_caps.py
++++ b/tests/hermes_cli/test_inventory_reasoning_caps.py
+@@ -156,3 +156,35 @@ def test_catalog_failure_never_breaks_the_picker(monkeypatch):
+     caps = rows[0]["capabilities"]["deepseek/deepseek-v4-pro"]
+     assert "supported_efforts" not in caps
+     assert caps["reasoning"] is True
++
++
++def test_configured_transport_hides_effort_for_all_models(tmp_path, monkeypatch):
++    # Real config loader and imports, isolated profile, no production credentials.
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    (tmp_path / "config.yaml").write_text("model:\n  provider: test-bridge\n  default: future-model\nproviders:\n  test-bridge:\n    capabilities:\n      reasoning: false\n")
++    ctx = inv.load_picker_context()
++    rows = [{"slug": "test-bridge", "models": ["future-model", "another-thinking-model"]},
++            {"slug": "custom:test-bridge", "models": ["future-model"]},
++            {"slug": "unconfigured-provider", "models": ["future-model"]}]
++    inv._apply_capabilities(rows, ctx.user_providers)
++    assert all(not c["reasoning"] for row in rows[:2] for c in row["capabilities"].values())
++    assert rows[2]["capabilities"]["future-model"]["reasoning"] is True
++
++
++def test_dashboard_reads_same_profile_transport_override(tmp_path, monkeypatch):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    (tmp_path / "config.yaml").write_text("model:\n  provider: test-bridge\n  default: future-model\nproviders:\n  test-bridge:\n    capabilities:\n      reasoning: false\n")
++    from hermes_cli.web_routers.models import get_model_info
++    assert get_model_info()["capabilities"]["supports_reasoning"] is False
++
++
++def test_dynamic_endpoint_replaces_cached_catalog_on_every_probe(tmp_path, monkeypatch):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    (tmp_path / "config.yaml").write_text("providers:\n  ephemeral:\n    base_url: https://example.test/v1\n    refresh_models_on_connect: true\n")
++    snapshots = iter([["old-model"], ["new-thinking-model"], []])
++    fetch = lambda: next(snapshots)
++    for expected in [["old-model"], ["new-thinking-model"], []]:
++        result = models_mod.cached_fetch_api_models("test-key", "https://example.test/v1", cache_only=True, fetch_models=fetch)
++        assert result == expected
++    entries = models_mod._load_provider_models_cache()
++    assert all(entry["models"] == [] for entry in entries.values())
