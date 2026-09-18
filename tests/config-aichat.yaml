@@ -3,7 +3,7 @@ clients:
   - type: openai
     name: gemini-bridge
     api_base: https://gemini-web-bridge.pphothidaen.workers.dev/v1
-    api_key: hermes-secret-key-2026
+    api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
     models:
       - name: gemini-web-thinking
         max_input_tokens: 1000000

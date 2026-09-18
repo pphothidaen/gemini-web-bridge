@@ -6,7 +6,7 @@
 (function (root) {
   "use strict";
 
-  const DEFAULT_BRIDGE_SECRET = "gemini-bridge-secret-2026";
+  const DEFAULT_BRIDGE_SECRET = "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN";
   const DEFAULT_WORKER_URL = "https://gemini-web-bridge.pphothidaen.workers.dev";
   const MAX_BACKOFF_DELAY = 30000;
   const INITIAL_BACKOFF_DELAY = 1000;

@@ -5,7 +5,7 @@
 // ============================================================
 
 const DEFAULT_WORKER_URL = "https://gemini-web-bridge.pphothidaen.workers.dev";
-const DEFAULT_BRIDGE_SECRET = "gemini-bridge-secret-2026";
+const DEFAULT_BRIDGE_SECRET = "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN";
 const SCOPE_SWITCH_TIMEOUT_MS = 45000;
 
 /**

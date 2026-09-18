@@ -76,11 +76,28 @@ jobs:
           cat test-results.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-  # ─── Job 3: Deploy to Production ────────────────────────────────
+  # ─── Job 3: Security Scan ──────────────────────────────────────
+  security-scan:
+    name: Security Scan (Secret Detection)
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Gitleaks secret detection
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report scan status
+        run: echo "## 🔐 Security Scan" >> $GITHUB_STEP_SUMMARY
+
+  # ─── Job 4: Deploy to Production ────────────────────────────────
   deploy:
     name: Deploy Worker
     runs-on: ubuntu-latest
-    needs: test
+    needs: security-scan
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     environment: production
     steps:

@@ -116,7 +116,7 @@ OpenAI API Standard: รองรับโมเดล gemini-web และ gemi
 5.1 Gemini Spark
 ติดตั้งในฐานะ Custom App (@geminiwebbridge) ผ่าน Remote MCP URL:
   URL: https://gemini-web-bridge.pphothidaen.workers.dev/mcp
-  Auth: Bearer Token (hermes-secret-key-2026)
+  Auth: Bearer Token (REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN)
 
 5.2 Hermes Agent (Nous Research) — [✅ PRODUCTION READY]
 ตั้งค่าใน ~/.hermes/config.yaml และทดสอบรันสำเร็จ:
@@ -124,12 +124,12 @@ OpenAI API Standard: รองรับโมเดล gemini-web และ gemi
     default: gemini-web-thinking
     provider: gemini-web-bridge
     base_url: https://gemini-web-bridge.pphothidaen.workers.dev/v1
-    api_key: hermes-secret-key-2026
+    api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
   mcp_servers:
     gemini-web-bridge:
       url: https://gemini-web-bridge.pphothidaen.workers.dev/mcp
       headers:
-        Authorization: "Bearer hermes-secret-key-2026"
+        Authorization: "Bearer REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
 
 5.3 Cursor / Cline
 ตั้งค่าใน Settings → Models:

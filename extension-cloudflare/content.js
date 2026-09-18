@@ -11,10 +11,10 @@
     ? globalThis.GeminiBridgeSettings
     : {
         DEFAULT_WORKER_URL: "https://gemini-web-bridge.pphothidaen.workers.dev",
-        DEFAULT_BRIDGE_SECRET: "gemini-bridge-secret-2026",
+        DEFAULT_BRIDGE_SECRET: "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN",
         resolveSettings: (s = {}) => ({
           workerUrl: (s.workerUrl || "https://gemini-web-bridge.pphothidaen.workers.dev").trim(),
-          bridgeToken: (s.bridgeToken && s.bridgeToken.trim()) ? s.bridgeToken.trim() : "gemini-bridge-secret-2026",
+          bridgeToken: (s.bridgeToken && s.bridgeToken.trim()) ? s.bridgeToken.trim() : "REPLACE_WITH_GITHUB_SECRET_BRIDGE_AUTH_TOKEN",
           rawBridgeToken: s.bridgeToken || "",
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",
           isDefaultToken: !s.bridgeToken

@@ -20,7 +20,7 @@ model:
   default: gemini-web-thinking
   provider: gemini-web-bridge
   base_url: https://gemini-web-bridge.pphothidaen.workers.dev/v1
-  api_key: hermes-secret-key-2026
+  api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
 
 providers:
   gemini-web-bridge:
@@ -29,7 +29,7 @@ providers:
     type: custom
     name: gemini-web-bridge
     base_url: https://gemini-web-bridge.pphothidaen.workers.dev/v1
-    api_key: hermes-secret-key-2026
+    api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
     discover_models: true
     refresh_models_on_connect: true
     default_model: gemini-web-thinking
@@ -51,7 +51,7 @@ mcp_servers:
   gemini-web-bridge:
     url: https://gemini-web-bridge.pphothidaen.workers.dev/mcp
     headers:
-      Authorization: "Bearer hermes-secret-key-2026"
+      Authorization: "Bearer REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
 ```
 
 ---
@@ -62,7 +62,7 @@ mcp_servers:
 - **Settings** → **Models** → **Add Custom Model**
 - **Model Name:** `gemini-web-thinking` หรือ `gemini-web`
 - **Base URL:** `https://gemini-web-bridge.pphothidaen.workers.dev/v1`
-- **API Key:** `hermes-secret-key-2026`
+- **API Key:** `REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN`
 
 ### Cline / Claude Code (MCP Configuration)
 ไฟล์ `claude_desktop_config.json` หรือ cline MCP settings:
@@ -72,7 +72,7 @@ mcp_servers:
     "gemini-web-bridge": {
       "url": "https://gemini-web-bridge.pphothidaen.workers.dev/mcp",
       "headers": {
-        "Authorization": "Bearer hermes-secret-key-2026"
+        "Authorization": "Bearer REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
       }
     }
   }
@@ -89,7 +89,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="https://gemini-web-bridge.pphothidaen.workers.dev/v1",
-    api_key="hermes-secret-key-2026"
+    api_key="REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
 )
 
 response = client.chat.completions.create(
@@ -140,7 +140,7 @@ print(response.choices[0].message.tool_calls)
 ```bash
 curl -N -X POST https://gemini-web-bridge.pphothidaen.workers.dev/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer hermes-secret-key-2026" \
+  -H "Authorization: Bearer REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN" \
   -d '{
     "model": "gemini-web-thinking",
     "stream": true,
