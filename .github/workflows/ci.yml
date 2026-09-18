@@ -117,10 +117,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          npx wrangler deploy \
-            --name gemini-web-bridge \
-            --compatibility-date 2026-09-12 \
-            --compatibility-flag nodejs_compat
+          npx wrangler deploy
 
       - name: Verify deployment
         run: |

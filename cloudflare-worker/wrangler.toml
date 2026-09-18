@@ -10,6 +10,9 @@ workers_dev = true
 
 # Configure BRIDGE_AUTH_TOKEN and CLIENT_API_TOKEN with wrangler secret put.
 
+# Gitleaks: allow .env to exist locally but NEVER commit it (see .gitignore)
+# Doppler secrets are downloaded to .env for local dev only.
+
 [durable_objects]
 bindings = [
   { name = "BRIDGE_DO", class_name = "GeminiBridgeDO" }
