@@ -3,9 +3,10 @@ main = "src/index.js"
 compatibility_date = "2026-09-12"
 compatibility_flags = ["nodejs_compat"]
 
-# Production route binding — explicitly target pansakorn-pho.workers.dev zone
-# to prevent accidental deployment to wrong Cloudflare account/subdomain.
-route = { pattern = "gemini-web-bridge.pansakorn-pho.workers.dev/*", zone_name = "pansakorn-pho.workers.dev" }
+# Enable workers.dev — this worker is accessible at gemini-web-bridge.pansakorn-pho.workers.dev
+# Note: route binding via API is not allowed on account's default workers.dev subdomain.
+# The route was created via Cloudflare Dashboard and workers_dev = true keeps it active.
+workers_dev = true
 
 # Configure BRIDGE_AUTH_TOKEN and CLIENT_API_TOKEN with wrangler secret put.
 
