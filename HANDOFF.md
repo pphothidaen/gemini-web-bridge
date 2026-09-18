@@ -1,7 +1,7 @@
 # 🧭 Master Project Handoff & Architecture Blueprint
 
 > **Gemini Web Bridge (Edge AI Gateway & Hybrid Hub)**  
-> **Current Version:** `v4.3.0` (Background-Socket Sessions & Conversation Scopes Edition)  
+> **Current Version:** `v4.3.4` (Background-Socket Sessions & Conversation Scopes Edition)  
 > **Repository:** `gemini-web-bridge` | **Production URL:** `https://gemini-web-bridge.pansakorn-pho.workers.dev`  
 > **System Status:** Production Ready & 100% Operational  
 > **Test Pass Rate:** **69 / 69 Tests (100% GREEN)** across Unit, Protocol, and Red Team Adversarial Suites  
@@ -28,8 +28,8 @@
    * 4.1 รายการเครื่องมือและ Input Schemas
    * 4.2 ตัวอย่าง JSON-RPC Requests & Responses
 5. [ประวัติการพัฒนาและงานที่เสร็จสิ้น (Completed Milestones)](#5-ประวัติการพัฒนาและงานที่เสร็จสิ้น-completed-milestones)
-   * 5.1 ตารางประวัติ Milestones (v1.0.0 → v4.3.0)
-   * 5.2 การแก้ไขปัญหาเสถียรภาพ 5 ประการใน v4.3.0
+   * 5.1 ตารางประวัติ Milestones (v1.0.0 → v4.3.4)
+   * 5.2 การแก้ไขปัญหาเสถียรภาพ 5 ประการใน v4.3.4
 6. [แผนงานระยะต่อไป (Forward Planning Roadmap: Sprints 1, 2, 3)](#6-แผนงานระยะต่อไป-forward-planning-roadmap-sprints-1-2-3)
    * 6.1 Sprint 1: Proactive Alerting & Health Automation
    * 6.2 Sprint 2: Context Persistence & Vector Memory (D1 + Vectorize)
@@ -68,7 +68,7 @@
                                             │ HTTPS (Bearer Auth: CLIENT_API_TOKEN)
                                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.3.0)              │
+│                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.3.4)              │
 │                                                                                        │
 │   ┌────────────────────────────────────────────────────────────────────────────────┐   │
 │   │                         Edge Routing & Security Middleware                     │   │
@@ -245,10 +245,10 @@ sequenceDiagram
 
 1. **Disconnect Grace Period (~15 วินาที):**
    * ในเวอร์ชันเดิม เมื่อ WebSocket หลุดแม้แต่วินาทีเดียว DO จะล้างคิวงานทิ้งและแจ้ง `activeStreams` ล้มเหลวทันที
-   * ใน `v4.3.0` เมื่อ Socket ขาดลง DO จะตั้ง Grace Timer รอเป็นเวลา 15 วินาที หาก Extension เชื่อมต่อกลับมาใหม่ทันเวลา คำขอที่กำลังประมวลผลอยู่จะไม่ถูกยกเลิก และคิวงานจะไม่ถูกล้าง
+   * ใน `v4.3.4` เมื่อ Socket ขาดลง DO จะตั้ง Grace Timer รอเป็นเวลา 15 วินาที หาก Extension เชื่อมต่อกลับมาใหม่ทันเวลา คำขอที่กำลังประมวลผลอยู่จะไม่ถูกยกเลิก และคิวงานจะไม่ถูกล้าง
 2. **Real SSE Chunk Streaming:**
    * ในเวอร์ชันเดิม DO จะรอรับคำตอบครบทั้งก้อนก่อน แล้วจึงปล่อย SSE Header ออกไป
-   * ใน `v4.3.0` เมื่อ Extension ส่ง `STREAM_CHUNK` เข้ามา DO จะส่งต่อไปยังไคลเอนต์ทันทีผ่าน Callback `onChunk` ส่งผลให้ Time-to-First-Token (TTFT) รวดเร็ว และไคลเอนต์ไม่เกิดปัญหา Read Timeout
+   * ใน `v4.3.4` เมื่อ Extension ส่ง `STREAM_CHUNK` เข้ามา DO จะส่งต่อไปยังไคลเอนต์ทันทีผ่าน Callback `onChunk` ส่งผลให้ Time-to-First-Token (TTFT) รวดเร็ว และไคลเอนต์ไม่เกิดปัญหา Read Timeout
 3. **Idle-Based Timeout:**
    * ยกเลิก Hard Timeout 60 วินาทีแบบเดิม และเปลี่ยนเป็น **Idle Timeout 60 วินาที** (ตัดการเชื่อมต่อเมื่อไม่มี Chunk ใหม่ถูกส่งออกมาเกิน 60 วินาที) ทำให้รองรับการ Generate โค้ดหรือบทวิเคราะห์ขนาดยาวได้อย่างเสถียร
 
@@ -262,7 +262,7 @@ sequenceDiagram
 1. **Gemini Standard Chat (`app`):** การถาม-ตอบทั่วไป การเขียนโค้ดสั้นๆ หรือการวิเคราะห์ที่ใช้โมเดลพื้นฐาน
 2. **NotebookLM Focused Context (`notebook`):** การสนทนาที่ผูกกับเอกสารโครงการเฉพาะเจาะจง เช่น สเปกของระบบ, คู่มือความปลอดภัย, หรือโค้ดเบสทั้งหมดที่อัปโหลดไว้ล่วงหน้าใน Google NotebookLM
 
-ระบบ Scope Manager ใน `v4.3.0` ช่วยให้ AI Client สามารถระบุได้ว่าต้องการส่งคำถามหรือคำขอ MCP เข้าไปยัง Context ใด ทำให้ผลลัพธ์มีความแม่นยำสูงและไม่ออกนอกกรอบความรู้ที่เตรียมไว้
+ระบบ Scope Manager ใน `v4.3.4` ช่วยให้ AI Client สามารถระบุได้ว่าต้องการส่งคำถามหรือคำขอ MCP เข้าไปยัง Context ใด ทำให้ผลลัพธ์มีความแม่นยำสูงและไม่ออกนอกกรอบความรู้ที่เตรียมไว้
 
 ---
 
@@ -292,7 +292,7 @@ Remote Model Context Protocol (MCP) ให้บริการที่ Endpoin
 
 | ชื่อ Tool | ประเภทการทำงาน | พารามิเตอร์ที่รองรับ (Schema) | รายละเอียดการทำงาน |
 |:---|:---:|:---|:---|
-| `ping` | System | `message` *(string, optional)* | ตรวจสอบ Latency และสถานะการทำงาน (ส่งคืน Version 4.3.0, Scope ปัจจุบัน, และสถานะ Bridge) |
+| `ping` | System | `message` *(string, optional)* | ตรวจสอบ Latency และสถานะการทำงาน (ส่งคืน Version 4.3.4, Scope ปัจจุบัน, และสถานะ Bridge) |
 | `check_bridge_health` | Diagnostic | ไม่มี (Empty arguments) | ตรวจสอบสุขภาพเชิงลึก ส่งคืนข้อมูล JSON: สถานะ WebSocket, Consecutive Errors, รายชื่อโมเดล, และ GCP Fallback |
 | `list_bridge_models` | Catalog | ไม่มี (Empty arguments) | ส่งคืนรายชื่อโมเดลที่เบราว์เซอร์สแกนพบจริง พร้อมสถานะ Extended Thinking |
 | `set_bridge_scope` | Scope | `scope` *(string, required)* | กำหนด Conversation Scope ของ Bridge เช่น `app`, `notebook`, หรือ URL เต็มของเซสชันที่ต้องการ |
@@ -329,7 +329,7 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
     "content": [
       {
         "type": "text",
-        "text": "Pong! Cloud Hub v4.3.0 is running.\n• Conversation Scope: app (default)\n• Active Browser Model: Gemini 2.0 Flash (Extended Thinking: ON)\n• Chrome Extension Bridge: CONNECTED_AND_READY\n• GCP Fallback: ENABLED (Ready)\n• Consecutive Errors: 0"
+        "text": "Pong! Cloud Hub v4.3.4 is running.\n• Conversation Scope: app (default)\n• Active Browser Model: Gemini 2.0 Flash (Extended Thinking: ON)\n• Chrome Extension Bridge: CONNECTED_AND_READY\n• GCP Fallback: ENABLED (Ready)\n• Consecutive Errors: 0"
       }
     ]
   }
@@ -377,7 +377,7 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
 
 ## 5. ประวัติการพัฒนาและงานที่เสร็จสิ้น (Completed Milestones)
 
-### 5.1 ตารางประวัติ Milestones (v1.0.0 → v4.3.0)
+### 5.1 ตารางประวัติ Milestones (v1.0.0 → v4.3.4)
 
 | วันที่ | เวอร์ชัน / Milestone | รายละเอียดการดำเนินการสำคัญ | ผลการทดสอบ |
 |:---|:---|:---|:---:|
@@ -386,11 +386,11 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
 | 2026-09-15 | **v4.1.0 (Clean Architecture)** | ลบโฟลเดอร์ Legacy `proxy/` ทั้งหมด (1,679 บรรทัด) ปรับ `injected.js` เป็น Fail-Fast เมื่อ Label ไม่ตรง | 51/51 GREEN |
 | 2026-09-15 | **v4.2.0 (MCP & GCP Hybrid Fallback)** | พัฒนา Remote MCP Server (7 Tools), ระบบสลับสายอัตโนมัติไปยัง GCP Vertex AI Fallback เมื่อเบราว์เซอร์ออฟไลน์ | 63/63 GREEN |
 | 2026-09-15 | **v4.2.1 (Red Team Adversarial)** | เพิ่มชุดทดสอบเจาะระบบความปลอดภัย [`red-team-adversarial.test.mjs`](file:///Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker/tests/red-team-adversarial.test.mjs) ทดสอบ Token Injection, Prototype Pollution, และ Queue Flood | 69/69 GREEN |
-| 2026-09-16 | **v4.3.0 (Background Sockets & Scopes)** | **อัปเกรดความเสถียรระดับสูงสุด:** ย้าย WebSocket สู่ Background Service Worker ป้องกันแท็บหลับ, เพิ่ม DO Grace Period (15s), Real SSE Chunk Streaming, Idle Timeout, และรองรับ Conversation Scope (Gemini App + NotebookLM) พร้อม Tool `set_bridge_scope` | **69/69 GREEN (100%)** |
+| 2026-09-16 | **v4.3.4 (Background Sockets & Scopes)** | **อัปเกรดความเสถียรระดับสูงสุด:** ย้าย WebSocket สู่ Background Service Worker ป้องกันแท็บหลับ, เพิ่ม DO Grace Period (15s), Real SSE Chunk Streaming, Idle Timeout, และรองรับ Conversation Scope (Gemini App + NotebookLM) พร้อม Tool `set_bridge_scope` | **69/69 GREEN (100%)** |
 
 ---
 
-### 5.2 การแก้ไขปัญหาเสถียรภาพ 5 ประการใน v4.3.0
+### 5.2 การแก้ไขปัญหาเสถียรภาพ 5 ประการใน v4.3.4
 
 1. **ปัญหาแท็บ Gemini โดน Chrome สั่ง Discard / Freeze (แก้ที่ต้นเหตุ):**
    * *สาเหตุ:* โค้ดเดิมเปิด WebSocket จาก `content.js` ภายในแท็บ เมื่อผู้ใช้สลับไปใช้โปรแกรมอื่น Chrome Memory Saver จะแช่แข็งแท็บ JS หยุดทำงาน ส่งผลให้ WebSocket ขาดทันที
@@ -416,7 +416,7 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
 
 ```mermaid
 flowchart TD
-    Current["✅ v4.3.0 Production Ready<br/>(Background-Socket & Scopes)"]
+    Current["✅ v4.3.4 Production Ready<br/>(Background-Socket & Scopes)"]
     S1["Sprint 1: Proactive Alerting<br/>(Discord/Slack Webhooks + DO Alarms)"]
     S2["Sprint 2: Vector Memory<br/>(Cloudflare D1 + Vectorize + Vertex Embeddings)"]
     S3["Sprint 3: Multi-Session Router<br/>(BridgeRouterDO + Multi-Tab Balancing)"]

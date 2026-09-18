@@ -1,6 +1,6 @@
 // Cloudflare Worker: Stateful Gemini Web-Bridge Edge Hub
 // Architecture: Cloudflare Durable Objects (Unified WSS + HTTP Stateful Coordinator)
-// Version: 4.3.2 (Stability Patch - Exclusive SW Channel & Rogue Socket Elimination)
+// Version: 4.3.4 (Stability Patch - Exclusive SW Channel & Rogue Socket Elimination)
 
 import { normalizeModels, recommendedModel } from "./model-catalog.js";
 import { DurableObject } from "cloudflare:workers";
@@ -1097,7 +1097,7 @@ export class GeminiBridgeDO extends DurableObject {
                 tools: { listChanged: false },
                 logging: {}
               },
-              serverInfo: { name: "gemini-web-bridge-cloud-hub", version: "4.3.2" }
+              serverInfo: { name: "gemini-web-bridge-cloud-hub", version: "4.3.4" }
             }
           };
           return { response: res, protocolVersion: protoVersion };
@@ -1139,7 +1139,7 @@ export class GeminiBridgeDO extends DurableObject {
           if (toolName === "ping") {
             const extStatus = this.isExtensionReady() ? "ONLINE (Session Ready)" : "DISCONNECTED (Please open gemini.google.com in Chrome)";
             const gcpStatus = this.env.GEMINI_API_KEY ? "CONFIGURED (Hybrid Active)" : "DISABLED";
-            const pongText = `Pong! Cloud Hub v4.3.2 is running.\n• Conversation Scope: ${this.currentScope || "app (default)"}\n• Active Browser Model: ${this.activeBrowserModel || "None"} (Extended Thinking: ${this.extendedThinkingActive ? "ON" : "OFF"})\n• Chrome Extension Bridge: ${extStatus}\n• GCP Fallback: ${gcpStatus}\n• Consecutive Errors: ${this.healthState.consecutiveErrors}`;
+            const pongText = `Pong! Cloud Hub v4.3.4 is running.\n• Conversation Scope: ${this.currentScope || "app (default)"}\n• Active Browser Model: ${this.activeBrowserModel || "None"} (Extended Thinking: ${this.extendedThinkingActive ? "ON" : "OFF"})\n• Chrome Extension Bridge: ${extStatus}\n• GCP Fallback: ${gcpStatus}\n• Consecutive Errors: ${this.healthState.consecutiveErrors}`;
             const res = {
               jsonrpc: "2.0",
               id,
@@ -1413,7 +1413,7 @@ export class GeminiBridgeDO extends DurableObject {
       return new Response(JSON.stringify({
         status: "ok",
         service: "gemini-web-bridge-cloud-hub",
-        version: "4.3.2",
+        version: "4.3.4",
         architecture: "Cloudflare Durable Objects (Stateful Unified WSS + HTTP)",
         extension_status: isReady ? "CONNECTED_AND_READY" : "DISCONNECTED",
         current_scope: this.currentScope || "app (default)",
