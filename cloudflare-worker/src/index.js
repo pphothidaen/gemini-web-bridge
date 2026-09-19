@@ -548,14 +548,14 @@ export class GeminiBridgeDO extends DurableObject {
     }
 
     // ─── Public Paths vs Authenticated Paths ───
-    const publicPaths = ["/", "/health"];
+    const publicPaths = ["/", "/health", "/models", "/v1/models"];
     if (!publicPaths.includes(url.pathname)) {
       const authHeader = request.headers.get("Authorization") || "";
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
       if (!token || token !== CLIENT_API_KEY) {
         return new Response(JSON.stringify({
           error: {
-            message: "Invalid or missing API key. Please provide Authorization: Bearer <CLIENT_API_KEY>",
+            message: "Invalid or missing API key. Please provide Authorization: Bearer ***",
             type: "invalid_request_error",
             code: "invalid_api_key"
           }
@@ -568,8 +568,8 @@ export class GeminiBridgeDO extends DurableObject {
                             url.searchParams.get("session_id") ||
                             `session-${crypto.randomUUID()}`;
 
-    // ─── 2. OpenAI-Compatible API: /v1/models ───
-    if (url.pathname === "/v1/models" && request.method === "GET") {
+    // ─── 2. OpenAI-Compatible API: /v1/models (and /models alias) ───
+    if ((url.pathname === "/v1/models" || url.pathname === "/models") && request.method === "GET") {
       const models = this.isExtensionReady() ? this.dynamicModels : [];
       const defaultModel = recommendedModel(models);
       return new Response(JSON.stringify({

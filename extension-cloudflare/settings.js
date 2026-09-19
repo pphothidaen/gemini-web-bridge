@@ -6,14 +6,13 @@
 (function (root) {
   "use strict";
 
-  // ═══ DEFAULTS — synced from production environment ═══
-  // Source order: Doppler (prd_worker) > Cloudflare Worker > .env > Hermes config
-  const DEFAULT_BRIDGE_SECRET = "gemini-bridge-5ee24807fa35c8bca88ef89cc6401240";
-  const DEFAULT_CLIENT_API_TOKEN = "hermes-392e28325564158e53712649fdc86d0e";
-  const DEFAULT_WORKER_URL = "https://gemini-web-bridge.pansakorn-pho.workers.dev";
-  const DEFAULT_MCP_ENDPOINT = "https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp";
-  const DEFAULT_WSS_ENDPOINT = "wss://gemini-web-bridge.pansakorn-pho.workers.dev/bridge";
-  const DEFAULT_OPENAI_ENDPOINT = "https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions";
+  // ═══ DEFAULTS — injected at build time ═══
+  const DEFAULT_BRIDGE_SECRET = "__BRIDGE_AUTH_TOKEN__";
+  const DEFAULT_CLIENT_API_TOKEN = "__CLIENT_API_TOKEN__";
+  const DEFAULT_WORKER_URL = "__WORKER_URL__";
+  const DEFAULT_MCP_ENDPOINT = "__MCP_ENDPOINT__";
+  const DEFAULT_WSS_ENDPOINT = "__WSS_ENDPOINT__";
+  const DEFAULT_OPENAI_ENDPOINT = "__OPENAI_ENDPOINT__";
 
   const MAX_BACKOFF_DELAY = 30000;
   const INITIAL_BACKOFF_DELAY = 1000;

@@ -154,6 +154,8 @@
 
     /**
      * Updates session identifiers and invalidates mappings if build or account changed.
+     * When a new session epoch is provided, it is preserved during invalidation so
+     * that evidence recorded with the same epoch is not dropped.
      */
     updateSession(buildLabel, accountHash, sessionEpoch = null) {
       const buildChanged = this.currentBuildLabel && buildLabel && this.currentBuildLabel !== buildLabel;
@@ -167,16 +169,19 @@
       this.currentAccountHash = accountHash || this.currentAccountHash;
 
       if (buildChanged || accountChanged) {
-        this.invalidateAll(buildChanged ? "build_label_changed" : "account_changed");
+        this.invalidateAll(buildChanged ? "build_label_changed" : "account_changed", sessionEpoch);
       }
     }
 
     /**
      * Invalidates all model records in registry.
      * Rigorous invalidation: Clears generation evidence, resets revisions, marks stale.
+     * @param {string} reason - Why invalidation occurred
+     * @param {string|null} preserveEpoch - If provided, use this epoch instead of generating a new one.
+     *   This allows evidence recorded with the same epoch to succeed after invalidation.
      */
-    invalidateAll(reason = "session_invalidated") {
-      this.currentSessionEpoch = `epoch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    invalidateAll(reason = "session_invalidated", preserveEpoch = null) {
+      this.currentSessionEpoch = preserveEpoch || `epoch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
       for (const [modelId, record] of this.records.entries()) {
         this.records.set(modelId, {

@@ -9,10 +9,10 @@
     ? window.GeminiBridgeSettings
     : (typeof GeminiBridgeSettings !== "undefined" ? GeminiBridgeSettings : {
         DEFAULT_WORKER_URL: "https://gemini-web-bridge.pansakorn-pho.workers.dev",
-        DEFAULT_BRIDGE_SECRET: "gemini-bridge-5ee24807fa35c8bca88ef89cc6401240",
+        DEFAULT_BRIDGE_SECRET: "__BRIDGE_AUTH_TOKEN__",
         resolveSettings: (s = {}) => ({
           workerUrl: s.workerUrl || "https://gemini-web-bridge.pansakorn-pho.workers.dev",
-          bridgeToken: s.bridgeToken || "gemini-bridge-5ee24807fa35c8bca88ef89cc6401240",
+          bridgeToken: s.bridgeToken || "__BRIDGE_AUTH_TOKEN__",
           rawBridgeToken: s.bridgeToken || "",
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",
           isDefaultToken: !s.bridgeToken

@@ -11,10 +11,10 @@
     ? globalThis.GeminiBridgeSettings
     : {
         DEFAULT_WORKER_URL: "https://gemini-web-bridge.pansakorn-pho.workers.dev",
-        DEFAULT_BRIDGE_SECRET: "gemini-bridge-5ee24807fa35c8bca88ef89cc6401240",
+        DEFAULT_BRIDGE_SECRET: "__BRIDGE_AUTH_TOKEN__",
         resolveSettings: (s = {}) => ({
           workerUrl: s.workerUrl || "https://gemini-web-bridge.pansakorn-pho.workers.dev",
-          bridgeToken: s.bridgeToken || "gemini-bridge-5ee24807fa35c8bca88ef89cc6401240",
+          bridgeToken: s.bridgeToken || "__BRIDGE_AUTH_TOKEN__",
           rawBridgeToken: s.bridgeToken || "",
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",
           isDefaultToken: !s.bridgeToken
@@ -849,6 +849,10 @@
 
     // In live Gemini session with active buildLabel, auto-verify model mapping under native schema
     if (sessionState.sessionReady && sessionState.buildLabel && typeof window !== "undefined" && window.location && window.location.hostname && window.location.hostname.includes("gemini.google.com")) {
+      // Ensure registry epoch matches current session epoch before recording evidence
+      if (sessionState.sessionEpoch) {
+        registry.updateSession(sessionState.buildLabel, sessionState.accountHash, sessionState.sessionEpoch);
+      }
       registry.recordGenerationEvidence(model, {
         endpoint: "StreamGenerate",
         buildLabel: sessionState.buildLabel,
@@ -1032,10 +1036,11 @@
           case "SESSION_STATE":
           case "TOKENS_EXTRACTED":
             if (type === "TOKENS_EXTRACTED") {
+              const rawThinkingEpoch = payload?.cfb2h ? `epoch_${Date.now()}` : (payload?.sessionEpoch || null);
               sessionState = {
                 sessionReady: Boolean(payload?.at || payload?.sessionReady),
                 buildLabel: payload?.cfb2h || null,
-                sessionEpoch: `epoch_${Date.now()}`
+                sessionEpoch: rawThinkingEpoch
               };
             } else {
               sessionState = payload || { sessionReady: false };
@@ -1057,6 +1062,17 @@
                   responseVerified: true,
                   requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
                 });
+                // Also verify the -thinking variant so worker's recommendedModel() works
+                const thinkingId = mId.endsWith("-thinking") ? null : mId + "-thinking";
+                if (thinkingId && !mId.includes("web-thinking")) {
+                  registry.recordGenerationEvidence(thinkingId, {
+                    endpoint: "StreamGenerate",
+                    buildLabel: sessionState.buildLabel,
+                    sessionEpoch: sessionState.sessionEpoch,
+                    responseVerified: true,
+                    requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
+                  });
+                }
               }
             }
 
