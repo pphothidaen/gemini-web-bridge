@@ -84,6 +84,10 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
+        with:
+          # gitleaks-action needs full history to diff against its baseline;
+          # shallow checkouts make the git wrapper fail with "stderr is not empty".
+          fetch-depth: 0
 
       - name: Run Gitleaks secret detection
         uses: gitleaks/gitleaks-action@v2
@@ -200,6 +204,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install worker dependencies
+        working-directory: ${{ env.WORKER_DIR }}
+        run: npm ci
 
       - name: Install Wrangler
         run: npm install -g wrangler@latest
