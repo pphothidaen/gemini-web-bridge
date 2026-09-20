@@ -133,7 +133,7 @@ jobs:
   redteam-token-test:
     name: Redteam — Token Validation
     runs-on: ubuntu-latest
-    needs: security-scan
+    needs: [security-scan, deploy]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -148,7 +148,7 @@ jobs:
 
           # Test 1: Old compromised token MUST return 401
           if [ -n "$OLD_CLIENT_TOKEN" ]; then
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            HTTP_CODE=$(curl -s --retry 3 --retry-all-errors --retry-delay 2 -o /dev/null -w "%{http_code}" -X POST \
               https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions \
               -H "Authorization: Bearer $OLD_CLIENT_TOKEN" \
               -H "Content-Type: application/json" \
@@ -165,7 +165,7 @@ jobs:
           fi
 
           # Test 2: Current token MUST return 200 or 503 (not 401)
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+          HTTP_CODE=$(curl -s --retry 3 --retry-all-errors --retry-delay 2 -o /dev/null -w "%{http_code}" -X POST \
             https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions \
             -H "Authorization: Bearer $CURRENT_CLIENT_TOKEN" \
             -H "Content-Type: application/json" \
@@ -180,7 +180,7 @@ jobs:
 
           # Test 3: Old bridge token must also be dead
           if [ -n "$OLD_BRIDGE_TOKEN" ]; then
-            BRIDGE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            BRIDGE_CODE=$(curl -s --retry 3 --retry-all-errors --retry-delay 2 -o /dev/null -w "%{http_code}" \
               https://gemini-web-bridge.pansakorn-pho.workers.dev/bridge/auth-check \
               -H "x-bridge-token: $OLD_BRIDGE_TOKEN")
             if [ "$BRIDGE_CODE" = "401" ]; then
