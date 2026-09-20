@@ -4,12 +4,38 @@
 
 import { normalizeModels, recommendedModel } from "./model-catalog.js";
 import { DurableObject } from "cloudflare:workers";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { 
   buildToolSystemPrompt, 
   createToolCallTransformer,
   resolveToolPolicy,
   parseToolCompletion
 } from "./tool-emulator.ts";
+
+// Characters encodable with WinAnsi (CP1252) standard PDF fonts.
+const WINANSI_EXTRA_CHARS = new Set([
+  0x20AC, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030,
+  0x0160, 0x2039, 0x0152, 0x017D, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022,
+  0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x017E, 0x0178
+]);
+
+/**
+ * Sanitize text for pdf-lib StandardFonts (WinAnsi encoding): glyphs outside
+ * CP1252 (e.g. Thai script) are replaced with "?" so PDF generation never
+ * crashes. Thai readers should rely on the text answer; PDF is a fallback.
+ */
+function sanitizeForWinAnsi(text) {
+  let out = "";
+  for (const ch of String(text || "")) {
+    const code = ch.codePointAt(0);
+    if (ch === "\n" || ch === "\t" || (code >= 0x20 && code <= 0x7E) || (code >= 0xA0 && code <= 0xFF) || WINANSI_EXTRA_CHARS.has(code)) {
+      out += ch;
+    } else {
+      out += "?";
+    }
+  }
+  return out;
+}
 
 export class ProtocolDecoder {
   /**
@@ -410,6 +436,102 @@ export class GeminiBridgeDO extends DurableObject {
     return new Response(JSON.stringify({error:{code,message,type:"bridge_error"}}), {status,headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}});
   }
 
+  /**
+   * GET /artifacts/{key}: serve a stored PDF artifact. The 32-hex unguessable
+   * key IS the credential, so this route is on the public path allowlist.
+   */
+  async serveArtifact(url, corsHeaders) {
+    const notFound = () => new Response(JSON.stringify({ error: "artifact_not_found_or_expired" }), {
+      status: 404,
+      headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" }
+    });
+    const key = url.pathname.slice("/artifacts/".length);
+    if (!this.env.ARTIFACT_KV || !/^[a-f0-9]{32}$/.test(key)) return notFound();
+    let bytes;
+    try {
+      bytes = await this.env.ARTIFACT_KV.get(`artifacts/${key}`, { type: "arrayBuffer" });
+    } catch (e) {
+      return notFound();
+    }
+    if (!bytes) return notFound();
+    return new Response(bytes, {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="horo-consult-${key}.pdf"`,
+        "Cache-Control": "private, no-store"
+      }
+    });
+  }
+
+  /**
+   * Render a consultation answer into a simple PDF using pdf-lib standard
+   * fonts. NOTE: StandardFonts are WinAnsi-encoded, so Thai script and other
+   * non-CP1252 glyphs are sanitized to "?" (embedding a Thai TTF is not
+   * feasible without bundling a font file into the worker).
+   */
+  async buildAnswerPdf(text) {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await doc.embedFont(StandardFonts.HelveticaBold);
+    doc.setTitle("Horo Consultation Answer");
+    doc.setCreator("gemini-web-bridge");
+
+    const pageW = 595.28, pageH = 841.89, margin = 56;
+    const fontSize = 11, lineHeight = 16, maxWidth = pageW - margin * 2;
+    const widthAt = (str, size, f) => f.widthOfTextAtSize(str, size);
+
+    const wrapLine = (raw) => {
+      if (!raw) return [""];
+      const words = raw.split(" ");
+      const lines = [];
+      let current = "";
+      for (const word of words) {
+        const candidate = current ? `${current} ${word}` : word;
+        if (widthAt(candidate, fontSize, font) <= maxWidth) {
+          current = candidate;
+        } else {
+          if (current) lines.push(current);
+          // Hard-split words longer than a full line (e.g. URLs).
+          let rest = word;
+          while (widthAt(rest, fontSize, font) > maxWidth) {
+            let cut = rest.length;
+            while (cut > 1 && widthAt(rest.slice(0, cut), fontSize, font) > maxWidth) cut--;
+            lines.push(rest.slice(0, cut));
+            rest = rest.slice(cut);
+          }
+          current = rest;
+        }
+      }
+      if (current || lines.length === 0) lines.push(current);
+      return lines;
+    };
+
+    let page = doc.addPage();
+    page.setSize(pageW, pageH);
+    let y = pageH - margin;
+    const drawLine = (line, f) => {
+      if (y < margin) {
+        page = doc.addPage();
+        page.setSize(pageW, pageH);
+        y = pageH - margin;
+      }
+      page.drawText(line, { x: margin, y, size: fontSize, font: f, color: rgb(0.1, 0.1, 0.12) });
+      y -= lineHeight;
+    };
+
+    drawLine("Horo Consultation Answer", boldFont);
+    y -= lineHeight / 2;
+    for (const raw of sanitizeForWinAnsi(String(text || "")).split("\n")) {
+      for (const line of wrapLine(raw.replace(/\t/g, "    "))) {
+        drawLine(line, font);
+      }
+    }
+
+    return doc.save();
+  }
+
   async prepareModel(model) {
     const requestId = `prepare_${crypto.randomUUID()}`;
     return new Promise((resolve,reject) => {
@@ -548,8 +670,10 @@ export class GeminiBridgeDO extends DurableObject {
     }
 
     // ─── Public Paths vs Authenticated Paths ───
+    // /artifacts/{key} is public: the 32-hex unguessable key IS the credential.
+    const isArtifactPath = url.pathname.startsWith("/artifacts/");
     const publicPaths = ["/", "/health", "/models", "/v1/models"];
-    if (!publicPaths.includes(url.pathname)) {
+    if (!publicPaths.includes(url.pathname) && !isArtifactPath) {
       const authHeader = request.headers.get("Authorization") || "";
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
       if (!token || token !== CLIENT_API_KEY) {
@@ -567,6 +691,11 @@ export class GeminiBridgeDO extends DurableObject {
                             url.searchParams.get("sessionId") ||
                             url.searchParams.get("session_id") ||
                             `session-${crypto.randomUUID()}`;
+
+    // ─── Public Artifact Download: /artifacts/{key} ───
+    if (isArtifactPath && request.method === "GET") {
+      return this.serveArtifact(url, corsHeaders);
+    }
 
     // ─── 2. OpenAI-Compatible API: /v1/models (and /models alias) ───
     if ((url.pathname === "/v1/models" || url.pathname === "/models") && request.method === "GET") {
@@ -925,6 +1054,31 @@ export class GeminiBridgeDO extends DurableObject {
           },
           required: ["scope"]
         }
+      },
+      {
+        name: "horo_consult",
+        description: "ที่ปรึกษาโหราศาสตร์ผ่าน Gemini Web Session: ตอบคำถามโหราศาสตร์จีน (BaZi), numerology และดาราศาสตร์ไทย โดยอ้างอิงความรู้ใน Notebook ที่ผูกไว้เป็นหลัก เลือกรับคำตอบเป็นข้อความหรือไฟล์ PDF (ลิงก์ดาวน์โหลดชั่วคราว 1 ชั่วโมง)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "คำถามโหราศาสตร์/BaZi ของผู้ใช้" },
+            birth_context: {
+              type: "object",
+              description: "บริบทดวงชะตา: birth_datetime, longitude, utc_offset_hours, day_master, five_elements",
+              properties: {
+                birth_datetime: { type: "string" },
+                longitude: { type: "number" },
+                utc_offset_hours: { type: "number" },
+                day_master: { type: "string" },
+                five_elements: { type: "string" },
+                favorable_elements: { type: "string" }
+              }
+            },
+            response_format: { type: "string", enum: ["text", "pdf"], default: "text" },
+            scope: { type: "string", description: "\"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com" }
+          },
+          required: ["query"]
+        }
       }
     ];
 
@@ -1208,7 +1362,11 @@ export class GeminiBridgeDO extends DurableObject {
             return { response: res };
           }
 
-      const knownSdlcTools = ["sdlc_solution_architect", "orchestrate_sdlc_plan", "code_review_and_debug", "evaluate_tech_tradeoffs"];
+      const knownSdlcTools = ["sdlc_solution_architect", "orchestrate_sdlc_plan", "code_review_and_debug", "evaluate_tech_tradeoffs", "horo_consult"];
+
+      // horo_consult defaults to the HoroConsultant knowledge Notebook scope
+      // when the caller does not pass an explicit scope.
+      const HORO_CONSULT_DEFAULT_SCOPE = "notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0";
 
       // Scope switch helper shared by set_bridge_scope and the SDLC tools.
       const applyScope = async (scopeInput) => {
@@ -1265,18 +1423,29 @@ export class GeminiBridgeDO extends DurableObject {
             prompt = `[Role: Expert Code Reviewer & Debugger]\nLanguage: ${args.language || "Auto"}\nError Log: ${args.error_log || "None"}\nCode:\n\`\`\`\n${args.code_snippet}\n\`\`\`\n\nTask: Find root cause of the bug, check security, and provide clean code patch.`;
           } else if (toolName === "evaluate_tech_tradeoffs") {
             prompt = `[Role: Tech Lead]\nContext: ${args.decision_context}\nOptions: ${args.options}\n\nTask: Detailed architectural trade-off analysis across Scalability, Performance, DX, and Maintenance.`;
+          } else if (toolName === "horo_consult") {
+            prompt = `[Role: ซินแส AI ผู้เชี่ยวชาญโหราศาสตร์จีน (BaZi),  numerology และดาราศาสตร์ไทย ตอบโดยอ้างอิงความรู้ใน Notebook ที่ผูกไว้เป็นหลัก ตอบเป็นภาษาเดียวกับคำถาม มีโครงสร้างชัดเจน (หัวข้อ/บุลเล็ต) และระบุข้อจำกัดเชิงการพยากรณ์เมื่อข้อมูลไม่พอ]\nBirth Context: ${args.birth_context ? JSON.stringify(args.birth_context) : "not provided"}\nUser Question: ${args.query}`;
           }
 
           // Switch conversation scope (normal chat / notebook) before executing.
-          if (args.scope) {
+          // horo_consult falls back to the default Notebook scope when omitted.
+          const effectiveScope = (toolName === "horo_consult" && !(typeof args.scope === "string" && args.scope.trim()))
+            ? HORO_CONSULT_DEFAULT_SCOPE
+            : args.scope;
+          if (effectiveScope) {
             let scopeOutcome;
             try {
-              scopeOutcome = await applyScope(args.scope);
+              scopeOutcome = await applyScope(effectiveScope);
             } catch (scopeErr) {
               scopeOutcome = { ok: false, message: scopeErr.message };
             }
             if (!scopeOutcome.ok) {
-              return { response: { jsonrpc: "2.0", id, error: { code: -32602, message: scopeOutcome.message } } };
+              // If the bridge is disconnected, fall through to the standard
+              // extension-disconnected fail-fast branch below instead of
+              // masking it with a scope error.
+              if (this.isExtensionReady()) {
+                return { response: { jsonrpc: "2.0", id, error: { code: -32602, message: scopeOutcome.message } } };
+              }
             }
           }
 
@@ -1319,11 +1488,33 @@ export class GeminiBridgeDO extends DurableObject {
 
           try {
             const targetModel = recommendedModel(this.dynamicModels) || this.activeBrowserModel || (this.dynamicModels[0]?.id) || "gemini-3.8-flash";
-            const resultText = await this.executeThroughExtension([{ role: "user", content: prompt }], null, targetModel);
+            let resultText = await this.executeThroughExtension([{ role: "user", content: prompt }], null, targetModel);
+
+            // horo_consult PDF artifact: render the full answer into a PDF and
+            // expose a temporary (1h) unguessable download link.
+            let structuredContent;
+            if (toolName === "horo_consult" && args.response_format === "pdf") {
+              try {
+                const artifactKey = crypto.randomUUID().replace(/-/g, "");
+                const pdfBytes = await this.buildAnswerPdf(resultText);
+                if (this.env.ARTIFACT_KV) {
+                  await this.env.ARTIFACT_KV.put(`artifacts/${artifactKey}`, pdfBytes, { expirationTtl: 3600 });
+                  structuredContent = { pdf_url: `${url.origin}/artifacts/${artifactKey}` };
+                } else {
+                  resultText += "\n\n[PDF artifact unavailable: ARTIFACT_KV binding is not configured on this worker]";
+                }
+              } catch (pdfErr) {
+                resultText += `\n\n[PDF artifact generation failed: ${pdfErr.message}]`;
+              }
+            }
+
             const res = {
               jsonrpc: "2.0",
               id,
-              result: { content: [{ type: "text", text: resultText }] }
+              result: {
+                content: [{ type: "text", text: resultText }],
+                ...(structuredContent ? { structuredContent } : {})
+              }
             };
             return { response: res };
           } catch (err) {

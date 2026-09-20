@@ -18,6 +18,11 @@ bindings = [
   { name = "BRIDGE_DO", class_name = "GeminiBridgeDO" }
 ]
 
+# Temporary PDF artifact storage for the horo_consult MCP tool (1h TTL entries).
+[[kv_namespaces]]
+binding = "ARTIFACT_KV"
+id = "9620c1ac40ab481c83f9687b7d63a5ce"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["GeminiBridgeDO"]
