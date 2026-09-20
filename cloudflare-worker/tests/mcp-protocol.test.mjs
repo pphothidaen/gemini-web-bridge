@@ -4,11 +4,13 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
+import * as pdfLib from 'pdf-lib';
 
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 const context = {
   ...catalog,
   ...emulator,
+  ...pdfLib,
   DurableObject: class {},
   crypto,
   Request,
@@ -206,7 +208,7 @@ test('MCP Protocol: notifications return HTTP 202 with empty body per official M
   assert.equal(await batchRes.text(), '');
 });
 
-test('MCP Protocol: tools/list returns all 8 actual tools with valid schemas', async () => {
+test('MCP Protocol: tools/list returns all 9 actual tools with valid schemas', async () => {
   const b = createBridge();
 
   const res = await b.fetch(new Request('https://test/mcp', {
@@ -227,13 +229,14 @@ test('MCP Protocol: tools/list returns all 8 actual tools with valid schemas', a
   const data = await res.json();
   assert.equal(data.id, 2);
   assert.ok(Array.isArray(data.result.tools));
-  assert.equal(data.result.tools.length, 8);
+  assert.equal(data.result.tools.length, 9);
 
   const toolNames = data.result.tools.map(t => t.name);
   assert.deepEqual(toolNames.sort(), [
     'check_bridge_health',
     'code_review_and_debug',
     'evaluate_tech_tradeoffs',
+    'horo_consult',
     'list_bridge_models',
     'orchestrate_sdlc_plan',
     'ping',
@@ -520,7 +523,7 @@ test('MCP Transport Separation: legacy SSE query session delivers via SSE with 2
   const modernData = await modernPostRes.json();
   assert.equal(modernData.id, 203);
   assert.ok(Array.isArray(modernData.result.tools));
-  assert.equal(modernData.result.tools.length, 8);
+  assert.equal(modernData.result.tools.length, 9);
 });
 
 test('MCP Protocol: prompts/list and resources/list return empty arrays cleanly', async () => {
@@ -634,7 +637,7 @@ test('MCP Full Client Handshake: simulates complete client lifecycle', async () 
   assert.equal(toolsRes.status, 200);
   const toolsData = await toolsRes.json();
   assert.equal(toolsData.id, 3);
-  assert.equal(toolsData.result.tools.length, 8);
+  assert.equal(toolsData.result.tools.length, 9);
 
   // Step 5: Client calls ping tool
   const callRes = await b.fetch(new Request('https://test/mcp', {
@@ -719,5 +722,223 @@ test('MCP Health Metrics & GCP Fallback: verifies status dashboard health_metric
   assert.equal(gcpData.id, 51);
   assert.ok(gcpData.result.content[0].text.includes('[Provider: GCP Gemini Fallback]'));
   assert.ok(gcpData.result.content[0].text.includes('GCP Architect Output'));
+});
+
+// ═════════════════════════════════════════════════════════════
+// horo_consult MCP tool (BaZi consultation + PDF temp-link artifacts)
+// ═════════════════════════════════════════════════════════════
+
+const HORO_DEFAULT_NOTEBOOK_SCOPE = 'notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0';
+
+function postMcp(b, body) {
+  return b.fetch(new Request('https://test/mcp', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer secret-token-123', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }));
+}
+
+function mockArtifactKv() {
+  const store = new Map();
+  return {
+    store,
+    put: async (key, value, opts) => { store.set(key, { value, opts }); },
+    get: async (key) => (store.has(key) ? store.get(key).value : null)
+  };
+}
+
+test('horo_consult: listed in tools/list with BaZi schema (query required, response_format enum, birth_context)', async () => {
+  const b = createBridge();
+
+  const res = await postMcp(b, { jsonrpc: '2.0', id: 60, method: 'tools/list', params: {} });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  const tool = data.result.tools.find(t => t.name === 'horo_consult');
+  assert.ok(tool, 'horo_consult must be listed in tools/list');
+  assert.ok(tool.description.includes('BaZi'));
+
+  assert.deepEqual(tool.inputSchema.required, ['query']);
+  assert.equal(tool.inputSchema.properties.query.type, 'string');
+  assert.equal(tool.inputSchema.properties.birth_context.type, 'object');
+  const bcProps = tool.inputSchema.properties.birth_context.properties;
+  for (const p of ['birth_datetime', 'longitude', 'utc_offset_hours', 'day_master', 'five_elements', 'favorable_elements']) {
+    assert.ok(bcProps[p], `birth_context.${p} must be declared`);
+  }
+  assert.deepEqual(tool.inputSchema.properties.response_format.enum, ['text', 'pdf']);
+  assert.equal(tool.inputSchema.properties.response_format.default, 'text');
+  assert.equal(tool.inputSchema.properties.scope.type, 'string');
+});
+
+test('horo_consult: fails fast with standard extension-disconnected error when no extension is connected', async () => {
+  const b = createBridge();
+  b.waitForExtension = async () => false; // skip reconnect grace in test
+
+  const res = await postMcp(b, {
+    jsonrpc: '2.0',
+    id: 61,
+    method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'ดวงชะตาปีนี้เป็นอย่างไร' } }
+  });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.ok(data.error, 'expected JSON-RPC error, got: ' + JSON.stringify(data));
+  assert.equal(data.error.code, -32000);
+  assert.match(data.error.message, /Chrome Extension is not connected/);
+});
+
+test('horo_consult: default notebook scope applied when args.scope omitted, prompt carries Role/Birth Context/User Question', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  const preparedScopes = [];
+  b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
+  let capturedPrompt = null;
+  b.executeThroughExtension = async (messages) => { capturedPrompt = messages[0].content; return 'คำตอบทดสอบจาก Notebook'; };
+
+  const res = await postMcp(b, {
+    jsonrpc: '2.0',
+    id: 62,
+    method: 'tools/call',
+    params: {
+      name: 'horo_consult',
+      arguments: {
+        query: 'ช่วยวิเคราะห์ดวงการเงิน',
+        birth_context: { birth_datetime: '1997-05-10T08:30:00+07:00', longitude: 100.5018, utc_offset_hours: 7, day_master: 'Jia Wood' }
+      }
+    }
+  });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.id, 62);
+  // Frozen contract: content[0] is the full answer text, no structuredContent in text mode
+  assert.deepEqual(data.result.content, [{ type: 'text', text: 'คำตอบทดสอบจาก Notebook' }]);
+  assert.equal(data.result.structuredContent, undefined);
+
+  // Default scope: notebook:id was prepared
+  assert.deepEqual(preparedScopes, [HORO_DEFAULT_NOTEBOOK_SCOPE]);
+
+  // Prompt construction
+  assert.ok(capturedPrompt.startsWith('[Role: ซินแส AI'), 'prompt must start with the BaZi role directive');
+  assert.ok(capturedPrompt.includes('Birth Context: {"birth_datetime":"1997-05-10T08:30:00+07:00","longitude":100.5018,"utc_offset_hours":7,"day_master":"Jia Wood"}'));
+  assert.ok(capturedPrompt.includes('User Question: ช่วยวิเคราะห์ดวงการเงิน'));
+});
+
+test('horo_consult: explicit args.scope overrides the default notebook scope', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  const preparedScopes = [];
+  b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
+  b.executeThroughExtension = async () => 'answer';
+
+  const res = await postMcp(b, {
+    jsonrpc: '2.0',
+    id: 63,
+    method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q', scope: 'app' } }
+  });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.ok(data.result, 'expected success, got: ' + JSON.stringify(data.error || data));
+  assert.deepEqual(preparedScopes, ['app']);
+});
+
+test('horo_consult: response_format=pdf stores artifact in KV with 1h TTL and returns absolute unauthenticated pdf_url', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.prepareScope = async (scope) => ({ scope });
+  b.executeThroughExtension = async () => 'Horo Consultation Report\n\n- Section 1: ดวงชะตา (sanitized in PDF)';
+  const kv = mockArtifactKv();
+  b.env.ARTIFACT_KV = kv;
+
+  const callRes = await postMcp(b, {
+    jsonrpc: '2.0',
+    id: 64,
+    method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'สรุปดวงชะตา', response_format: 'pdf' } }
+  });
+
+  assert.equal(callRes.status, 200);
+  const callData = await callRes.json();
+  assert.ok(callData.result, 'expected success, got: ' + JSON.stringify(callData.error || callData));
+
+  // Frozen contract: content[0] still carries the full answer text
+  assert.equal(callData.result.content[0].type, 'text');
+  assert.ok(callData.result.content[0].text.includes('Horo Consultation Report'));
+
+  // structuredContent.pdf_url is an absolute URL pointing at the public route
+  const pdfUrl = callData.result.structuredContent?.pdf_url;
+  assert.ok(pdfUrl, 'structuredContent.pdf_url must be present in pdf mode');
+  assert.match(pdfUrl, /^https:\/\/test\/artifacts\/[a-f0-9]{32}$/);
+
+  // Artifact was stored under artifacts/<key> with expirationTtl 3600
+  const keys = [...kv.store.keys()];
+  assert.equal(keys.length, 1);
+  assert.equal(keys[0], `artifacts/${pdfUrl.split('/').pop()}`);
+  assert.equal(kv.store.get(keys[0]).opts.expirationTtl, 3600);
+
+  // Download WITHOUT Bearer token: unguessable key IS the credential
+  const dlRes = await b.fetch(new Request(pdfUrl, { method: 'GET' }));
+  assert.equal(dlRes.status, 200);
+  assert.equal(dlRes.headers.get('Content-Type'), 'application/pdf');
+  assert.match(dlRes.headers.get('Content-Disposition'), /^attachment;/);
+  const bytes = new Uint8Array(await dlRes.arrayBuffer());
+  assert.ok(bytes.length > 500, 'PDF body must be non-trivial');
+  assert.deepEqual([...bytes.slice(0, 4)], [0x25, 0x50, 0x44, 0x46], 'must start with %PDF magic bytes');
+});
+
+test('horo_consult: PDF generation failure degrades gracefully to text without crashing the call', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.prepareScope = async (scope) => ({ scope });
+  b.executeThroughExtension = async () => 'answer text';
+  b.env.ARTIFACT_KV = { put: async () => { throw new Error('kv down'); }, get: async () => null };
+
+  const res = await postMcp(b, {
+    jsonrpc: '2.0',
+    id: 65,
+    method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q', response_format: 'pdf' } }
+  });
+
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.ok(data.result, 'must not fail the whole call');
+  assert.ok(data.result.content[0].text.includes('answer text'));
+  assert.ok(data.result.content[0].text.includes('[PDF artifact generation failed: kv down]'));
+  assert.equal(data.result.structuredContent, undefined);
+});
+
+test('Artifacts route: GET /artifacts/{key} is public (no Bearer required), 404 JSON for unknown/expired keys, auth still enforced elsewhere', async () => {
+  const b = createBridge();
+
+  // 1. Unknown key -> 404 with artifact_not_found_or_expired, no auth header
+  const unknownRes = await b.fetch(new Request(`https://test/artifacts/${'a'.repeat(32)}`, { method: 'GET' }));
+  assert.equal(unknownRes.status, 404);
+  const unknownData = await unknownRes.json();
+  assert.equal(unknownData.error, 'artifact_not_found_or_expired');
+
+  // 2. Malformed key (not 32-hex) -> same 404 contract
+  const malformedRes = await b.fetch(new Request('https://test/artifacts/short-key', { method: 'GET' }));
+  assert.equal(malformedRes.status, 404);
+  assert.equal((await malformedRes.json()).error, 'artifact_not_found_or_expired');
+
+  // 3. Stored key served without auth (unguessable key IS the credential)
+  const kv = mockArtifactKv();
+  const pdfLibMod = await import('pdf-lib');
+  const doc = await pdfLibMod.PDFDocument.create();
+  const bytes = await doc.save();
+  await kv.put(`artifacts/${'b'.repeat(32)}`, bytes, { expirationTtl: 3600 });
+  b.env.ARTIFACT_KV = kv;
+  const okRes = await b.fetch(new Request(`https://test/artifacts/${'b'.repeat(32)}`, { method: 'GET' }));
+  assert.equal(okRes.status, 200);
+  assert.equal(okRes.headers.get('Content-Type'), 'application/pdf');
+
+  // 4. Auth is still required on other endpoints (red-team regression guard)
+  const noAuthMcp = await b.fetch(new Request('https://test/mcp', { method: 'POST', body: '{}' }));
+  assert.equal(noAuthMcp.status, 401);
+  const noAuthChat = await b.fetch(new Request('https://test/v1/chat/completions', { method: 'POST', body: '{}' }));
+  assert.equal(noAuthChat.status, 401);
 });
 
