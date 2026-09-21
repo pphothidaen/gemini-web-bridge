@@ -18,3 +18,5 @@ artifacts/
 *.sqlite-shm
 *.sqlite-wal
 dist/
+.vscode/
+FAILURE_ANALYSIS.json

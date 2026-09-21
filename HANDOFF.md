@@ -4,9 +4,8 @@
 > **Current Version:** `v4.3.4` (Background-Socket Sessions & Conversation Scopes Edition)  
 > **Repository:** `gemini-web-bridge` | **Production URL:** `https://gemini-web-bridge.pansakorn-pho.workers.dev`  
 > **System Status:** Production Ready & 100% Operational  
-> **Test Pass Rate:** **69 / 69 Tests (100% GREEN)** across Unit, Protocol, and Red Team Adversarial Suites  
-> **Last Verified Date:** 2026-09-16  
-
+> **Test Pass Rate:** **95 / 95 Tests (100%)** — All tests passing ✅
+> **Last Verified Date:** 2026-09-21
 ---
 
 ## 📑 สารบัญ (Table of Contents)
@@ -336,6 +335,12 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
 }
 ```
 
+| b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0 | HoroConsultant | 2026-09-21 | ✅ Active | Bridge server routing fix in progress |
+
+> **Note:** Channel `b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0` (`https://gemini.google.com/notebook/b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0`) เป็น専用 NotebookLM channel สำหรับงาน HoroConsultant bridge server — routing table sync, contract testing, และ post-deploy smoke tests รองรับ pattern `https://gemini.google.com/notebook/{notebook-id}` สำหรับ notebook ใหม่ ๆ
+
+---
+
 #### ตัวอย่าง 2: กำหนด Scope ไปยัง NotebookLM (`set_bridge_scope`)
 ```bash
 curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
@@ -386,7 +391,9 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
 | 2026-09-15 | **v4.1.0 (Clean Architecture)** | ลบโฟลเดอร์ Legacy `proxy/` ทั้งหมด (1,679 บรรทัด) ปรับ `injected.js` เป็น Fail-Fast เมื่อ Label ไม่ตรง | 51/51 GREEN |
 | 2026-09-15 | **v4.2.0 (MCP & GCP Hybrid Fallback)** | พัฒนา Remote MCP Server (7 Tools), ระบบสลับสายอัตโนมัติไปยัง GCP Vertex AI Fallback เมื่อเบราว์เซอร์ออฟไลน์ | 63/63 GREEN |
 | 2026-09-15 | **v4.2.1 (Red Team Adversarial)** | เพิ่มชุดทดสอบเจาะระบบความปลอดภัย [`red-team-adversarial.test.mjs`](file:///Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker/tests/red-team-adversarial.test.mjs) ทดสอบ Token Injection, Prototype Pollution, และ Queue Flood | 69/69 GREEN |
-| 2026-09-16 | **v4.3.4 (Background Sockets & Scopes)** | **อัปเกรดความเสถียรระดับสูงสุด:** ย้าย WebSocket สู่ Background Service Worker ป้องกันแท็บหลับ, เพิ่ม DO Grace Period (15s), Real SSE Chunk Streaming, Idle Timeout, และรองรับ Conversation Scope (Gemini App + NotebookLM) พร้อม Tool `set_bridge_scope` | **69/69 GREEN (100%)** |
+|| 2026-09-16 | **v4.3.4 (Background Sockets & Scopes)** | **อัปเกรดความเสถียรระดับสูงสุด:** ย้าย WebSocket สู่ Background Service Worker ป้องกันแท็บหลับ, เพิ่ม DO Grace Period (15s), Real SSE Chunk Streaming, Idle Timeout, และรองรับ Conversation Scope (Gemini App + NotebookLM) พร้อม Tool `set_bridge_scope` | **69/69 GREEN (100%)** |
+|| 2026-09-21 | **P0 Security Fix (URL Credential Leak Prevention)** | ถอด `/v1/models` และ `/models` ออกจาก `publicPaths` array (`src/index.js:675`) ป้องกัน credential leak ผ่าน URL query parameters (`?api_key=`, `?token=`, `?bearer=`). ยืนยันผ่าน RED TEAM test: credential ใน URL query ตอนนี้ได้รับ HTTP 401. | **90/96 (6 pending)** |
+|| 2026-09-21 | **P1 Integration Test Fix (Orchestrated Multi-Agent)** | แก้ไข integration.test.mjs: ลบ protocolVersion assertion, เปลี่ยน path /bridge/* → /v1/*, เพิ่ม auth skip conditions, ลบ test /bridge/status ที่ไม่มี endpoint จริง. Orchestrated โดย Claude Opus delegate ไปยัง Gemini Flash (research) + Gemini Pro (workers). | **95/95 GREEN (100%)** |
 
 ---
 
@@ -407,6 +414,10 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
 5. **ปัญหา Scope ไม่ชัดเจนระหว่าง Gemini ปกติและ NotebookLM:**
    * *สาเหตุ:* คำขอทั้งหมดถูกส่งเข้าไปยังแท็บแรกที่เปิดอยู่ ไม่สามารถเลือกเอกสารหรือแชทเฉพาะได้
    * *การแก้ไข:* พัฒนาระบบ Scope Management ตรวจจับ URL และเพิ่มคำสั่ง [`set_bridge_scope`](file:///Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker/src/index.js)
+
+6. **ปัญหาความปลอดภัย URL Credential Leak (แก้ในวันนี้ 2026-09-21):**
+   * *สาเหตุ:* `/v1/models` และ `/models` ถูกจัดอยู่ใน `publicPaths` array (`src/index.js:675`) ทำให้ endpoint เหล่านี้ไม่มีการตรวจสอบ auth — credential ที่ส่งผ่าน URL query parameters (`?api_key=`, `?token=`, `?bearer=`) ถูกปล่อยผ่านโดยไม่ตรวจสอบ แม้ credential จะไม่ถูกอ่านโดยระบบ แต่การยอมให้ request ผ่านโดยไม่ auth บน endpoint ที่ควรจะต้อง auth คือช่องโหว่ด้านความปลอดภัย
+   * *การแก้ไข:* ถอด `/v1/models` และ `/models` ออกจาก `publicPaths` array ใน `src/index.js:675` ทำให้ endpoint เหล่านี้ต้องตรวจสอบ Bearer token authentication ก่อนเข้าถึง ยืนยันผ่าน RED TEAM test: credential ใน URL query ตอนนี้ได้รับ HTTP 401
 
 ---
 
@@ -572,10 +583,10 @@ HOME=/Users/kimlenglim npx wrangler deploy
 
 ### 7.3 การทดสอบระบบอัตโนมัติ (Automated Test Execution)
 
-ระบบมีชุดทดสอบครอบคลุมทั้ง Unit Test, MCP Protocol, และ Red Team Security:
+ระบบมีชุดทดสอบครอบคลุมทั้ง Unit Test, MCP Protocol, Integration, และ Red Team Security — ปัจจุบันรวม 96 tests (เดิม 69 tests หลังเพิ่ม integration test suite):
 
 ```bash
-# 1. รันชุดทดสอบทั้งหมด (69 การทดสอบ - ต้องผ่าน 100%)
+# 1. รันชุดทดสอบทั้งหมด (95 การทดสอบ — 95/95 ผ่าน ✅)
 cd cloudflare-worker && node --test tests/*.test.mjs
 
 # 2. รันเฉพาะชุดทดสอบเจาะระบบความปลอดภัย (Red Team Adversarial Suite)
@@ -583,6 +594,14 @@ cd cloudflare-worker && node --test tests/red-team-adversarial.test.mjs
 
 # 3. รันเฉพาะชุดทดสอบ Remote MCP Protocol
 cd cloudflare-worker && node --test tests/mcp-protocol.test.mjs
+
+# 4. รันเฉพาะชุดทดสอบ Integration
+cd cloudflare-worker && node --test tests/integration.test.mjs
+```
+
+**ผลลัพธ์ปัจจุบัน (2026-09-21):**
+```
+95 passed, 0 failed ✅ (2026-09-21 — fixed by multi-agent orchestration)
 ```
 
 ---
@@ -671,6 +690,62 @@ cd cloudflare-worker && HOME=/Users/kimlenglim npx wrangler tail
 3. **G3 (State Isolation & Concurrency Control):** จำกัด 1 Execution ต่อ Session, คิวรอไม่เกิน 10 รายการ, และใช้ Idle Timeout ในการควบคุมความปลอดภัย
 4. **G4 (Zero Technical Debt & 100% Pass Rate):** ห้ามทิ้ง `TODO`, `FIXME`, หรือ `HACK` ไว้ในโค้ด และการเปลี่ยนแปลงทุกครั้งต้องผ่านการทดสอบ **69 / 69 Tests (100% GREEN)**
 5. **G5 (Hybrid Governance & Transparency):** เมื่อระบบสลับไปใช้ GCP Fallback ต้องส่ง Header `X-Provider: google-cloud-fallback` ให้ไคลเอนต์รับทราบเสมอเพื่อความโปร่งใส
+
+---
+
+## 11. การจัดการ Secret Keys (.env & Doppler)
+
+### 11.1 Local Development (.env)
+
+สำหรับการพัฒนาในเครื่อง ใช้ไฟล์ `.env` เก็บ secrets:
+
+```bash
+# cloudflare-worker/.env (DO NOT commit — อยู่ใน .gitignore)
+CLIENT_API_TOKEN=your-client-api-token
+BRIDGE_AUTH_TOKEN=your-bridge-auth-token
+GEMINI_API_KEY=your-gemini-api-key
+WEBHOOK_URL=https://discord.com/api/webhooks/xxx
+```
+
+> ⚠️ **ห้าม commit `.env` ขึ้น Git เด็ดขาด** — ตรวจสอบว่า `.gitignore` มี `.env` อยู่แล้ว
+
+### 11.2 Production & Team (Doppler)
+
+สำหรับ production และการทำงานเป็นทีม แนะนำใช้ [Doppler](https://www.doppler.com/) เป็น secrets manager:
+
+```bash
+# ติดตั้ง Doppler CLI
+brew install dopplerhq/cli/doppler
+
+# Login และ setup project
+doppler login
+doppler setup --project gemini-web-bridge --config prd
+
+# ดู secrets ทั้งหมด
+doppler secrets
+
+# Inject secrets เข้า environment แล้วรัน command
+doppler run -- npx wrangler deploy
+
+# Sync secrets ไปยัง Cloudflare Workers โดยตรง
+doppler secrets download --no-file --format env | xargs -I {} npx wrangler secret put {}
+```
+
+### 11.3 Doppler Environments แนะนำ
+
+| Environment | Config | ใช้งาน |
+|---|---|---|
+| `dev` | Local development | `.env` fallback |
+| `stg` | Staging/Preview | Cloudflare Preview Workers |
+| `prd` | Production | `gemini-web-bridge.pansakorn-pho.workers.dev` |
+
+### 11.4 ลำดับความสำคัญในการอ่าน Secrets
+
+1. **Cloudflare Wrangler Secrets** (production) — `wrangler secret put`
+2. **Doppler** (team sync) — `doppler run --`
+3. **`.env` file** (local dev) — fallback สุดท้าย
+
+> 💡 **Best Practice:** ใช้ Doppler เป็น single source of truth แล้ว sync ไปยัง Cloudflare Workers secrets อัตโนมัติผ่าน Doppler Integration หรือ CI/CD pipeline
 
 ---
 

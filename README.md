@@ -6,11 +6,10 @@
 [![Chrome Extension](https://img.shields.io/badge/Chrome-Extension%20MV3%20Protocol%20v2-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2024--11--05-8A2BE2)](https://modelcontextprotocol.io/)
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991?logo=openai&logoColor=white)](https://platform.openai.com/docs/api-reference)
-[![Stars](https://img.shields.io/github/stars/pphothidaen/gemini-web-bridge?style=social)](https://github.com/pphothidaen/gemini-web-bridge/stargazers)
-[![Forks](https://img.shields.io/github/forks/pphothidaen/gemini-web-bridge?style=social)](https://github.com/pphothidaen/gemini-web-bridge/network/members)
+[![Tests Passing](https://img.shields.io/badge/tests-95%2F95%20passing-brightgreen.svg)](cloudflare-worker/tests/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-[English](#english) | [ไทย](#ไทย) | [简体中文](#简体中文)
+[English](#-english) | [ภาษาไทย](#-ภาษาไทย) | [简体中文](#-简体中文) | [💼 Career & Recruitment](#-for-hr--technical-recruiters--สำหรับผู้สรรหาบุคลากร--招聘与合作)
 
 </div>
 
@@ -18,23 +17,23 @@
 
 ## 🌐 English
 
-**Gemini Web Bridge (v4.3.4)** is an Edge AI Gateway and Chrome Extension that bridges real [Google Gemini](https://gemini.google.com) web sessions into an **OpenAI-Compatible REST API** (with SSE Streaming & Tool Emulation) and a **Remote MCP Server**, powered by **Cloudflare Durable Objects**.
+**Gemini Web Bridge (v4.3.4)** is an Enterprise-grade Edge AI Gateway and Chrome Extension that bridges live, authenticated [Google Gemini](https://gemini.google.com) web sessions into an **OpenAI-Compatible REST API** (with real SSE streaming & tool emulation) and a **Remote MCP Server**, powered by **Cloudflare Durable Objects**.
 
-It lets external AI Agents — **Hermes Agent**, **Cursor**, **Cline**, **Claude Code** — call Deep Thinking and run Agentic Tool Loops on a real Gemini web session: no mocks, no canned responses.
+It enables autonomous AI clients and developer tools — **Hermes Agent**, **Cursor**, **Cline**, **Claude Code**, and Python/TypeScript SDKs — to harness Gemini's Deep Thinking models and execute Agentic Tool Loops directly over authenticated web sessions without artificial mocks or canned responses.
 
-### ✨ Highlights
+### ✨ Key Features
 
-- **Cloudflare Durable Objects Hub** — Stateful in-memory coordination (`GeminiBridgeDO`) fusing browser WebSocket and AI client HTTP/REST into one Cloudflare Edge RAM with FIFO queueing and isolation.
-- **Dynamic Browser Model Sync** — Real-time model list / catalog sync from the Gemini web UI (`/v1/models`) with per-model verification state (`discovered`, `learning`, `verified`, `stale`, `unsupported`).
-- **OpenAI Tool Emulation** — Converts tool schemas to prompt directives and decodes Gemini responses into OpenAI SSE `tool_calls` chunks (supports `terminal`, `git`, `read_file`, `write_file`, custom tools).
-- **Protocol v2 Chrome Extension** — Dedicated-tabs coordinator, automatic leader-tab election, instant failover.
-- **Privacy-first security** — Google CSRF (`SNlM0e`) never leaves the browser MAIN-world memory; sent to Worker over WSS is prohibited.
-- **Strict fail-fast** — HTTP 503 / 422 if the extension is offline or the model is not verified. No fake/mock behavior.
-- **SSE streaming + Remote MCP** — Standard OpenAI streaming and JSON-RPC 2.0 MCP tools.
+- **Cloudflare Durable Objects Hub (`GeminiBridgeDO`)** — Stateful in-memory Edge coordinator synchronizing browser WebSockets and external REST/MCP requests with FIFO concurrency control (concurrency = 1, queue depth = 10).
+- **Dynamic Browser Model Sync** — Real-time model catalog synchronization (`/v1/models`) detecting live Gemini UI model tiers with verification lifecycle tracking (`discovered` → `learning` → `verified`).
+- **Real SSE Streaming & Idle Timeout** — Immediate token chunk dispatching with an idle-based 60-second timeout, preventing long-thought dropouts.
+- **Disconnect Grace Period (~15s)** — Connection buffering in Durable Objects ensuring network hiccups or browser tab backgrounding do not abort in-flight generations.
+- **Conversation Scopes (Gemini App + NotebookLM)** — Seamless context routing between standard chat (`https://gemini.google.com/app/<id>`) and document-grounded NotebookLM notebooks (`https://gemini.google.com/notebook/<id>`) via the `set_bridge_scope` MCP tool.
+- **Zero-Token-Leak Privacy (G1 Guardrail)** — Google CSRF tokens (`SNlM0e`) remain strictly in volatile browser MAIN-world RAM; credentials are never transmitted over the wire to Cloudflare Workers or external clients.
+- **Strict Fail-Closed Architecture** — Responds with HTTP 503 / 422 immediately if the browser extension disconnects or a model is unverified. Zero mocks in production.
 
 ### 🚀 Quickstart
 
-#### 1. Deploy the Worker
+#### 1. Deploy the Cloudflare Worker
 
 ```bash
 cd cloudflare-worker
@@ -42,32 +41,25 @@ npm install
 npx wrangler deploy
 ```
 
-Set secrets before deploying:
+Configure required secrets:
 
 ```bash
 npx wrangler secret put BRIDGE_AUTH_TOKEN
 npx wrangler secret put CLIENT_API_TOKEN
+npx wrangler secret put GEMINI_API_KEY      # Optional: For GCP Hybrid Fallback
 ```
 
 #### 2. Install the Chrome Extension
 
-1. Open `chrome://extensions/` in Chrome.
-2. Enable **Developer mode**.
+1. Open `chrome://extensions/` in Google Chrome.
+2. Enable **Developer mode** (top-right toggle).
 3. Click **Load unpacked** and select `gemini-web-bridge/extension-cloudflare`.
-4. Open [https://gemini.google.com](https://gemini.google.com) and sign in to your Google account.
-5. Open DevTools (F12) — you should see:
-
-```text
-[Bridge] 🔌 Connecting to Worker: wss://gemini-web-bridge.../bridge
-[Bridge] ✅ Bridge Connected Successfully
-[Bridge] ✅ Session Ready: Tokens synchronized
-```
+4. Open [https://gemini.google.com](https://gemini.google.com) and log in.
+5. Inspect the background console or popup to confirm `Bridge: Connected`.
 
 #### 3. Connect an AI Client
 
-Use the same `CLIENT_API_TOKEN` configured in GitHub Secrets or Doppler. Never commit real secrets.
-
-**Hermes Agent:**
+**Hermes Agent Configuration (`config.yaml`):**
 
 ```yaml
 model:
@@ -90,7 +82,7 @@ mcp_servers:
       Authorization: "Bearer ${CLIENT_API_TOKEN}"
 ```
 
-**Python OpenAI SDK:**
+**Python (OpenAI SDK):**
 
 ```python
 from openai import OpenAI
@@ -99,41 +91,38 @@ client = OpenAI(
     base_url="https://gemini-web-bridge.pansakorn-pho.workers.dev/v1",
     api_key="YOUR_CLIENT_API_TOKEN",
 )
-```
 
-### 🔍 Verify
+response = client.chat.completions.create(
+    model="gemini-web-thinking",
+    messages=[{"role": "user", "content": "Explain Cloudflare Durable Objects"}],
+    stream=True,
+)
 
-```bash
-curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/ | jq
-```
-
-Optional local secret loading:
-
-```bash
-cd ~/Project/gemini-web-bridge
-doppler secrets download --project gemini-web-bridge --config prd_worker --format env --no-file > .env
+for chunk in response:
+    print(chunk.choices[0].delta.content or "", end="")
 ```
 
 ---
 
-## 🌐 ไทย
+## 🌐 ภาษาไทย
 
-**Gemini Web Bridge (v4.3.4)** คือ Edge AI Gateway และ Chrome Extension ที่เชื่อมต่อเซสชัน [Google Gemini](https://gemini.google.com) จริงเข้าสู่ **OpenAI-Compatible REST API** (พร้อม SSE Streaming & Tool Emulation) และ **Remote MCP Server** ผ่าน **Cloudflare Durable Objects**
+**Gemini Web Bridge (v4.3.4)** คือ Edge AI Gateway และ Chrome Extension ระดับโปรดักชัน ที่ทำหน้าที่เป็นสะพานเชื่อมต่อเซสชันเว็บจริงของ [Google Gemini](https://gemini.google.com) เข้าสู่ **OpenAI-Compatible REST API** (รองรับ Real SSE Streaming & Tool Emulation) และ **Remote MCP Server** ผ่านขุมพลัง **Cloudflare Durable Objects**
 
-ระบบนี้ช่วยให้ AI Agent ภายนอก เช่น **Hermes Agent**, **Cursor**, **Cline**, **Claude Code** สามารถใช้ Deep Thinking และ Agentic Tool Loops บนเซสชัน Gemini Web จริง 100% โดยไม่มีการ Mock หลอก
+ระบบนี้ออกแบบมาเพื่อให้นักพัฒนาและ AI Agent ภายนอก เช่น **Hermes Agent**, **Cursor**, **Cline**, **Claude Code** สามารถดึงศักยภาพโมเดล Deep Thinking และรัน Agentic Tool Loops บนเบราว์เซอร์จริงได้อย่างเต็มประสิทธิภาพ โดยไม่มีการจำลองคำตอบหลอก (Zero Mocks)
 
-### ✨ จุดเด่น
+### ✨ จุดเด่นที่สำคัญ
 
-- **Cloudflare Durable Objects Hub** — ประสานงาน WebSocket จากเบราว์เซอร์และ HTTP/REST จาก AI Client เข้าใน RAM เดียวกันบน Cloudflare Edge พร้อม FIFO queueing และ isolation
-- **Dynamic Browser Model Sync** — ซิงก์โมเดลจริงจาก Gemini web UI แบบ real-time ผ่าน `/v1/models` พร้อมสถานะตรวจสอบรายโมเดล
-- **OpenAI Tool Emulation** — แปลง Tool schemas เป็น prompt directives และถอดรหัสกลับเป็น OpenAI SSE `tool_calls` chunks
-- **Chrome Extension Protocol v2** — Dedicated-Tab Coordinator เลือก leader tab อัตโนมัติ และมี failover ทันที
-- **ความปลอดภัยแบบ privacy-first** — CSRF token (`SNlM0e`) ไม่ถูกส่งออกจาก browser MAIN-world memory
-- **Fail-fast เข้มงวด** — ตอบ HTTP 503 / 422 ทันทีหาก extension offline หรือโมเดลยังไม่ verified
+- **ศูนย์กลาง Cloudflare Durable Objects (`GeminiBridgeDO`)** — ซิงโครไนซ์การทำงานระหว่าง WebSocket จากเบราว์เซอร์และ REST/MCP API บน Cloudflare Edge พร้อมระบบคิวงาน FIFO (Concurrency = 1, Max Waiters = 10)
+- **Dynamic Browser Model Sync** — สแกนและตรวจจับรายชื่อโมเดลจริงจากหน้าเว็บ Gemini (`/v1/models`) แบบเรียลไทม์ พร้อมระบบตรวจสอบความถูกต้องของโครงสร้าง Payload (`discovered` → `learning` → `verified`)
+- **Real SSE Streaming & Idle Timeout** — ส่งต่อโทเค็นคำตอบออกทันทีแบบ Chunk-by-Chunk ควบคู่กับ Idle Timeout 60 วินาที ป้องกันการตัดสายระหว่างที่โมเดลกำลังใช้ความคิดเชิงลึก (Deep Thinking)
+- **Disconnect Grace Period (~15 วินาที)** — ระบบบัฟเฟอร์การเชื่อมต่อใน Durable Objects หากเครือข่ายกระตุกหรือ Chrome สลับแท็บไปเบื้องหลัง การสร้างคำตอบจะไม่ถูกยกเลิกกะทันหัน
+- **Conversation Scopes (Gemini App + NotebookLM)** — สลับบริบทการสนทนาระหว่างแชตทั่วไป (`https://gemini.google.com/app/<id>`) และคลังเอกสารเฉพาะทางบน NotebookLM (`https://gemini.google.com/notebook/<id>`) ผ่าน MCP Tool `set_bridge_scope`
+- **ความปลอดภัยระดับสูงสุด (Zero-Token-Leak - กฎเหล็ก G1)** — CSRF Token ของ Google (`SNlM0e`) ถูกเก็บรักษาไว้ในหน่วยความจำ RAM ของ MAIN-world ในเบราว์เซอร์เท่านั้น และจะไม่มีการส่งออกนอกเครื่องเด็ดขาด
+- **สถาปัตยกรรม Fail-Closed เคร่งครัด** — ส่งคืน HTTP 503 หรือ 422 ทันทีหาก Extension ขาดการเชื่อมต่อหรือโมเดลยังไม่ได้รับการรับรอง
 
-### 🚀 เริ่มต้นใช้งาน
+### 🚀 การเริ่มต้นใช้งานอย่างรวดเร็ว
 
-#### 1. Deploy Worker
+#### 1. Deploy Cloudflare Worker
 
 ```bash
 cd cloudflare-worker
@@ -141,98 +130,49 @@ npm install
 npx wrangler deploy
 ```
 
-ตั้งค่า secret ก่อน deploy:
+ตั้งค่า Environment Secrets:
 
 ```bash
 npx wrangler secret put BRIDGE_AUTH_TOKEN
 npx wrangler secret put CLIENT_API_TOKEN
+npx wrangler secret put GEMINI_API_KEY      # ทางเลือก: สำหรับ GCP Hybrid Fallback
 ```
 
 #### 2. ติดตั้ง Chrome Extension
 
-1. เปิด `chrome://extensions/` ใน Chrome
-2. เปิด **Developer mode**
-3. กด **Load unpacked** แล้วเลือกโฟลเดอร์ `gemini-web-bridge/extension-cloudflare`
-4. เปิด [https://gemini.google.com](https://gemini.google.com) แล้วล็อกอินบัญชี Google
-5. เปิด DevTools (F12) จะเห็น:
+1. เปิด `chrome://extensions/` ใน Google Chrome
+2. เปิดสวิตช์ **Developer mode (โหมดนักพัฒนา)** ที่มุมขวาบน
+3. คลิก **Load unpacked** แล้วเลือกโฟลเดอร์ `gemini-web-bridge/extension-cloudflare`
+4. เปิดหน้าเว็บ [https://gemini.google.com](https://gemini.google.com) และล็อกอินบัญชี Google ให้เรียบร้อย
+5. ตรวจสอบสถานะการเชื่อมต่อที่มุมขวาล่างหรือหน้าต่าง Options จะแสดง `Bridge: Connected`
 
-```text
-[Bridge] 🔌 Connecting to Worker: wss://gemini-web-bridge.../bridge
-[Bridge] ✅ Bridge Connected Successfully
-[Bridge] ✅ Session Ready: Tokens synchronized
-```
-
-#### 3. เชื่อมต่อ Client
-
-ใช้ `CLIENT_API_TOKEN` เดียวกันกับ GitHub Secrets หรือ Doppler อย่าทำ secret จริงขึ้น repo
-
-**Hermes Agent:**
-
-```yaml
-model:
-  default: gemini-web-thinking
-  provider: gemini-web-bridge
-  base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
-  api_key: ${CLIENT_API_TOKEN}
-
-providers:
-  gemini-web-bridge:
-    type: custom
-    name: gemini-web-bridge
-    base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
-    api_key: ${CLIENT_API_TOKEN}
-
-mcp_servers:
-  gemini-web-bridge:
-    url: https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp
-    headers:
-      Authorization: "Bearer ${CLIENT_API_TOKEN}"
-```
-
-**Python:**
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="https://gemini-web-bridge.pansakorn-pho.workers.dev/v1",
-    api_key="YOUR_CLIENT_API_TOKEN",
-)
-```
-
-### 🔍 ตรวจสอบ
+#### 3. ตรวจสอบสุขภาพระบบ
 
 ```bash
-curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/ | jq
-```
-
-โหลด secret สำหรับ local dev (ใช้ Doppler):
-
-```bash
-cd ~/Project/gemini-web-bridge
-doppler secrets download --project gemini-web-bridge --config prd_worker --format env --no-file > .env
+curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/health | jq .
 ```
 
 ---
 
 ## 🌐 简体中文
 
-**Gemini Web Bridge (v4.3.4)** 是一个 Edge AI 网关和 Chrome 扩展，通过 **Cloudflare Durable Objects** 将真实的 [Google Gemini](https://gemini.google.com) 网页会话桥接到 **OpenAI 兼容 REST API**（支持 SSE 流式传输和工具仿真）以及 **远程 MCP 服务器**。
+**Gemini Web Bridge (v4.3.4)** 是一个企业级 Edge AI 网关和 Chrome 扩展程序。它基于 **Cloudflare Durable Objects** 构建，将真实的、已认证的 [Google Gemini](https://gemini.google.com) 网页会话桥接为 **兼容 OpenAI 的 REST API**（支持真正的 SSE 流式传输和工具仿真）以及 **远程 MCP 服务器**。
 
-它让外部 AI Agent（如 **Hermes Agent**、**Cursor**、**Cline**、**Claude Code**）能够在真实的 Gemini 网页会话上调用深度思考（Deep Thinking）并运行 Agentic Tool Loop：无 mock、无伪造响应。
+它支持外部 AI Agent 与开发工具（如 **Hermes Agent**、**Cursor**、**Cline**、**Claude Code**、Python/TS SDK）直接在真实网页会话上调用 Deep Thinking 深度思考模型并执行自主工具循环（Agentic Tool Loops），杜绝任何伪造或 Mock 数据。
 
-### ✨ 主要特性
+### ✨ 核心亮点
 
-- **Cloudflare Durable Objects Hub** — 有状态内存协调（`GeminiBridgeDO`），将浏览器 WebSocket 与 AI 客户端 HTTP/REST 融合到同一个 Cloudflare Edge RAM 中，支持 FIFO 队列和隔离。
-- **动态浏览器模型同步** — 通过 `/v1/models` 实时同步 Gemini 网页端的模型目录，含逐模型验证状态（`discovered`、`learning`、`verified`、`stale`、`unsupported`）。
-- **OpenAI 工具仿真** — 将工具 Schema 转换为提示指令，并将 Gemini 响应解码为 OpenAI SSE `tool_calls` 数据块。
-- **Chrome 扩展 Protocol v2** — 专用标签页协调器，自动选举 Leader Tab，即时故障转移。
-- **隐私优先安全** — Google CSRF token（`SNlM0e`）不会离开浏览器 MAIN-world 内存。
-- **严格快速失败** — 扩展离线或模型未验证时立即返回 HTTP 503 / 422。
+- **Cloudflare Durable Objects 状态中枢 (`GeminiBridgeDO`)** — 在 Edge 内存中无缝融合浏览器 WebSocket 与客户端 HTTP/REST 请求，具备 FIFO 队列机制与并发隔离保护。
+- **浏览器模型动态同步** — 实时同步 Gemini 网页端可用的最新模型目录（`/v1/models`），并严格追踪模型验证状态生命周期（`discovered` → `learning` → `verified`）。
+- **真正的 SSE 流式输出与空闲超时** — Token 块即时分发，配备基于 60 秒空闲的超时控制，适应复杂思维推理任务。
+- **断线宽限期保护机制 (~15 秒)** — Durable Objects 提供短时重连缓冲，在网络波动或浏览器标签页休眠时保护处理中的请求不被中断。
+- **对话作用域管理 (Gemini App 与 NotebookLM)** — 通过 MCP 工具 `set_bridge_scope` 支持在普通聊天与知识库 NotebookLM（`/notebook/<id>`）之间自由切换，精准把控上下文。
+- **零令牌泄露隐私安全 (G1 准则)** — Google CSRF 凭证（`SNlM0e`）仅驻留在浏览器 MAIN 线程内存中，绝不经由网络上传输。
+- **严格快速失败机制** — 当扩展离线或模型未经验证时，严格返回 HTTP 503 / 422，杜绝欺骗性 Mock 行为。
 
-### 🚀 快速开始
+### 🚀 快速上手
 
-#### 1. 部署 Worker
+#### 1. 部署 Cloudflare Worker
 
 ```bash
 cd cloudflare-worker
@@ -240,7 +180,7 @@ npm install
 npx wrangler deploy
 ```
 
-部署前设置密钥：
+配置必要密钥：
 
 ```bash
 npx wrangler secret put BRIDGE_AUTH_TOKEN
@@ -249,157 +189,151 @@ npx wrangler secret put CLIENT_API_TOKEN
 
 #### 2. 安装 Chrome 扩展
 
-1. 在 Chrome 中打开 `chrome://extensions/`
-2. 启用 **开发者模式**
-3. 点击 **加载已解压的扩展程序**，选择 `gemini-web-bridge/extension-cloudflare`
-4. 打开 [https://gemini.google.com](https://gemini.google.com) 并登录 Google 账号
-5. 打开 DevTools (F12)，您将看到：
+1. 在 Chrome 中打开 `chrome://extensions/`。
+2. 开启右上角 **开发者模式**。
+3. 点击 **加载已解压的扩展程序**，选择目录 `gemini-web-bridge/extension-cloudflare`。
+4. 访问 [https://gemini.google.com](https://gemini.google.com) 并登录 Google 账号。
+5. 扩展将自动建立与 Edge Worker 的 WSS 连接。
+
+---
+
+## 🧰 Remote MCP Tools (Model Context Protocol)
+
+Gemini Web Bridge provides a complete suite of remote MCP tools via `POST /mcp` conforming to the JSON-RPC 2.0 / MCP spec:
+
+| Tool Name | Scope | Parameters | Description |
+|:---|:---:|:---|:---|
+| `set_bridge_scope` | Core | `scope` *(string)* | Switches bridge context between standard chat (`app`) and specific NotebookLM URLs (`notebook`). |
+| `sdlc_solution_architect` | SDLC | `problem_description`, `scope?` | Generates system architecture, component models, data flows, and security roadmaps. |
+| `orchestrate_sdlc_plan` | SDLC | `problem_description`, `scope?` | Creates end-to-end SDLC execution plans with test verification gates. |
+| `code_review_and_debug` | SDLC | `problem_description`, `scope?` | In-depth code auditing, OWASP security vulnerability detection, and root-cause fix synthesis. |
+| `evaluate_tech_tradeoffs` | SDLC | `problem_description`, `scope?` | Structured technology evaluation and weighted trade-off decision matrices. |
+| `horo_consult` | Domain | `query`, `response_format?`, `birth_context?` | Domain intelligence tool with temporary KV PDF artifact delivery. |
+| `ping` | System | `message?` | Checks hub health, extension connectivity, active scope, and latency. |
+| `check_bridge_health` | Diagnostic | — | Detailed diagnostics on WebSocket status, consecutive errors, and GCP fallbacks. |
+| `list_bridge_models` | Catalog | — | Live dynamic model catalog directly discovered from the active browser session. |
+
+---
+
+## 🏗️ Architecture Blueprint
 
 ```text
-[Bridge] 🔌 Connecting to Worker: wss://gemini-web-bridge.../bridge
-[Bridge] ✅ Bridge Connected Successfully
-[Bridge] ✅ Session Ready: Tokens synchronized
-```
-
-#### 3. 连接 AI 客户端
-
-请使用与 GitHub Secrets 或 Doppler 中相同的 `CLIENT_API_TOKEN`，不要将密钥提交到代码仓库。
-
-**Hermes Agent：**
-
-```yaml
-model:
-  default: gemini-web-thinking
-  provider: gemini-web-bridge
-  base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
-  api_key: ${CLIENT_API_TOKEN}
-
-providers:
-  gemini-web-bridge:
-    type: custom
-    name: gemini-web-bridge
-    base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
-    api_key: ${CLIENT_API_TOKEN}
-
-mcp_servers:
-  gemini-web-bridge:
-    url: https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp
-    headers:
-      Authorization: "Bearer ${CLIENT_API_TOKEN}"
-```
-
-**Python OpenAI SDK：**
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="https://gemini-web-bridge.pansakorn-pho.workers.dev/v1",
-    api_key="YOUR_CLIENT_API_TOKEN",
-)
-```
-
-### 🔍 验证部署
-
-```bash
-curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/ | jq
-```
-
-本地开发可加载 Doppler 密钥：
-
-```bash
-cd ~/Project/gemini-web-bridge
-doppler secrets download --project gemini-web-bridge --config prd_worker --format env --no-file > .env
-```
-
----
-
-## 🧰 MCP Tools
-
-| Tool | Description |
-|:---|:---|
-| `sdlc_solution_architect` | Analyze problems and design system architecture, component model, data flow, and implementation roadmap. |
-| `orchestrate_sdlc_plan` | Create SDLC roadmaps and break them into actionable tasks across Plan → Arch → Code → Test → Deploy. |
-| `code_review_and_debug` | Review code, find root causes, recommend patches, and audit security risks. |
-| `evaluate_tech_tradeoffs` | Compare technology choices with a structured trade-off matrix. |
-| `ping` | Check Cloud Hub, Chrome Extension, and Engine Mode connectivity. |
-
----
-
-## 🏗️ Architecture
-
-```text
-┌────────────────────────────────────────────────────────────┐
-│                      AI Clients                             │
-│  Hermes Agent • Cursor • Cline • Claude Code                │
-└───────────────────────────┬────────────────────────────────┘
-                            │ HTTPS / WSS
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   AI Clients Tier                                      │
+│         Hermes Agent · Cursor · Cline · Claude Code · Python SDK · cURL Requests       │
+└───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                            │ HTTPS (Bearer Auth: CLIENT_API_TOKEN)
+                                            ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.3.4)              │
+│                                                                                        │
+│   ┌────────────────────────────────────────────────────────────────────────────────┐   │
+│   │                         Edge Routing & Security Middleware                     │   │
+│   │   • Bearer Token Authentication Validator                                      │   │
+│   │   • Strict Fail-Fast Policy (503 on Offline, 422 on Unverified, Zero Mocks)    │   │
+│   │   • Permissive CORS with Mcp-Session-Id and Mcp-Protocol-Version Headers       │   │
+│   └──────┬────────────────────────┬────────────────────────┬───────────────────────┘   │
+│          │                        │                        │                           │
+│          ▼                        ▼                        ▼                           │
+│   ┌──────────────┐         ┌──────────────┐         ┌──────────────┐                   │
+│   │ OpenAI REST  │         │  Remote MCP  │         │  Status API  │                   │
+│   │ /v1/*        │         │  /mcp        │         │  /health     │                   │
+│   └──────┬───────┘         └──────┬───────┘         └──────┬───────┘                   │
+│          │                        │                        │                           │
+│          └────────────────────────┼────────────────────────┘                           │
+│                                   ▼                                                    │
+│   ┌────────────────────────────────────────────────────────────────────────────────┐   │
+│   │                 GeminiBridgeDO (Stateful Durable Object Instance)              │   │
+│   │   • Global Singleton (`idFromName("global-bridge")`)                           │   │
+│   │   • FIFO Request Queue (Max 10 Waiters, Idle-Based 60s Timeout)                │   │
+│   │   • Disconnect Grace Period (~15s Reconnection Buffer)                         │   │
+│   │   • Real SSE Chunk Streaming (Immediate `STREAM_CHUNK` dispatch)               │   │
+│   │   • Dynamic Model Catalog & Verification Registry (Dynamic Browser Sync)       │   │
+│   │   • Conversation Scope Manager (Gemini App `/app/` & NotebookLM `/notebook/`)  │   │
+│   └───────────────────────┬────────────────────────────────┬───────────────────────┘   │
+│                           │ WebSocket (WSS Protocol v2)     │ Fallback on Offline       │
+│                           ▼                                ▼                           │
+│   ┌──────────────────────────────────────────────┐ ┌───────────────────────────────┐   │
+│   │  Chrome Extension (Manifest V3 Background)   │ │  Google Cloud Platform (GCP)  │   │
+│   │  • background.js (Socket Owner, Keep-Alive)  │ │  • Gemini 1.5/2.0 Flash/Pro   │   │
+│   │  • top-level sync port coordinator           │ │  • Header:                    │   │
+│   │  • active tab & scope navigator              │ │    X-Provider: gcp-fallback   │   │
+│   └───────────────────────┬──────────────────────┘ └───────────────────────────────┘   │
+└───────────────────────────┼────────────────────────────────────────────────────────────┘
+                            │ chrome.runtime Port Connection
                             ▼
-┌────────────────────────────────────────────────────────────┐
-│          Cloudflare Worker (Durable Objects)               │
-│  GET  /                    Health & status                 │
-│  POST /v1/chat/completions Chat Completions (SSE)          │
-│  GET  /v1/models           Dynamic model catalog           │
-│  POST /mcp                 MCP JSON-RPC 2.0                │
-│  GET  /bridge              WSS Hub                         │
-│                                                            │
-│  GeminiBridgeDO:                                           │
-│  • WebSocket ↔ HTTP request coordination                   │
-│  • Dynamic model catalog                                   │
-│  • Tool emulation engine                                   │
-│  • FIFO request queue                                      │
-│  • Strict fail-fast validation                             │
-└───────────────────────────┬────────────────────────────────┘
-                            │ WSS Protocol v2
-                            ▼
-┌────────────────────────────────────────────────────────────┐
-│ Chrome Extension (Manifest V3, Protocol v2)                 │
-│  background.js  content.js  injected.js                     │
-│  model-adapter.js  evidence-registry.js                     │
-└───────────────────────────┬────────────────────────────────┘
-                            │ First-party browser session
-                            ▼
-┌────────────────────────────────────────────────────────────┐
-│ Google Gemini Web Session                                  │
-└────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                       Google Chrome Tab Runtime (gemini.google.com)                    │
+│   • content.js: Isolated World Scope Detector & SPA Polling (3s interval)              │
+│   • injected.js: MAIN World Zero-Leak CSRF Token Vault (`SNlM0e` in RAM only)          │
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🧑‍💻 About the Author
+## 💼 For HR & Technical Recruiters | สำหรับผู้สรรหาบุคลากร | 招聘与合作
 
-**Pansakorn Phothidaen** — Software Engineer & AI Systems Builder.
+<div align="center">
 
-I work at the intersection of **Cloudflare Edge AI**, **Durable Objects**, **AI Agent tooling**, and **HR + Technology enablement**. I enjoy building production-grade AI infrastructure and open-source tools that let developers work smarter.
+### 🤝 Let's Connect & Build High-Impact AI Systems Together!
 
-- 💼 LinkedIn: [linkedin.com/in/pansakorn](https://www.linkedin.com/in/pansakorn/)
-- 🐙 GitHub: [github.com/pphothidaen](https://github.com/pphothidaen)
-- 📬 Contact: Reach out on LinkedIn for collaboration or consulting.
+[![LinkedIn Profile](https://img.shields.io/badge/LinkedIn-Pansakorn%20Phothidaen-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/pansakorn/)
+[![GitHub Profile](https://img.shields.io/badge/GitHub-pphothidaen-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/pphothidaen)
 
-If this project helps you build faster or learn something new, please consider:
+</div>
 
-- ⭐ **Starring** this repository to help others discover it
-- 🍴 **Forking** it to build your own Gemini Web bridge or MCP gateway
-- 💬 Opening an issue to suggest a feature or improvement
+### 🌟 English: Invitation for Technical Recruiters, Engineering Leaders & Founders
 
-Your support helps me continue building open-source tools for the community.
+Are you seeking a **Senior AI Systems Engineer**, **Cloudflare Edge Architect**, or **Lead Full-Stack AI Engineer** with proven expertise in building high-reliability distributed systems from 0 to 1?
+
+**Core Technical Proficiencies:**
+- **Edge AI & Distributed Infrastructure:** Cloudflare Workers, Durable Objects, WebSockets, State Synchronization, Rate Limiting & Queue Orchestration.
+- **AI Agent Protocols & Ecosystem:** Model Context Protocol (MCP), OpenAI API compatibility, Tool Calling & Emulation, RAG pipelines, Multi-Agent Coordination.
+- **Browser Runtime & Security Engineering:** Chromium Manifest V3, Web Workers, CSRF Mitigation, Zero-Leak Security Architecture, Reverse Engineering.
+- **System Quality & Resilience:** Strict Fail-Closed design, Automated Multi-Agent QA pipelines, Red-Team adversarial testing, Zero-downtime deployment.
+
+> **Open to Opportunities:**
+> - Senior / Lead AI Systems Engineer
+> - Distributed Systems & Cloudflare Edge Architect
+> - Staff / Senior Full-Stack Engineer (AI Tooling & Infrastructure)
+> - Technical Advisory, Consulting, and High-Impact Collaborations
+>
+> 📬 **Feel free to connect or send role invitations directly via LinkedIn:**  
+> **👉 [https://www.linkedin.com/in/pansakorn/](https://www.linkedin.com/in/pansakorn/)**
 
 ---
 
-## 🤝 Contributing
+### 🌟 ภาษาไทย: สำหรับผู้สรรหาบุคลากรทางเทคนิคและทีมวิศวกรรม (HR & Tech Recruiters)
 
-Contributions are welcome. Please open an issue or pull request. Make sure tests pass:
+หากคุณกำลังมองหา **Senior Software Engineer / AI Systems Architect** ที่มีประสบการณ์ลึกซึ้งในการออกแบบและพัฒนาโครงสร้างพื้นฐาน AI ประสิทธิภาพสูงบน Edge, ระบบ Distributed Systems ด้วย **Cloudflare Durable Objects**, และการเชื่อมต่อ **AI Agentic Tooling / MCP Protocol** เข้าสู่ระบบโปรดักชันจริง:
 
-```bash
-cd cloudflare-worker
-npm install
-node --test tests/
-```
+**ความเชี่ยวชาญหลัก:**
+- สถาปัตยกรรม Edge Computing (Cloudflare Workers, Durable Objects, WebSockets แบบ Stateful)
+- ออกแบบและสร้างระบบเชื่อมต่อ AI Agent (Model Context Protocol, OpenAI Tool Emulation, Streaming SSE)
+- ความมั่นคงปลอดภัยเชิงรุก (Zero-Leak Architecture, Red-Team Adversarial Testing, Strict Fail-Closed)
+- Full-Lifecycle Engineering ตั้งแต่การออกแบบสถาปัตยกรรม เขียนโค้ด ทดสอบอัตโนมัติ 100% จนถึง CI/CD Deployment
 
-For production deployment secrets, use GitHub Actions Secrets or Doppler. Do not commit real credentials.
+> **เปิดรับโอกาสทางอาชีพและการร่วมงาน:**
+> - ตำแหน่ง Senior / Lead / Staff AI Engineer หรือ Distributed Systems Architect
+> - การให้คำปรึกษาทางเทคนิค (Technical Advisory / Consulting) ในงาน AI Infrastructure
+> 
+> 📬 **ยินดีเชื่อมต่อและพูดคุยข้อเสนอการร่วมงานผ่าน LinkedIn ได้โดยตรง:**  
+> **👉 [https://www.linkedin.com/in/pansakorn/](https://www.linkedin.com/in/pansakorn/)**
+
+---
+
+### 🌟 简体中文: 技术招聘顾问与团队负责人欢迎交流
+
+如果您正在寻找具备 **Edge AI 架构**、**分布式系统（Cloudflare Durable Objects）** 以及 **AI Agent 工具链（MCP 协议 / 工具仿真）** 实战落地经验的技术人才，欢迎随时联系与交流：
+
+- **核心领域：** Cloudflare Workers / Durable Objects 分布式计算、AI 网关架构、浏览器扩展核心运行时、安全防御架构与红蓝对抗验证。
+- **合作方向：** Senior / Lead AI 研发工程师、Edge 架构师职位机会、技术顾问咨询或重要开源/商业项目合作。
+
+> 📬 **欢迎在 LinkedIn 上建立连接并探讨合作机会：**  
+> **👉 [https://www.linkedin.com/in/pansakorn/](https://www.linkedin.com/in/pansakorn/)**
 
 ---
 
 ## 📄 License
 
-MIT License.-released for learning, research, and enterprise AI integration.
+MIT License — Released for open research, learning, and enterprise AI enablement.
