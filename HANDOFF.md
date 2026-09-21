@@ -339,6 +339,21 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
 
 > **Note:** Channel `b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0` (`https://gemini.google.com/notebook/b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0`) เป็น専用 NotebookLM channel สำหรับงาน HoroConsultant bridge server — routing table sync, contract testing, และ post-deploy smoke tests รองรับ pattern `https://gemini.google.com/notebook/{notebook-id}` สำหรับ notebook ใหม่ ๆ
 
+### 🔧 HoroConsultant ↔ Gemini Bridge ↔ NotebookLM Integration
+
+HoroConsultant project (`.env`) กำหนดค่าให้ใช้งานกับ Gemini Web Bridge ผ่าน MCP:
+
+| ตัวแปร | ค่า (redacted) | หน้าที่ |
+|---|---|---|
+| `GEMINI_WEB_BRIDGE_ENABLED` | `true` | เปิดใช้งาน bridge route |
+| `GEMINI_WEB_BRIDGE_URL` | `gemini-web-bridge.pansakorn-pho.workers.dev` | Cloudflare Worker endpoint |
+| `GEMINI_WEB_BRIDGE_TOKEN` | 46 chars | Bearer token (CLIENT_API_TOKEN) |
+| `GEMINI_WEB_BRIDGE_SCOPE` | `notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0` | เลือก NotebookLM channel |
+| `GEMINI_WEB_BRIDGE_TOOL` | `horo_consult` | MCP tool name |
+| `GEMINI_WEB_BRIDGE_TIMEOUT_S` | `90` | หน่วย timeout |
+
+**Fallback chain**: Bridge → Ollama → Gemini API → Cloudflare AI
+
 ---
 
 #### ตัวอย่าง 2: กำหนด Scope ไปยัง NotebookLM (`set_bridge_scope`)

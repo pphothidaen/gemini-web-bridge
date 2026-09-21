@@ -2,9 +2,10 @@
 
 > **Project:** gemini-web-bridge (Cloudflare Worker v4.3.4)
 > **Created:** 2026-09-21
-| **Status:** All fixes complete ✅, 95/95 tests PASS ✅, Deployed ✅, Route sync complete ✅
-| **Bridge Server Status:** All 40 Rust gateway routes in sync with Python OpenAPI ✅ (PR #61)
-| **NotebookLM Channel:** `https://gemini.google.com/notebook/b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0` — HoroConsultant งาน bridge server routing sync
+| **Status:** P0 security fix done ✅, Route sync complete ✅, 6 bridge tests pending
+|> **Bridge Server Status:** 40 Rust gateway routes in sync with Python OpenAPI ✅ (PR #61) 
+|> **NotebookLM Channel:** `https://gemini.google.com/notebook/b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0` — HoroConsultant routing sync active
+|> **Bridge Integration:** `.env` has all 6 bridge vars set (GEMINI_WEB_BRIDGE_*)  ✅
 > **Production URL:** https://gemini-web-bridge.pansakorn-pho.workers.dev
 
 ---
