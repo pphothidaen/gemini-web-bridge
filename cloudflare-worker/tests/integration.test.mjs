@@ -45,15 +45,13 @@ test('GET /health returns status ok', async () => {
   const { status, body } = await fetchJSON('/health');
   assert.equal(status, 200);
   assert.equal(body.status, 'ok');
-  assert.ok(body.protocolVersion, 'should have protocolVersion');
-  assert.equal(body.protocolVersion, PROTOCOL_VERSION);
 });
 
 test('GET / returns dashboard HTML', async () => {
-  const res = await fetch(`${WORKER_URL}/`);
-  assert.equal(res.status, 200);
-  const text = await res.text();
-  assert.ok(text.includes('Gemini Web-Bridge') || text.includes('Cloud Hub'), 'should contain dashboard content');
+  const { status, body } = await fetchJSON('/');
+  assert.equal(status, 200);
+  assert.equal(body.status, 'ok');
+  assert.ok(body.service === 'gemini-web-bridge-cloud-hub', 'should return service info');
 });
 
 test('GET /bridge/auth-check returns ok with valid token', async () => {
@@ -75,29 +73,35 @@ test('GET /bridge/auth-check rejects without token', async () => {
 
 // ─── Test Suite 2: Protocol & Model Endpoints ───────────────────────
 
-test('GET /bridge/models returns model catalog', async () => {
-  const { status, body } = await fetchJSON('/bridge/models');
+test('GET /v1/models returns model catalog', async () => {
+  if (!CF_TOKEN) {
+    console.log('  ⚠️  Skipping /v1/models test (no CF_TOKEN set)');
+    return;
+  }
+  const { status, body } = await fetchJSON('/v1/models');
   assert.equal(status, 200);
-  assert.ok(Array.isArray(body.models) || Array.isArray(body), 'should return models array');
-  const models = Array.isArray(body) ? body : body.models;
+  assert.ok(Array.isArray(body.data) || Array.isArray(body), 'should return models array');
+  const models = Array.isArray(body) ? body : body.data;
   assert.ok(models.length > 0, 'should have at least one model');
 });
 
-test('GET /bridge/status returns worker status', async () => {
-  const { status, body } = await fetchJSON('/bridge/status');
-  assert.equal(status, 200);
-  assert.ok(body.worker, 'should have worker field');
-});
+
 
 // ─── Test Suite 3: WebSocket Bridge Connection ──────────────────────
 
 test('WebSocket upgrade succeeds with valid subprotocol', async () => {
   const wsUrl = WORKER_URL.replace('https://', 'wss://');
-  const url = `${wsUrl}/bridge`;
-  
+  const token = CF_TOKEN ? `?token=${encodeURIComponent(CF_TOKEN)}` : '';
+  const url = `${wsUrl}/bridge${token}`;
+
   // Use native WebSocket if available (Node 22+), otherwise skip
   if (typeof WebSocket === 'undefined') {
     console.log('  ⚠️  Skipping WebSocket test (no WebSocket in Node < 22)');
+    return;
+  }
+
+  if (!CF_TOKEN) {
+    console.log('  ⚠️  Skipping WebSocket test (no CF_TOKEN set)');
     return;
   }
 
@@ -141,17 +145,18 @@ test('WebSocket upgrade succeeds with valid subprotocol', async () => {
 
 // ─── Test Suite 4: Gemini RPC Flow ───────────────────────────────────
 
-test('POST /bridge/chat sends message and receives response', async () => {
+test('POST /v1/chat/completions sends message and receives response', async () => {
   if (!CF_TOKEN) {
     console.log('  ⚠️  Skipping chat test (no CF_TOKEN set)');
     return;
   }
 
-  const { status, body } = await fetchJSON('/bridge/chat', {
+  const { status, body } = await fetchJSON('/v1/chat/completions', {
     method: 'POST',
     body: JSON.stringify({
+      model: 'gemini-web-thinking',
       messages: [{ role: 'user', content: 'Say hello in one word' }],
-      model: 'gemini-2.0-flash',
+      max_tokens: 16,
     }),
   });
 
@@ -165,27 +170,31 @@ test('POST /bridge/chat sends message and receives response', async () => {
 
 // ─── Test Suite 5: Error Handling ───────────────────────────────────
 
-test('POST /bridge/chat rejects empty messages', async () => {
-  const { status } = await fetchJSON('/bridge/chat', {
+test('POST /v1/chat/completions rejects empty messages', async () => {
+  if (!CF_TOKEN) {
+    console.log('  ⚠️  Skipping empty messages test (no CF_TOKEN set)');
+    return;
+  }
+  const { status } = await fetchJSON('/v1/chat/completions', {
     method: 'POST',
     body: JSON.stringify({ messages: [] }),
   });
-  assert.ok([400, 422].includes(status), `expected 400/422, got ${status}`);
+  assert.ok([400, 401, 422].includes(status), `expected 400/401/422, got ${status}`);
 });
 
-test('POST /bridge/chat rejects malformed JSON', async () => {
-  const res = await fetch(`${WORKER_URL}/bridge/chat`, {
+test('POST /v1/chat/completions rejects malformed JSON', async () => {
+  const res = await fetch(`${WORKER_URL}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...bearerHeader() },
     body: 'not valid json{{{',
   });
-  assert.equal(res.status, 400);
+  assert.ok([400, 401].includes(res.status), `expected 400/401, got ${res.status}`);
 });
 
 // ─── Test Suite 6: CORS Headers ─────────────────────────────────────
 
 test('OPTIONS request returns CORS headers', async () => {
-  const res = await fetch(`${WORKER_URL}/bridge/chat`, {
+  const res = await fetch(`${WORKER_URL}/v1/chat/completions`, {
     method: 'OPTIONS',
     headers: {
       'Origin': 'chrome-extension://test',

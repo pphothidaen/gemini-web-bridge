@@ -160,7 +160,7 @@ test('MCP Protocol: initialize returns protocolVersion, serverInfo, and tools ca
   assert.equal(data.id, 1);
   assert.equal(data.result.protocolVersion, '2024-11-05');
   assert.equal(data.result.serverInfo.name, 'gemini-web-bridge-cloud-hub');
-  assert.equal(data.result.serverInfo.version, '4.3.2');
+  assert.equal(data.result.serverInfo.version, '4.3.4');
   assert.equal(data.result.capabilities.tools.listChanged, false);
 });
 

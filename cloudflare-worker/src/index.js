@@ -672,7 +672,7 @@ export class GeminiBridgeDO extends DurableObject {
     // ─── Public Paths vs Authenticated Paths ───
     // /artifacts/{key} is public: the 32-hex unguessable key IS the credential.
     const isArtifactPath = url.pathname.startsWith("/artifacts/");
-    const publicPaths = ["/", "/health", "/models", "/v1/models"];
+    const publicPaths = ["/", "/health"];
     if (!publicPaths.includes(url.pathname) && !isArtifactPath) {
       const authHeader = request.headers.get("Authorization") || "";
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();

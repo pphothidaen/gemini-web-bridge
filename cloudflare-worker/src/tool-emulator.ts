@@ -191,6 +191,10 @@ export function parseToolCompletion(text: string, policy: Policy) {
       const rawArgs = parsed.arguments ?? parsed.function?.arguments ?? parsed.parameters ?? {};
       const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
       if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Tool arguments must be an object");
+      // Auto-repair missing required arguments for common tools to prevent HTTP 422 drop
+      if (name === "search_files" && !args.pattern) {
+        args.pattern = "*";
+      }
       validate(args, tool.function.parameters);
       calls.push({ id: `call_${crypto.randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } });
       return "";
