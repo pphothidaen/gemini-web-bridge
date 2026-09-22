@@ -9,7 +9,7 @@
 [![Tests Passing](https://img.shields.io/badge/tests-95%2F95%20passing-brightgreen.svg)](cloudflare-worker/tests/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-[English](#-english) | [ภาษาไทย](#-ภาษาไทย) | [简体中文](#-简体中文) | [💼 Career & Recruitment](#-for-hr--technical-recruiters--สำหรับผู้สรรหาบุคลากร--招聘与合作)
+[English](#-english) | [ภาษาไทย](#-ภาษาไทย) | [简体中文](#-简体中文)
 
 </div>
 
@@ -251,7 +251,7 @@ Gemini Web Bridge provides a complete suite of remote MCP tools via `POST /mcp` 
 │   │   • Dynamic Model Catalog & Verification Registry (Dynamic Browser Sync)       │   │
 │   │   • Conversation Scope Manager (Gemini App `/app/` & NotebookLM `/notebook/`)  │   │
 │   └───────────────────────┬────────────────────────────────┬───────────────────────┘   │
-│                           │ WebSocket (WSS Protocol v2)     │ Fallback on Offline       │
+│                           │ WebSocket (WSS Protocol v2)    │ Fallback on Offline       │
 │                           ▼                                ▼                           │
 │   ┌──────────────────────────────────────────────┐ ┌───────────────────────────────┐   │
 │   │  Chrome Extension (Manifest V3 Background)   │ │  Google Cloud Platform (GCP)  │   │
@@ -270,67 +270,15 @@ Gemini Web Bridge provides a complete suite of remote MCP tools via `POST /mcp` 
 ```
 
 ---
-
-## 💼 For HR & Technical Recruiters | สำหรับผู้สรรหาบุคลากร | 招聘与合作
-
 <div align="center">
 
 ### 🤝 Let's Connect & Build High-Impact AI Systems Together!
 
 [![LinkedIn Profile](https://img.shields.io/badge/LinkedIn-Pansakorn%20Phothidaen-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/pansakorn/)
 [![GitHub Profile](https://img.shields.io/badge/GitHub-pphothidaen-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/pphothidaen)
+[![Hugging Face Profile](https://img.shields.io/badge/HuggingFace-pphothidaen-181717?style=for-the-badge&logo=huggingface&logoColor=white)](https://huggingface.co/pphothidaen)
 
 </div>
-
-### 🌟 English: Invitation for Technical Recruiters, Engineering Leaders & Founders
-
-Are you seeking a **Senior AI Systems Engineer**, **Cloudflare Edge Architect**, or **Lead Full-Stack AI Engineer** with proven expertise in building high-reliability distributed systems from 0 to 1?
-
-**Core Technical Proficiencies:**
-- **Edge AI & Distributed Infrastructure:** Cloudflare Workers, Durable Objects, WebSockets, State Synchronization, Rate Limiting & Queue Orchestration.
-- **AI Agent Protocols & Ecosystem:** Model Context Protocol (MCP), OpenAI API compatibility, Tool Calling & Emulation, RAG pipelines, Multi-Agent Coordination.
-- **Browser Runtime & Security Engineering:** Chromium Manifest V3, Web Workers, CSRF Mitigation, Zero-Leak Security Architecture, Reverse Engineering.
-- **System Quality & Resilience:** Strict Fail-Closed design, Automated Multi-Agent QA pipelines, Red-Team adversarial testing, Zero-downtime deployment.
-
-> **Open to Opportunities:**
-> - Senior / Lead AI Systems Engineer
-> - Distributed Systems & Cloudflare Edge Architect
-> - Staff / Senior Full-Stack Engineer (AI Tooling & Infrastructure)
-> - Technical Advisory, Consulting, and High-Impact Collaborations
->
-> 📬 **Feel free to connect or send role invitations directly via LinkedIn:**  
-> **👉 [https://www.linkedin.com/in/pansakorn/](https://www.linkedin.com/in/pansakorn/)**
-
----
-
-### 🌟 ภาษาไทย: สำหรับผู้สรรหาบุคลากรทางเทคนิคและทีมวิศวกรรม (HR & Tech Recruiters)
-
-หากคุณกำลังมองหา **Senior Software Engineer / AI Systems Architect** ที่มีประสบการณ์ลึกซึ้งในการออกแบบและพัฒนาโครงสร้างพื้นฐาน AI ประสิทธิภาพสูงบน Edge, ระบบ Distributed Systems ด้วย **Cloudflare Durable Objects**, และการเชื่อมต่อ **AI Agentic Tooling / MCP Protocol** เข้าสู่ระบบโปรดักชันจริง:
-
-**ความเชี่ยวชาญหลัก:**
-- สถาปัตยกรรม Edge Computing (Cloudflare Workers, Durable Objects, WebSockets แบบ Stateful)
-- ออกแบบและสร้างระบบเชื่อมต่อ AI Agent (Model Context Protocol, OpenAI Tool Emulation, Streaming SSE)
-- ความมั่นคงปลอดภัยเชิงรุก (Zero-Leak Architecture, Red-Team Adversarial Testing, Strict Fail-Closed)
-- Full-Lifecycle Engineering ตั้งแต่การออกแบบสถาปัตยกรรม เขียนโค้ด ทดสอบอัตโนมัติ 100% จนถึง CI/CD Deployment
-
-> **เปิดรับโอกาสทางอาชีพและการร่วมงาน:**
-> - ตำแหน่ง Senior / Lead / Staff AI Engineer หรือ Distributed Systems Architect
-> - การให้คำปรึกษาทางเทคนิค (Technical Advisory / Consulting) ในงาน AI Infrastructure
-> 
-> 📬 **ยินดีเชื่อมต่อและพูดคุยข้อเสนอการร่วมงานผ่าน LinkedIn ได้โดยตรง:**  
-> **👉 [https://www.linkedin.com/in/pansakorn/](https://www.linkedin.com/in/pansakorn/)**
-
----
-
-### 🌟 简体中文: 技术招聘顾问与团队负责人欢迎交流
-
-如果您正在寻找具备 **Edge AI 架构**、**分布式系统（Cloudflare Durable Objects）** 以及 **AI Agent 工具链（MCP 协议 / 工具仿真）** 实战落地经验的技术人才，欢迎随时联系与交流：
-
-- **核心领域：** Cloudflare Workers / Durable Objects 分布式计算、AI 网关架构、浏览器扩展核心运行时、安全防御架构与红蓝对抗验证。
-- **合作方向：** Senior / Lead AI 研发工程师、Edge 架构师职位机会、技术顾问咨询或重要开源/商业项目合作。
-
-> 📬 **欢迎在 LinkedIn 上建立连接并探讨合作机会：**  
-> **👉 [https://www.linkedin.com/in/pansakorn/](https://www.linkedin.com/in/pansakorn/)**
 
 ---
 
