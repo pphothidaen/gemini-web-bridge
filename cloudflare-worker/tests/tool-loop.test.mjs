@@ -135,7 +135,7 @@ test('default requests use dynamic newest thinking model without hardcoded remap
  const b = bridge();
  let seen;
  b.executeThroughExtension = async (_messages,_callback,model) => {seen=model;return 'hello';};
- const response = await b.fetch(new Request('https://test/v1/chat/completions',{method:'POST',headers:{Authorization:'Bearer test'},body:JSON.stringify({messages:[{role:'user',content:'hello'}],model:'gemini-web-thinking'})}));
+ const response = await b.fetch(new Request('https://test/v1/chat/completions',{method:'POST',headers:{Authorization:'Bearer test'},body:JSON.stringify({messages:[{role:'user',content:'hello'}],model:'gemini-3.8-flash-thinking'})}));
  assert.equal(response.status,200);
  assert.equal(seen,'gemini-9-pro-thinking');
  assert.equal((await response.json()).model,seen);

@@ -154,7 +154,7 @@ test('POST /v1/chat/completions sends message and receives response', async () =
   const { status, body } = await fetchJSON('/v1/chat/completions', {
     method: 'POST',
     body: JSON.stringify({
-      model: 'gemini-web-thinking',
+      model: 'gemini-3.8-flash-thinking',
       messages: [{ role: 'user', content: 'Say hello in one word' }],
       max_tokens: 16,
     }),

@@ -641,14 +641,6 @@
           if (isChecked || text.includes("✓")) {
             isThinkingEnabled = true;
           }
-          if (!discovered.has("gemini-web-thinking")) {
-            discovered.set("gemini-web-thinking", {
-              id: "gemini-web-thinking",
-              name: "Extended thinking",
-              description: "Complex problem solving",
-              thinking: true
-            });
-          }
         }
       }
 
@@ -657,8 +649,7 @@
         const standardGeminiModels = [
           { id: "gemini-3.8-flash", name: "3.8 Flash", description: "All-around help", thinking: false },
           { id: "gemini-3.5-flash-lite", name: "3.5 Flash-Lite", description: "Fastest answers", thinking: false },
-          { id: "gemini-3.1-pro", name: "3.1 Pro", description: "Advanced reasoning", thinking: false },
-          { id: "gemini-web-thinking", name: "Extended thinking", description: "Complex problem solving", thinking: true }
+          { id: "gemini-3.1-pro", name: "3.1 Pro", description: "Advanced reasoning", thinking: false }
         ];
         for (const std of standardGeminiModels) {
           if (!discovered.has(std.id)) {
@@ -673,7 +664,7 @@
 
     // Extended thinking variants
     const thinkingAvailable = Array.from(document.querySelectorAll("button, [role='switch'], [role='checkbox'], [role='menuitemcheckbox']"))
-      .some(el => /extended thinking/i.test(el.innerText || el.textContent || (el.getAttribute && el.getAttribute("aria-label")) || "")) || discovered.has("gemini-web-thinking");
+      .some(el => /extended thinking/i.test(el.innerText || el.textContent || (el.getAttribute && el.getAttribute("aria-label")) || ""));
 
     if (thinkingAvailable) {
       for (const model of Array.from(discovered.values())) {
@@ -1053,7 +1044,7 @@
 
             // In live browser session, verify standard models under active session
             if (sessionState.sessionReady && sessionState.buildLabel && typeof window !== "undefined" && window.location && window.location.hostname && window.location.hostname.includes("gemini.google.com")) {
-              const stdModels = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro", "gemini-web-thinking"];
+              const stdModels = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro"];
               for (const mId of stdModels) {
                 registry.recordGenerationEvidence(mId, {
                   endpoint: "StreamGenerate",

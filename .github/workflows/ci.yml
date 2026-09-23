@@ -264,7 +264,7 @@ jobs:
               https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions \
               -H "Authorization: Bearer $OLD_CLIENT_TOKEN" \
               -H "Content-Type: application/json" \
-              -d '{"model":"gemini-web-thinking","messages":[{"role":"user","content":"test"}]}')
+              -d '{"model":"gemini-3.8-flash-thinking","messages":[{"role":"user","content":"test"}]}')
 
             if [ "$HTTP_CODE" = "401" ]; then
               echo "✅ Old CLIENT_API_TOKEN rejected (HTTP 401)" >> $GITHUB_STEP_SUMMARY
@@ -281,7 +281,7 @@ jobs:
             https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions \
             -H "Authorization: Bearer $CURRENT_CLIENT_TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{"model":"gemini-web-thinking","messages":[{"role":"user","content":"test"}]}')
+            -d '{"model":"gemini-3.8-flash-thinking","messages":[{"role":"user","content":"test"}]}')
 
           if [ "$HTTP_CODE" = "401" ]; then
             echo "❌ Current token rejected (HTTP 401) — deployment broken!" >> $GITHUB_STEP_SUMMARY
