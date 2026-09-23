@@ -112,12 +112,25 @@
      * Cached generation evidence can never be revived across restarts or sessions.
      */
     async init(currentBuildLabel = null, currentAccountHash = null) {
-      this.currentBuildLabel = currentBuildLabel;
-      this.currentAccountHash = currentAccountHash;
-      this.currentSessionEpoch = `epoch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      // Only override buildLabel/accountHash if new values are provided.
+      // updateSession() from SESSION_STATE may have already set these.
+      this.currentBuildLabel = currentBuildLabel || this.currentBuildLabel;
+      this.currentAccountHash = currentAccountHash || this.currentAccountHash;
+      // Do NOT regenerate epoch here — if updateSession() was called during
+      // the async wait (e.g. SESSION_STATE from injected.js), it already set
+      // the correct epoch. Regenerating would invalidate fresh evidence.
+      // this.currentSessionEpoch = `epoch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+      // Snapshot records that may have been added during async wait
+      // (auto-verify from SESSION_STATE handler runs while we await storage)
+      const preAsyncSnapshot = new Map(this.records);
       this.records.clear();
 
       if (!this.storage) {
+        // Restore snapshot: no storage, keep what auto-verify produced
+        for (const [id, rec] of preAsyncSnapshot) {
+          this.records.set(id, rec);
+        }
         this.initialized = true;
         return;
       }
@@ -132,6 +145,13 @@
           const accountChanged = this.currentAccountHash && stored.lastAccountHash && this.currentAccountHash !== stored.lastAccountHash;
 
           for (const [modelId, record] of Object.entries(stored.records)) {
+            // If this model was freshly verified during async wait, preserve it
+            const snapshotRec = preAsyncSnapshot.get(modelId);
+            if (snapshotRec && snapshotRec.verification === "verified" && snapshotRec.mappingRevision) {
+              this.records.set(modelId, snapshotRec);
+              continue;
+            }
+
             const invalidatedReason = buildChanged ? "build_label_changed" : (accountChanged ? "account_changed" : null);
             // Must clear generationEvidence on load so it cannot be revived by selector evidence
             this.records.set(modelId, {
@@ -147,6 +167,17 @@
         }
       } catch (e) {
         console.warn("[EvidenceRegistry] Error loading from storage:", e);
+        // On error, restore snapshot so auto-verify results survive
+        for (const [id, rec] of preAsyncSnapshot) {
+          this.records.set(id, rec);
+        }
+      }
+
+      // Restore any snapshot records not present in storage
+      for (const [id, rec] of preAsyncSnapshot) {
+        if (!this.records.has(id)) {
+          this.records.set(id, rec);
+        }
       }
 
       this.initialized = true;

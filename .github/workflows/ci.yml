@@ -129,7 +129,119 @@ jobs:
             console.log('Total dependencies:', meta.totalDependencies || 'n/a');
           " >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Audit summary unavailable (non-critical)" >> $GITHUB_STEP_SUMMARY
 
-  # ─── Job 3c: Redteam — Token Validation ────────────────────────
+  # ─── Job 5: Build & Package Extension ──────────────────────────
+  # RULE: Extension MUST be built via build-extension.py before zipping.
+  # Never zip extension-cloudflare/ directly — it contains __BRIDGE_AUTH_TOKEN__ placeholder.
+  # Load unpacked from dist/extension/ OR download the CI artifact.
+  package-extension:
+    name: Build & Package Extension
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build extension (inject secrets)
+        env:
+          BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
+          CLIENT_API_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
+        run: |
+          cd ${{ github.workspace }}
+          echo "Building extension with secrets injected..."
+          python3 scripts/build-extension.py --output dist/extension
+
+      - name: Verify no placeholders remain
+        run: |
+          echo "=== Scanning for unresolved placeholders ==="
+          PLACEHOLDERS=(
+            "__BRIDGE_AUTH_TOKEN__"
+            "__CLIENT_API_TOKEN__"
+            "__WORKER_URL__"
+            "__MCP_ENDPOINT__"
+            "__WSS_ENDPOINT__"
+            "__OPENAI_ENDPOINT__"
+          )
+          FOUND=0
+          for p in "${PLACEHOLDERS[@]}"; do
+            if grep -r "$p" dist/extension/ --include="*.js" --include="*.json" --include="*.html" 2>/dev/null; then
+              echo "❌ FAIL: Found unresolved placeholder: $p"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" -eq 1 ]; then
+            echo ""
+            echo "════════════════════════════════════════════════════════════"
+            echo " CRITICAL: Extension contains unresolved placeholders!    "
+            echo " This means secrets were NOT injected during build.      "
+            echo " Do NOT distribute this zip — it will fail with 401.    "
+            echo "════════════════════════════════════════════════════════════"
+            exit 1
+          fi
+          echo "✅ No unresolved placeholders found"
+
+      - name: Package extension zip
+        run: |
+          cd ${{ github.workspace }}
+          # Extract version from manifest
+          VERSION=$(python3 -c "import json; m=json.load(open('dist/extension/manifest.json')); print(m['version'])")
+          echo "Packaging extension version: $VERSION"
+
+          # Create release directory
+          mkdir -p release
+
+          # Zip dist/extension/ (built output, NOT source)
+          cd dist/extension
+          zip -r ../../release/gemini-bridge-v${VERSION}.zip . \
+            -x "*/__MACOSX/*" \
+            -x "*/.DS_Store" \
+            -x "*/.git/*" \
+            -x "*.pyc" \
+            -x "*/__pycache__/*" \
+            -x ".gitignore"
+          cd ../..
+
+          # Verify zip contents
+          echo "=== Zip contents ==="
+          unzip -l release/gemini-bridge-v${VERSION}.zip | head -25
+
+          # Verify manifest.json is present and valid
+          unzip -p release/gemini-bridge-v${VERSION}.zip manifest.json > /tmp/manifest-check.json
+          python3 -c "
+          import json, sys
+          m = json.load(open('/tmp/manifest-check.json'))
+          assert 'manifest_version' in m, 'Missing manifest_version'
+          assert 'version' in m, 'Missing version'
+          assert 'background' in m, 'Missing background'
+          assert 'content_scripts' in m, 'Missing content_scripts'
+          print(f'✅ manifest.json valid — version {m[\"version\"]}')
+          "
+
+          echo "ZIP_PATH=release/gemini-bridge-v${VERSION}.zip" >> $GITHUB_ENV
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-bridge-extension
+          path: release/gemini-bridge-v*.zip
+          retention-days: 90
+
+      - name: Package summary
+        run: |
+          echo "## 📦 Extension Built & Packaged" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          ls -lh release/ >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ⚠️ Important" >> $GITHUB_STEP_SUMMARY
+          echo "Download from: **Actions → Artifacts → gemini-bridge-extension**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**DO NOT** load unpacked from \`extension-cloudflare/\` (contains placeholders)" >> $GITHUB_STEP_SUMMARY
+          echo "**DO** load from \`dist/extension/\` after running \`python3 scripts/build-extension.py\`" >> $GITHUB_STEP_SUMMARY
+
+  # ─── Job 6: Redteam — Token Validation ────────────────────────
   redteam-token-test:
     name: Redteam — Token Validation
     runs-on: ubuntu-latest

@@ -26,8 +26,9 @@ import argparse
 import subprocess
 from pathlib import Path
 
-SRC_DIR = Path(__file__).parent / "extension-cloudflare"
-DEFAULT_OUT_DIR = Path(__file__).parent / "dist" / "extension"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = REPO_ROOT / "extension-cloudflare"
+DEFAULT_OUT_DIR = REPO_ROOT / "dist" / "extension"
 
 PLACEHOLDER_PATTERNS = {
     "__BRIDGE_AUTH_TOKEN__": "BRIDGE_AUTH_TOKEN",

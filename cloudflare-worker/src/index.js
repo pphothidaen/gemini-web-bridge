@@ -1,6 +1,6 @@
 // Cloudflare Worker: Stateful Gemini Web-Bridge Edge Hub
 // Architecture: Cloudflare Durable Objects (Unified WSS + HTTP Stateful Coordinator)
-// Version: 4.3.4 (Stability Patch - Exclusive SW Channel & Rogue Socket Elimination)
+// Version: 4.3.7 (Fix EvidenceRegistry async race — preserve auto-verify records across init())
 
 import { normalizeModels, recommendedModel } from "./model-catalog.js";
 import { DurableObject } from "cloudflare:workers";
