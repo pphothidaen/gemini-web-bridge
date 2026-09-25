@@ -2,11 +2,117 @@
 // Gemini Web-Bridge: Background Service Worker
 // Owns the Cloudflare WebSocket (MV3-safe), coordinates bridge tabs,
 // and manages conversation scope switching (app / notebook).
+// Phase 4: Multiplexed Message Protocol + Scope Router
+//   - Single WebSocket handles all scopes via message routing
+//   - SCOPE_SWITCH message type for scope switching without reconnect
+//   - ScopeSessionManager maintains current scope state
 // ============================================================
+
+import { 
+  validateScope, 
+  scopeFromPath, 
+  scopeToUrl,
+  MessageTypes,
+  ScopeSessionManager,
+  buildMessage,
+  buildScopeSwitchMessage,
+  buildScopeReadyMessage,
+  PROTOCOL_VERSION,
+  supportsMultiplexedProtocol,
+} from './protocol-messages.js';
 
 const DEFAULT_WORKER_URL = "https://gemini-web-bridge.pansakorn-pho.workers.dev";
 const DEFAULT_BRIDGE_SECRET = "__BRIDGE_AUTH_TOKEN__";
 const SCOPE_SWITCH_TIMEOUT_MS = 45000;
+const INSTANCE_ID_STORAGE_KEY = "bridge_instance_id";
+
+/**
+ * AsyncMutex: promise-based mutual exclusion lock.
+ * Multiple callers acquire the lock sequentially — only one
+ * holds it at a time; others queue on the returned promise.
+ */
+class AsyncMutex {
+  constructor() {
+    this._queue = [];
+    this._locked = false;
+  }
+
+  acquire() {
+    return new Promise((resolve) => {
+      this._queue.push(resolve);
+      this._drain();
+    });
+  }
+
+  async runLocked(fn) {
+    const release = await this.acquire();
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  _drain() {
+    if (this._locked || this._queue.length === 0) return;
+    this._locked = true;
+    const next = this._queue.shift();
+    next(() => {
+      this._locked = false;
+      this._drain();
+    });
+  }
+}
+
+/**
+ * ConnectionState: finite state machine for the WebSocket lifecycle.
+ * Replaces ad-hoc readyState checks that allowed race conditions.
+ */
+const ConnectionState = Object.freeze({
+  DISCONNECTED: "DISCONNECTED",     // No socket, not trying to connect.
+  CONNECTING: "CONNECTING",         // Lock held, socket created, waiting for onopen.
+  CONNECTED: "CONNECTED",           // Socket open and healthy.
+  RECONNECTING: "RECONNECTING",     // Socket closed unexpectedly; backoff timer armed.
+  AUTH_FAILED: "AUTH_FAILED",       // 401/4401 received; must not reconnect until settings change.
+});
+
+/**
+ * Generates a cryptographically random UUID v4 instance ID.
+ * This persists across SW restarts and identifies this specific
+ * Chrome extension installation.
+ */
+function generateInstanceId() {
+  return crypto.randomUUID();
+}
+
+/**
+ * Retrieves or creates a persistent instance ID from chrome.storage.session.
+ * The instance ID survives service worker restarts but is cleared when
+ * the browser session ends (normal Chrome behavior for session storage).
+ */
+async function getOrCreateInstanceId(storageSession) {
+  if (!storageSession) {
+    // Fallback for non-Chrome environments: generate ephemeral ID
+    return generateInstanceId();
+  }
+  try {
+    const stored = await new Promise((resolve) => {
+      storageSession.get([INSTANCE_ID_STORAGE_KEY], (res) => resolve(res || {}));
+    });
+    if (stored?.[INSTANCE_ID_STORAGE_KEY]) {
+      return stored[INSTANCE_ID_STORAGE_KEY];
+    }
+    // Generate new instance ID and persist it
+    const newId = generateInstanceId();
+    await new Promise((resolve) => {
+      storageSession.set({ [INSTANCE_ID_STORAGE_KEY]: newId }, resolve);
+    });
+    return newId;
+  } catch (e) {
+    console.warn("[BackgroundCoordinator] Error managing instance ID:", e);
+    return generateInstanceId(); // Fallback
+  }
+}
 
 /**
  * Maps a gemini.google.com pathname to a canonical scope id.
@@ -23,12 +129,37 @@ export function scopeFromPath(pathname) {
 }
 
 /**
+ * Allowed characters for a scope id; same charset as scopeFromPath's capture
+ * group ([A-Za-z0-9_-]+) so only well-formed ids can reach URL construction.
+ */
+const SCOPE_ID_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Validates and normalizes an incoming scope value.
+ * Accepts "app", "app:<id>", or "notebook:<id>" where <id> is non-empty and
+ * contains only [A-Za-z0-9_-]. Returns a canonical scope string or null when
+ * the input is malformed, preventing crafted scopes from reaching URL builds.
+ */
+export function validateScope(scope) {
+  if (!scope) return null;
+  const s = String(scope);
+  if (s === "app") return "app";
+  const m = /^(app|notebook):([A-Za-z0-9_-]+)$/.exec(s);
+  if (m) return `${m[1]}:${m[2]}`;
+  return null;
+}
+
+/**
  * Maps a canonical scope id back to the gemini.google.com URL to open.
+ * The id is validated against SCOPE_ID_RE and URL-encoded to prevent path
+ * traversal via crafted scope values such as "app:../../etc/passwd".
  */
 export function scopeToUrl(scope) {
   if (!scope || scope === "app") return "https://gemini.google.com/app";
   const [kind, id] = String(scope).split(":");
-  if ((kind === "app" || kind === "notebook") && id) return `https://gemini.google.com/${kind}/${id}`;
+  if ((kind === "app" || kind === "notebook") && id && SCOPE_ID_RE.test(id)) {
+    return `https://gemini.google.com/${kind}/${encodeURIComponent(id)}`;
+  }
   return "https://gemini.google.com/app";
 }
 
@@ -174,10 +305,26 @@ export class BridgeSocketManager {
     this.reconnectAttempts = 0;
     this.reconnectTimer = null;
     this.authFailed = false;
+    // Phase 1: Connection singleton guard
+    this._mutex = new AsyncMutex();
+    this._state = ConnectionState.DISCONNECTED;
+    this._connectionAttemptTimer = null; // 15s timeout guard
+    this._staleCheckTimer = null;        // 60s idle detection
     // requestId -> { scope, timer } for in-flight scope switches awaiting a tab publish
     this.pendingScopes = new Map();
     // tabId -> Port for content scripts connected via "gemini-bridge-socket"
     this.bridgePorts = new Map();
+    // Per-instance-id tracking
+    this.instanceId = null;
+    // Phase 4: Scope session manager for multiplexed protocol
+    this.scopeSessionManager = new ScopeSessionManager();
+  }
+
+  async initInstanceId() {
+    // Use session storage for instance ID persistence (survives SW restarts)
+    const sessionStorage = (typeof chrome !== "undefined" && chrome.storage?.session) ? chrome.storage.session : null;
+    this.instanceId = await getOrCreateInstanceId(sessionStorage);
+    console.log(`[BridgeSocket] Initialized instance ID: ${this.instanceId}`);
   }
 
   wsUrl() {
@@ -187,6 +334,9 @@ export class BridgeSocketManager {
     url.search = "";
     url.searchParams.set("token", this.settings.bridgeToken);
     url.searchParams.set("client", "background_sw");
+    if (this.instanceId) {
+      url.searchParams.set("instanceId", this.instanceId);
+    }
     return url.toString();
   }
 
@@ -204,37 +354,122 @@ export class BridgeSocketManager {
   }
 
   connect() {
-    if (this.authFailed) return;
-    if (this.socket && (this.socket.readyState === 0 || this.socket.readyState === 1)) return;
-    if (!this.WebSocketImpl) return;
+    // Fast path: already connected — nothing to do.
+    if (this._state === ConnectionState.CONNECTED) {
+      return;
+    }
+    // Fast path: auth is broken — don't even try.
+    if (this._state === ConnectionState.AUTH_FAILED) {
+      return;
+    }
+    // Run the entire connection attempt under the mutex so that racing
+    // entry points (storage callback, onChanged, alarms) serialize.
+    this._mutex.runLocked(async () => {
+      // Re-check state under lock — another queued caller may have
+      // already transitioned us.
+      if (this._state === ConnectionState.CONNECTED) return;
+      if (this._state === ConnectionState.AUTH_FAILED) return;
+      // Don't start a new attempt while one is in flight or scheduled.
+      if (this._state === ConnectionState.CONNECTING || this._state === ConnectionState.RECONNECTING) {
+        return;
+      }
+      await this._doConnectInternal();
+    }).catch((e) => {
+      console.error("[BridgeSocket] connect() mutex error:", e);
+    });
+  }
+
+  /**
+   * Internal connection attempt. Must be called while the mutex is held.
+   */
+  async _doConnectInternal() {
+    this._state = ConnectionState.CONNECTING;
+    this.reconnectTimer = null; // cancel any pending backoff timer
+
+    if (!this.WebSocketImpl) {
+      console.error("[BridgeSocket] WebSocket API unavailable; cannot connect.");
+      this._state = ConnectionState.DISCONNECTED;
+      return;
+    }
 
     try {
       this.socket = new this.WebSocketImpl(this.wsUrl());
     } catch (e) {
       console.error("[BridgeSocket] WebSocket creation failed:", e);
+      this._state = ConnectionState.DISCONNECTED;
       this.scheduleReconnect();
       return;
     }
 
+    // ── 15-second connection attempt timeout ──
+    this._connectionAttemptTimer = setTimeout(() => {
+      if (this._state === ConnectionState.CONNECTING && this.socket) {
+        console.warn("[BridgeSocket] Connection attempt timed out after 15s — forcing close.");
+        try { this.socket.close(1006, "connection timeout"); } catch (e) {}
+        this.socket = null;
+        this._onConnectionTimeout();
+      }
+    }, 15000);
+
     this.socket.onopen = () => {
+      if (this._connectionAttemptTimer) {
+        clearTimeout(this._connectionAttemptTimer);
+        this._connectionAttemptTimer = null;
+      }
       console.log("[BridgeSocket] ✅ Connected to Cloudflare DO Hub");
       this.reconnectAttempts = 0;
+      this._state = ConnectionState.CONNECTED;
+      // Start stale-socket detection ticker.
+      this._resetStaleCheckTimer();
       // After a SW restart the DO lost our session publish; ask the active
       // bridge tab to re-send its session/model state.
       this.requestSync();
     };
 
-    this.socket.onerror = () => {};
+    this.socket.onerror = () => {
+      // onclose will fire shortly after onerror; handle there.
+    };
 
     this.socket.onclose = (event) => {
+      if (this._connectionAttemptTimer) {
+        clearTimeout(this._connectionAttemptTimer);
+        this._connectionAttemptTimer = null;
+      }
+      this._resetStaleCheckTimer();
+
+      if (!this.socket) return; // already nulled out by timeout path
       console.warn(`[BridgeSocket] Disconnected (code: ${event?.code}, reason: ${event?.reason || "none"})`);
       this.socket = null;
-      if (event?.code === 4401 || event?.code === 401 || (event?.reason && /unauthorized|invalid\s+bridge\s+secret/i.test(event.reason))) {
-        this.authFailed = true;
-        console.warn("[BridgeSocket] Auth failure. Reconnection stopped until settings change.");
+
+      if (this._state === ConnectionState.CONNECTING) {
+        // Connection attempt failed.
+        this._state = ConnectionState.DISCONNECTED;
+        if (event?.code === 4401 || event?.code === 401 || (event?.reason && /unauthorized|invalid\s+bridge\s+secret/i.test(event.reason))) {
+          this._state = ConnectionState.AUTH_FAILED;
+          this.authFailed = true;
+          console.warn("[BridgeSocket] Auth failure. Reconnection stopped until settings change.");
+          return;
+        }
+        // HTTP 409 Conflict: another device/tab is already using the bridge.
+        if (event?.code === 409 || (event?.reason && /conflict|active and healthy/i.test(event.reason))) {
+          console.warn("[BridgeSocket] Connection rejected (409 Conflict): bridge is already active on another device/tab.");
+          console.warn("[BridgeSocket] If this is the only active Chrome profile, restart Chrome or close other Chrome profiles.");
+          this._onConflict();
+          return;
+        }
+        this.scheduleReconnect();
         return;
       }
-      this.scheduleReconnect();
+
+      // Transitioning from CONNECTED — socket closed unexpectedly.
+      if (this._state === ConnectionState.CONNECTED) {
+        this._state = ConnectionState.DISCONNECTED;
+        // Don't auto-reconnect on explicit close from handleSettingsChange.
+        if (event?.code === 1000 && event?.reason === "Settings changed") {
+          return;
+        }
+        this.scheduleReconnect();
+      }
     };
 
     this.socket.onmessage = (event) => {
@@ -246,8 +481,61 @@ export class BridgeSocketManager {
     };
   }
 
+  /**
+   * Called when a connection attempt times out after 15s.
+   */
+  _onConnectionTimeout() {
+    this._state = ConnectionState.DISCONNECTED;
+    if (this._state !== ConnectionState.AUTH_FAILED) {
+      this.scheduleReconnect();
+    }
+  }
+
+  /**
+   * Called on 409 Conflict. Clears instanceId so a future manual
+   * reconnect attempt gets a fresh identity.
+   */
+  _onConflict() {
+    this.reconnectAttempts = 0;
+    this.instanceId = null; // forget identity; next connect() generates new
+    const sessionStorage = (typeof chrome !== "undefined" && chrome.storage?.session) ? chrome.storage.session : null;
+    if (sessionStorage) {
+      try { sessionStorage.remove([INSTANCE_ID_STORAGE_KEY]); } catch (e) {}
+    }
+  }
+
+  /**
+   * Starts/resets the 60-second stale-socket detection timer.
+   * Each incoming message or successful send resets the clock.
+   */
+  _resetStaleCheckTimer() {
+    if (this._staleCheckTimer) {
+      clearTimeout(this._staleCheckTimer);
+    }
+    this._staleCheckTimer = setTimeout(() => {
+      this._staleCheckTimer = null;
+      this._detectStaleSocket();
+    }, 60_000);
+  }
+
+  /**
+   * Called when the 60s idle threshold expires.
+   * If the socket is still open but has had no activity, treat as stale
+   * and reconnect.
+   */
+  _detectStaleSocket() {
+    if (this._state !== ConnectionState.CONNECTED || !this.socket) return;
+    console.warn("[BridgeSocket] ⚠️ Stale socket detected: 60s without activity. Reconnecting.");
+    try { this.socket.close(1001, "stale socket"); } catch (e) {}
+    this.socket = null;
+    this._state = ConnectionState.DISCONNECTED;
+    this.scheduleReconnect();
+  }
+
   scheduleReconnect() {
-    if (this.reconnectTimer || this.authFailed) return;
+    if (this.reconnectTimer || this.authFailed || this._state === ConnectionState.AUTH_FAILED) return;
+    if (this._state === ConnectionState.CONNECTING) return; // don't stack
+    this._state = ConnectionState.RECONNECTING;
     const delay = computeBackoff(this.reconnectAttempts);
     this.reconnectAttempts++;
     console.log(`[BridgeSocket] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts})...`);
@@ -264,9 +552,17 @@ export class BridgeSocketManager {
     }
     this.authFailed = false;
     this.reconnectAttempts = 0;
+    // Forget old instanceId so the DO hub sees this as a fresh identity
+    // after a credential rotation (prevents lingering 409).
+    this.instanceId = null;
     if (this.socket) {
       try { this.socket.close(1000, "Settings changed"); } catch (e) {}
       this.socket = null;
+    }
+    // Clear any stale-check timer; connect() will restart it.
+    if (this._staleCheckTimer) {
+      clearTimeout(this._staleCheckTimer);
+      this._staleCheckTimer = null;
     }
     this.connect();
   }
@@ -276,10 +572,6 @@ export class BridgeSocketManager {
     if (tabId != null && this.bridgePorts.has(tabId)) {
       return this.bridgePorts.get(tabId);
     }
-    // Fallback: pick the first available content script bridgePort
-    if (this.bridgePorts.size > 0) {
-      return this.bridgePorts.values().next().value;
-    }
     return null;
   }
 
@@ -288,6 +580,8 @@ export class BridgeSocketManager {
     if (!port) return false;
     try {
       port.postMessage(msg);
+      // Reset stale-check timer on every successful send.
+      this._resetStaleCheckTimer();
       return true;
     } catch (e) {
       console.warn("[BridgeSocket] Forward to bridge tab failed:", e.message);
@@ -324,6 +618,13 @@ export class BridgeSocketManager {
       }
       case "PREPARE_SCOPE":
         this.handlePrepareScope(msg);
+        break;
+      // Phase 4: New multiplexed protocol message types
+      case MessageTypes.SCOPE_SWITCH:
+        this.handleScopeSwitch(msg);
+        break;
+      case MessageTypes.PROTOCOL_INFO:
+        console.log("[BridgeSocket] Protocol info from worker:", msg);
         break;
       default:
         break;
@@ -389,6 +690,12 @@ export class BridgeSocketManager {
     if (leaderId != null && this.coordinator.connectedPorts.has(leaderId) && this.tabsApi) {
       try {
         await this.tabsApi.update(leaderId, { url });
+        // After navigation, wait briefly for the SPA URL change to propagate,
+        // then ask the content script to re-detect the actual scope.
+        console.log(`[BridgeSocket] Navigated leader tab ${leaderId} to ${url}; awaiting scope confirmation`);
+        setTimeout(() => {
+          this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
+        }, 300);
         return;
       } catch (e) {
         console.warn("[BridgeSocket] Tab navigation failed:", e);
@@ -397,6 +704,10 @@ export class BridgeSocketManager {
     if (this.tabsApi) {
       try {
         await this.tabsApi.create({ url, active: false });
+        console.log(`[BridgeSocket] Created background tab for ${url}; awaiting scope confirmation`);
+        setTimeout(() => {
+          this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
+        }, 500);
         return;
       } catch (e) {
         console.warn("[BridgeSocket] Tab creation failed:", e);
@@ -415,15 +726,140 @@ export class BridgeSocketManager {
     }
   }
 
-  resolvePendingScopes(scope) {
+  /** Resolve pending scope switches using the ACTUAL detected scope (not the target). */
+  resolvePendingScopes(actualScope) {
     if (!this.pendingScopes.size) return;
-    const effective = scope || "app";
+    const effective = actualScope || "app";
+    const validated = validateScope(actualScope) || actualScope;
+    
+    // Update scope session manager
+    this.scopeSessionManager.confirmScope(validated);
+    
     for (const [requestId, entry] of Array.from(this.pendingScopes.entries())) {
-      if (entry.scope === effective) {
+      if (entry.scope === effective || entry.scope === validated) {
         clearTimeout(entry.timer);
         this.pendingScopes.delete(requestId);
-        this.sendToWorker({ type: "SCOPE_READY", requestId, scope: entry.scope });
+        this.sendToWorker({ type: "SCOPE_READY", requestId, scope: validated });
+        this.scopeSessionManager.notifyScopeReady(requestId, validated);
       }
+    }
+  }
+
+  /** Respond to a content-script scope re-detection request. */
+  onScopeDetected(tabId, actualScope) {
+    if (!actualScope) return;
+    console.log(`[BridgeSocket] Tab ${tabId} detected scope: ${actualScope}`);
+    this.resolvePendingScopes(actualScope);
+    // Also update the DO hub's currentScope by forwarding a SESSION_READY
+    // with the verified scope so the Worker can trust it.
+    this.sendToWorker({ type: "SESSION_READY", scope: actualScope, tabId });
+  }
+
+  /**
+   * Phase 4: Handle SCOPE_SWITCH message from worker (multiplexed protocol).
+   * This allows scope switching WITHOUT requiring a WebSocket reconnect.
+   */
+  async handleScopeSwitch(msg) {
+    const { requestId, scope: targetScope } = msg;
+    console.log(`[BridgeSocket] Received SCOPE_SWITCH: ${this.scopeSessionManager.getCurrentScope()} -> ${targetScope} (req: ${requestId})`);
+    
+    // Use ScopeSessionManager to handle the switch
+    const validatedScope = this.scopeSessionManager.requestScopeSwitch(targetScope, requestId);
+    if (!validatedScope) {
+      this.sendToWorker({
+        type: MessageTypes.STREAM_ERROR,
+        requestId,
+        error: `Invalid scope: ${targetScope}`,
+        code: "invalid_scope"
+      });
+      return;
+    }
+    
+    // Check if we're already at the target scope
+    const currentScope = this.scopeSessionManager.getCurrentScope();
+    if (validatedScope === currentScope) {
+      // Already at this scope, confirm immediately
+      this.sendToWorker(buildScopeReadyMessage(validatedScope, requestId));
+      return;
+    }
+    
+    // Resolve order: check existing tabs at target scope
+    try {
+      const leaderId = this.coordinator?.activeLeaderTabId;
+      if (leaderId != null && (await this.tabScope(leaderId)) === validatedScope) {
+        this.forwardToActiveTab(msg);
+        return;
+      }
+      if (this.coordinator) {
+        for (const tabId of this.coordinator.connectedPorts.keys()) {
+          if (tabId === leaderId) continue;
+          if ((await this.tabScope(tabId)) === validatedScope) {
+            this.coordinator.promoteToLeader(tabId);
+            this.forwardToActiveTab(msg);
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[BridgeSocket] Scope tab probe failed:", e);
+    }
+    
+    // Navigation needed - set up pending scope with timeout
+    this.pendingScopes.set(requestId, {
+      scope: validatedScope,
+      timer: setTimeout(() => {
+        this.pendingScopes.delete(requestId);
+        this.scopeSessionManager.targetScope = null;
+        this.scopeSessionManager.scopeSwitching = false;
+        this.sendToWorker({
+          type: MessageTypes.STREAM_ERROR,
+          requestId,
+          error: `Scope switch to '${validatedScope}' timed out after ${Math.round(SCOPE_SWITCH_TIMEOUT_MS / 1000)}s`,
+          code: "scope_switch_failed"
+        });
+      }, SCOPE_SWITCH_TIMEOUT_MS)
+    });
+    
+    const url = scopeToUrl(validatedScope);
+    const leaderId = this.coordinator?.activeLeaderTabId;
+    if (leaderId != null && this.coordinator.connectedPorts.has(leaderId) && this.tabsApi) {
+      try {
+        await this.tabsApi.update(leaderId, { url });
+        console.log(`[BridgeSocket] Navigated leader tab ${leaderId} to ${url}; awaiting scope confirmation`);
+        setTimeout(() => {
+          this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
+        }, 300);
+        return;
+      } catch (e) {
+        console.warn("[BridgeSocket] Tab navigation failed:", e);
+      }
+    }
+    if (this.tabsApi) {
+      try {
+        await this.tabsApi.create({ url, active: false });
+        console.log(`[BridgeSocket] Created background tab for ${url}; awaiting scope confirmation`);
+        setTimeout(() => {
+          this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
+        }, 500);
+        return;
+      } catch (e) {
+        console.warn("[BridgeSocket] Tab creation failed:", e);
+      }
+    }
+    
+    // Failed to navigate
+    const entry = this.pendingScopes.get(requestId);
+    if (entry) {
+      clearTimeout(entry.timer);
+      this.pendingScopes.delete(requestId);
+      this.scopeSessionManager.targetScope = null;
+      this.scopeSessionManager.scopeSwitching = false;
+      this.sendToWorker({
+        type: MessageTypes.STREAM_ERROR,
+        requestId,
+        error: `Scope switch to '${validatedScope}' failed: no tab available to navigate`,
+        code: "scope_switch_failed"
+      });
     }
   }
 
@@ -440,8 +876,33 @@ export class BridgeSocketManager {
     if (msg.type === "SESSION_READY" || msg.type === "MODELS_DISCOVERED") {
       this.resolvePendingScopes(msg.scope);
       this.sendToWorker(msg);
+    } else if (msg.type === "SCOPE_DETECTED") {
+      // Content script re-detected scope after navigation; resolve pending scopes
+      // with the ACTUAL scope (not the target). Also forward to Worker for currentScope update.
+      this.onScopeDetected(tabId, msg.scope);
     } else if (["STREAM_CHUNK", "STREAM_DONE", "STREAM_ERROR", "MODEL_READY"].includes(msg.type)) {
       this.sendToWorker(msg);
+    } else if (msg.type === "REQUEST_SCOPE_DETECTION") {
+      // Forward scope re-detection requests to the active content script.
+      this.sendToActiveTab(msg);
+    }
+    // Phase 4: Handle SCOPE_READY from content script (multiplexed protocol)
+    else if (msg.type === MessageTypes.SCOPE_READY) {
+      this.resolvePendingScopes(msg.scope);
+      this.scopeSessionManager.confirmScope(msg.scope);
+      this.sendToWorker(msg);
+    }
+  }
+
+  sendToActiveTab(msg) {
+    const port = this.activeBridgePort();
+    if (!port) return false;
+    try {
+      port.postMessage(msg);
+      return true;
+    } catch (e) {
+      console.warn("[BridgeSocket] Send to active tab failed:", e.message);
+      return false;
     }
   }
 
@@ -458,6 +919,20 @@ export class BridgeSocketManager {
       }
     });
   }
+
+  /**
+   * Public entry point for the keepalive alarm (and any other external
+   * trigger). Checks if the socket is stale and reconnects if needed.
+   */
+  checkStaleSocket() {
+    if (this._state === ConnectionState.CONNECTED && this.socket && this.socket.readyState === 1) {
+      // Socket is healthy — reset the idle clock.
+      this._resetStaleCheckTimer();
+      return;
+    }
+    // Socket missing or not open — kick off a reconnect (serialized by connect()).
+    this.connect();
+  }
 }
 
 // ─── Singleton wiring for the real browser runtime ───────────
@@ -468,6 +943,37 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onConnect) {
   coordinator.init();
   const manager = new BridgeSocketManager({ coordinator });
 
+  // Initialize instance ID before first connection
+  manager.initInstanceId().then(() => {
+    // Connect after instance ID is ready
+    if (chrome.storage?.sync) {
+      chrome.storage.sync.get(["workerUrl", "bridgeToken", "enforcementMode"]).then((settings) => {
+        manager.settings = {
+          workerUrl: (settings.workerUrl || DEFAULT_WORKER_URL).trim(),
+          bridgeToken: (settings.bridgeToken && settings.bridgeToken.trim()) ? settings.bridgeToken.trim() : DEFAULT_BRIDGE_SECRET,
+          enforcementMode: settings.enforcementMode === "permissive" ? "permissive" : "strict"
+        };
+        manager.connect();
+      });
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== "sync") return;
+        if (changes.workerUrl || changes.bridgeToken || changes.enforcementMode) {
+          manager.handleSettingsChange({
+            workerUrl: changes.workerUrl?.newValue,
+            bridgeToken: changes.bridgeToken?.newValue,
+            enforcementMode: changes.enforcementMode?.newValue
+          });
+        }
+      });
+    } else {
+      manager.connect();
+    }
+  }).catch((e) => {
+    console.error("[BridgeSocket] Failed to initialize instance ID:", e);
+    // Fallback: connect anyway without instance ID
+    manager.connect();
+  });
+
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name === "gemini-tab-coordinator") {
       coordinator.handlePortConnect(port);
@@ -476,36 +982,13 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onConnect) {
     }
   });
 
-  if (chrome.storage?.sync) {
-    chrome.storage.sync.get(["workerUrl", "bridgeToken", "enforcementMode"]).then((settings) => {
-      manager.settings = {
-        workerUrl: (settings.workerUrl || DEFAULT_WORKER_URL).trim(),
-        bridgeToken: (settings.bridgeToken && settings.bridgeToken.trim()) ? settings.bridgeToken.trim() : DEFAULT_BRIDGE_SECRET,
-        enforcementMode: settings.enforcementMode === "permissive" ? "permissive" : "strict"
-      };
-      manager.connect();
-    });
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "sync") return;
-      if (changes.workerUrl || changes.bridgeToken || changes.enforcementMode) {
-        manager.handleSettingsChange({
-          workerUrl: changes.workerUrl?.newValue,
-          bridgeToken: changes.bridgeToken?.newValue,
-          enforcementMode: changes.enforcementMode?.newValue
-        });
-      }
-    });
-  } else {
-    manager.connect();
-  }
-
   // Fallback keepalive: WS traffic normally keeps the SW alive, but the alarm
   // guarantees a reconnect check even after a suspension edge case.
   if (chrome.alarms?.onAlarm) {
     chrome.alarms.create("bridge-keepalive", { periodInMinutes: 1 });
     chrome.alarms.onAlarm.addListener((alarm) => {
       if (alarm.name === "bridge-keepalive") {
-        if (!manager.socket || manager.socket.readyState !== 1) manager.connect();
+        manager.checkStaleSocket();
       }
     });
   }

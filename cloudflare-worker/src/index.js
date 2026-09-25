@@ -148,17 +148,43 @@ export class GeminiBridgeDO extends DurableObject {
     };
     this.mcpSessions = new Map();
 
-    this.healthState = {
-      lastSuccessfulGeneration: null,
-      consecutiveErrors: 0,
-      lastError: null,
-      lastHealthCheck: Date.now()
-    };
+    // ─── Phase 3: Per-instance-id Tracking + Epoch Counter ───
+    // Replaces origin-based identity with cryptographically random instance ID
+    // that persists across SW restarts and is sent as query param in WS URL.
+    this.activeConnections = new Map(); // Map<instanceId, ConnectionState>
+    this.epochCounter = 0;              // Monotonically increasing session epoch
+    this.STALE_CONNECTION_TIMEOUT_MS = 45000; // 45s idle threshold for stale connections
 
     this.resetModelCatalog();
 
     // Keepalive Ping Loop
     this.initKeepalive();
+    // TTL-based Stale Socket Cleanup: periodic alarm to detect and close stale sockets
+    this.RunAlarm();
+  }
+
+  // ─── Health state (restored for backward compatibility) ───
+  get healthState() {
+    // Derive health state from activeConnections for epoch tracking
+    const hasActiveConnection = this.activeConnections.size > 0;
+    const lastActivity = hasActiveConnection
+      ? Math.max(...Array.from(this.activeConnections.values()).map(c => c.lastActivityAt))
+      : null;
+    return {
+      lastSuccessfulGeneration: this._lastSuccessfulGeneration || null,
+      consecutiveErrors: this._consecutiveErrors || 0,
+      lastError: this._lastError || null,
+      lastHealthCheck: Date.now(),
+      activeConnections: this.activeConnections.size,
+      currentEpoch: this.epochCounter
+    };
+  }
+
+  set healthState(value) {
+    // Allow setting individual properties if needed
+    if (value.lastSuccessfulGeneration !== undefined) this._lastSuccessfulGeneration = value.lastSuccessfulGeneration;
+    if (value.consecutiveErrors !== undefined) this._consecutiveErrors = value.consecutiveErrors;
+    if (value.lastError !== undefined) this._lastError = value.lastError;
   }
 
   resetModelCatalog() {
@@ -166,6 +192,182 @@ export class GeminiBridgeDO extends DurableObject {
     this.activeBrowserModel = null;
     this.extendedThinkingActive = false;
     this.catalogRevision = crypto.randomUUID();
+  }
+
+  /**
+   * Connection state tracked per instance ID.
+   * @typedef {Object} ConnectionState
+   * @property {WebSocket} socket - The active WebSocket connection
+   * @property {number} connectedAt - Timestamp when connection was established
+   * @property {number} lastActivityAt - Timestamp of last activity (message/ping)
+   * @property {number} epoch - The epoch counter value at connection time
+   * @property {string} tokens - The auth tokens from SESSION_READY
+   * @property {string} scope - The current scope from the extension
+   */
+
+  /**
+   * Records a connection for an instance ID, evicting stale connections if needed.
+   * Returns the ConnectionState for the new/updated connection.
+   */
+  recordConnection(instanceId, socket) {
+    const now = Date.now();
+    const existing = this.activeConnections.get(instanceId);
+
+    // If there's an existing connection for this instance ID, close it
+    // (same instance always allows reconnect — replaces old connection)
+    if (existing) {
+      console.log(`[Bridge DO] Instance ${instanceId} reconnecting — replacing existing connection.`);
+      try { existing.socket.close(1000, "Replaced by reconnect"); } catch (e) {}
+      this.activeConnections.delete(instanceId);
+    }
+
+    // Check for stale connections from OTHER instance IDs
+    // A connection is stale if idle > 45s (no activity)
+    for (const [otherId, state] of this.activeConnections.entries()) {
+      const idleTime = now - state.lastActivityAt;
+      if (idleTime > this.STALE_CONNECTION_TIMEOUT_MS) {
+        console.log(`[Bridge DO] Evicting stale connection for instance ${otherId} (idle ${Math.round(idleTime/1000)}s > 45s).`);
+        try { state.socket.close(1000, "Stale connection evicted"); } catch (e) {}
+        this.activeConnections.delete(otherId);
+      }
+    }
+
+    // Increment epoch on new connection
+    this.epochCounter++;
+
+    const connectionState = {
+      socket,
+      connectedAt: now,
+      lastActivityAt: now,
+      epoch: this.epochCounter,
+      tokens: null,
+      scope: null
+    };
+
+    this.activeConnections.set(instanceId, connectionState);
+    console.log(`[Bridge DO] Recorded connection for instance ${instanceId}, epoch ${this.epochCounter}, total connections: ${this.activeConnections.size}`);
+
+    return connectionState;
+  }
+
+  /**
+   * Updates the lastActivityAt timestamp for an instance's connection.
+   * Called on each message received from the extension.
+   */
+  touchConnection(instanceId) {
+    const state = this.activeConnections.get(instanceId);
+    if (state) {
+      state.lastActivityAt = Date.now();
+    }
+  }
+
+  /**
+   * Checks if a connection for the given instance ID is stale (idle > 45s).
+   */
+  isConnectionStale(instanceId) {
+    const state = this.activeConnections.get(instanceId);
+    if (!state) return false;
+    const idleTime = Date.now() - state.lastActivityAt;
+    return idleTime > this.STALE_CONNECTION_TIMEOUT_MS;
+  }
+
+  /**
+   * Gets the current epoch counter value.
+   */
+  getEpoch() {
+    return this.epochCounter;
+  }
+
+  /**
+   * Removes a connection from activeConnections (called on socket close).
+   */
+  removeConnection(instanceId) {
+    const wasPresent = this.activeConnections.has(instanceId);
+    this.activeConnections.delete(instanceId);
+    if (wasPresent) {
+      console.log(`[Bridge DO] Removed connection for instance ${instanceId}. Remaining: ${this.activeConnections.size}`);
+    }
+    return wasPresent;
+  }
+
+  /**
+   * Finds which instance ID owns the active streams.
+   * This is used for conflict detection when a new connection attempts to connect.
+   * Returns the instanceId if a single owner can be determined, or null.
+   */
+  findStreamOwner() {
+    if (this.activeStreams.size === 0) return null;
+    // If there's exactly one active connection, that's the owner
+    if (this.activeConnections.size === 1) {
+      return Array.from(this.activeConnections.keys())[0];
+    }
+    // Multiple connections - try to find which one has activity matching the streams
+    // For simplicity, return the most recently active connection
+    let mostRecent = null;
+    let mostRecentTime = 0;
+    for (const [id, state] of this.activeConnections.entries()) {
+      if (state.lastActivityAt > mostRecentTime) {
+        mostRecentTime = state.lastActivityAt;
+        mostRecent = id;
+      }
+    }
+    return mostRecent;
+  }
+
+  /**
+   * Backward compatibility: gets the "primary" active socket for legacy code.
+   * Returns the socket of the most recently active connection, or null.
+   */
+  get activeSocket() {
+    if (this.activeConnections.size === 0) return null;
+    // Return the most recently active socket
+    let mostRecent = null;
+    let mostRecentTime = 0;
+    for (const [id, state] of this.activeConnections.entries()) {
+      if (state.lastActivityAt > mostRecentTime) {
+        mostRecentTime = state.lastActivityAt;
+        mostRecent = state.socket;
+      }
+    }
+    return mostRecent;
+  }
+
+  /**
+   * Backward compatibility setter for activeSocket.
+   * In Phase 3, this is a no-op since we use activeConnections Map instead.
+   * Legacy code that sets activeSocket directly will be ignored.
+   */
+  set activeSocket(socket) {
+    // No-op in Phase 3: connections are managed via activeConnections Map
+    // Setting activeSocket directly is deprecated
+    console.warn("[Bridge DO] Setting activeSocket directly is deprecated in Phase 3. Use activeConnections Map instead.");
+  }
+
+  /**
+   * Backward compatibility: gets the active origin for legacy code.
+   * Returns the origin of the most recently active connection, or null.
+   */
+  get activeOrigin() {
+    if (this.activeConnections.size === 0) return null;
+    let mostRecent = null;
+    let mostRecentTime = 0;
+    for (const [id, state] of this.activeConnections.entries()) {
+      // Note: we don't track origin per instance, so just return a placeholder
+      if (state.lastActivityAt > mostRecentTime) {
+        mostRecentTime = state.lastActivityAt;
+        mostRecent = "instance-connection"; // Placeholder
+      }
+    }
+    return mostRecent;
+  }
+
+  /**
+   * Backward compatibility setter for activeOrigin.
+   * In Phase 3, this is a no-op since identity is based on instanceId.
+   */
+  set activeOrigin(origin) {
+    // No-op in Phase 3: origin tracking is replaced by instanceId
+    console.warn("[Bridge DO] Setting activeOrigin directly is deprecated in Phase 3.");
   }
 
   replaceModelCatalog(msg) {
@@ -202,9 +404,253 @@ export class GeminiBridgeDO extends DurableObject {
     }, 15000);
   }
 
+  // ─── TTL-based Stale Socket Cleanup (Phase 2) ───
+  // Configuration: if a socket is idle > 45s, it's considered stale and will be
+  // closed. RunAlarm() runs every 15s to detect and clean up stale sockets.
+  // This prevents server-side sockets from lingering after client SW termination
+  // without a close frame, which would otherwise cause reconnection attempts to
+  // hit Guard 2 and receive 409.
+  static STALE_SOCKET_IDLE_MS = 45000; // 45 seconds
+  static RUN_ALARM_INTERVAL_MS = 15000; // 15 seconds
+
+  /**
+   * RunAlarm: periodic staleness check for active WebSocket connections.
+   * Runs every 15s via setInterval. If the active socket has been idle
+   * (no messages, pings, or other activity) for > 45s, close it as stale.
+   */
+  RunAlarm() {
+    setInterval(() => {
+      const now = Date.now();
+      if (this.activeSocket && this.lastActiveAt) {
+        const idleMs = now - this.lastActiveAt;
+        if (idleMs > GeminiBridgeDO.STALE_SOCKET_IDLE_MS) {
+          console.log(`[Bridge DO] Stale socket detected (idle ${Math.round(idleMs/1000)}s > ${GeminiBridgeDO.STALE_SOCKET_IDLE_MS/1000}s). Closing stale socket and allowing reconnection.`);
+          // Close the stale socket
+          try {
+            this.activeSocket.close(1000, "Stale socket cleanup: idle timeout exceeded");
+          } catch (e) {
+            console.warn("[Bridge DO] Error closing stale socket:", e.message);
+          }
+          // Reset state to allow new connection
+          this.activeSocket = null;
+          this.activeOrigin = null;
+          this.protocolVersion = 0;
+          this.currentTokens = null;
+          this.lastActiveAt = null;
+          this.resetModelCatalog();
+          // Notify any in-flight streams
+          for (const handler of this.activeStreams.values()) {
+            handler({ type: "STREAM_ERROR", error: "Stale socket cleaned up", code: "stale_socket_cleanup" });
+          }
+          console.log("[Bridge DO] Stale socket cleanup complete. State reset for reconnection.");
+        }
+      }
+    }, GeminiBridgeDO.RUN_ALARM_INTERVAL_MS);
+  }
+
+  /**
+   * Update lastActiveAt timestamp on socket activity.
+   * Called on incoming messages, PONG responses, and other activity.
+   */
+  recordActivity() {
+    this.lastActiveAt = Date.now();
+  }
+
   isExtensionReady() {
     return this.activeSocket !== null && this.currentTokens !== null && this.activeSocket.readyState === 1;
   }
+
+  /**
+   * Phase 4: Handle SCOPE_SWITCH message from extension (multiplexed protocol).
+   * This allows scope switching WITHOUT requiring a WebSocket reconnect.
+   * The extension sends SCOPE_SWITCH to request a scope change, then navigates
+   * the tab and sends SCOPE_READY when complete.
+   */
+  async handleScopeSwitchFromExtension(msg) {
+    const { requestId, scope: targetScope } = msg;
+    console.log(`[Bridge DO] Received SCOPE_SWITCH from extension: ${this.currentScope} -> ${targetScope} (req: ${requestId})`);
+    
+    // Validate the target scope
+    const validatedScope = this.resolveScopeInput(targetScope);
+    if (!validatedScope) {
+      console.warn(`[Bridge DO] Invalid scope in SCOPE_SWITCH: ${targetScope}`);
+      if (this.activeSocket && this.activeSocket.readyState === 1) {
+        this.activeSocket.send(JSON.stringify({
+          type: "STREAM_ERROR",
+          requestId,
+          error: `Invalid scope: ${targetScope}`,
+          code: "invalid_scope"
+        }));
+      }
+      return;
+    }
+    
+    // If already at the target scope, confirm immediately
+    if (this.currentScope === validatedScope) {
+      console.log(`[Bridge DO] Already at scope ${validatedScope}, confirming`);
+      if (this.activeSocket && this.activeSocket.readyState === 1) {
+        this.activeSocket.send(JSON.stringify({
+          type: "SCOPE_READY",
+          requestId,
+          scope: validatedScope
+        }));
+      }
+      return;
+    }
+    
+    // Store pending scope switch state
+    this.pendingScopeSwitch = {
+      requestId,
+      targetScope: validatedScope,
+      startedAt: Date.now(),
+    };
+    
+    // Forward SCOPE_SWITCH to extension
+    const connection = this.getActiveConnection();
+    if (connection) {
+      try {
+        connection.socket.send(JSON.stringify({
+          type: "SCOPE_SWITCH",
+          requestId,
+          scope: validatedScope,
+          timestamp: Date.now()
+        }));
+        console.log(`[Bridge DO] Forwarded SCOPE_SWITCH to extension for scope: ${validatedScope}`);
+      } catch (e) {
+        console.error("[Bridge DO] Failed to send SCOPE_SWITCH to extension:", e);
+      }
+    }
+  }
+
+  /**
+   * Get the active connection from activeConnections Map.
+   */
+  getActiveConnection() {
+    for (const state of this.activeConnections.values()) {
+      if (state.socket.readyState === 1) {
+        return state;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Phase 4: Request a scope switch via the multiplexed protocol.
+   * This sends a SCOPE_SWITCH message to the extension without disconnecting.
+   * @param {string} targetScope - The scope to switch to
+   * @param {string} requestId - Unique request ID for tracking
+   * @returns {Promise<Object>} Resolves with scope ready response or rejects on failure
+   */
+  async requestScopeSwitch(targetScope, requestId) {
+    const validatedScope = this.resolveScopeInput(targetScope);
+    if (!validatedScope) {
+      throw new Error(`Invalid scope: ${targetScope}`);
+    }
+    
+    // If already at target scope, return immediately
+    if (this.currentScope === validatedScope) {
+      return { scope: validatedScope, confirmed: true };
+    }
+    
+    console.log(`[Bridge DO] Requesting scope switch: ${this.currentScope} -> ${validatedScope}`);
+    
+    // Set up timeout for scope switch
+    const scopeSwitchPromise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingScopeSwitch = null;
+        reject(new Error(`Scope switch to '${validatedScope}' timed out`));
+      }, 45000);
+      
+      this.pendingScopeSwitch = {
+        requestId,
+        targetScope: validatedScope,
+        timer: timeout,
+        resolve,
+        reject
+      };
+    });
+    
+    // Send SCOPE_SWITCH message to extension
+    const connection = this.getActiveConnection();
+    if (connection) {
+      try {
+        connection.socket.send(JSON.stringify({
+          type: "SCOPE_SWITCH",
+          requestId,
+          scope: validatedScope,
+          timestamp: Date.now()
+        }));
+      } catch (e) {
+        this.pendingScopeSwitch = null;
+        throw e;
+      }
+    } else {
+      this.pendingScopeSwitch = null;
+      throw new Error("No active extension connection");
+    }
+    
+    // Wait for SCOPE_READY or timeout
+    return scopeSwitchPromise;
+  }
+
+  /**
+   * Phase 4: ScopeRouter - routes requests by scope in message body.
+   * Maintains a map of scope handlers for different scope types.
+   */
+  scopeRouter = {
+    /**
+     * Route a message to the appropriate handler based on scope.
+     * @param {Object} msg - The message with scope field
+     * @param {Function} defaultHandler - Default handler for unknown scopes
+     */
+    route(msg, defaultHandler) {
+      const scope = msg.scope || this.currentScope || 'app';
+      const validatedScope = this.resolveScopeInput(scope);
+      
+      if (!validatedScope) {
+        console.warn(`[ScopeRouter] Invalid scope: ${scope}, using default handler`);
+        return defaultHandler ? defaultHandler(msg) : null;
+      }
+      
+      console.log(`[ScopeRouter] Routing message to scope: ${validatedScope}`);
+      
+      // Route based on scope kind
+      if (validatedScope === 'app' || validatedScope.startsWith('app:')) {
+        return this.handleAppScope(msg, validatedScope);
+      } else if (validatedScope === 'notebook' || validatedScope.startsWith('notebook:')) {
+        return this.handleNotebookScope(msg, validatedScope);
+      }
+      
+      // Default fallback
+      return defaultHandler ? defaultHandler(msg) : null;
+    },
+    
+    /**
+     * Handle messages for app scope.
+     */
+    handleAppScope(msg, scope) {
+      console.log(`[ScopeRouter] Handling app scope message: ${msg.type}`);
+      const connection = this.getActiveConnection();
+      if (connection && connection.socket.readyState === 1) {
+        connection.socket.send(JSON.stringify(msg));
+        return { routed: true, scope };
+      }
+      return { routed: false, error: 'No active connection' };
+    },
+    
+    /**
+     * Handle messages for notebook scope.
+     */
+    handleNotebookScope(msg, scope) {
+      console.log(`[ScopeRouter] Handling notebook scope message: ${msg.type}`);
+      const connection = this.getActiveConnection();
+      if (connection && connection.socket.readyState === 1) {
+        connection.socket.send(JSON.stringify(msg));
+        return { routed: true, scope };
+      }
+      return { routed: false, error: 'No active connection' };
+    }
+  };
 
   /**
    * Reconnect grace: instead of failing immediately when the extension drops,
@@ -246,8 +692,57 @@ export class GeminiBridgeDO extends DurableObject {
   }
 
   /**
+   * Redact internal IDs from a scope string for safe inclusion in error
+   * messages. Prevents leaking conversation / notebook identifiers:
+   *   "app:abc123-def"        -> "app:[REDACTED]"
+   *   "notebook:dc2208a4-…"   -> "notebook:[REDACTED]"
+   *   "https://gemini.google.com/notebook/dc2208a4-…" -> "/notebook:[REDACTED]"
+   */
+  redactScopeId(scope) {
+    if (typeof scope !== "string" || !scope.trim()) return "[empty]";
+    let s = scope.trim();
+    try {
+      if (/^https?:\/\//i.test(s)) s = new URL(s).pathname;
+    } catch (e) {}
+    const m = s.match(/^(app|notebook):(.+)$/);
+    if (m) return `${m[1]}:[REDACTED]`;
+    const pm = s.match(/^\/(app|notebook)\/([A-Za-z0-9_-]+)/);
+    if (pm) return `/${pm[1]}:[REDACTED]`;
+    return s;
+  }
+
+  /**
+   * FAIL-CLOSED GUARD: verify the tab scope is confirmed before forwarding a
+   * user prompt. Returns an Error (to be thrown/rejected) when the active tab
+   * scope does not match the expected scope, or null when it is safe to proceed.
+   *
+   * Never forward a prompt unless the extension-reported scope matches the
+   * requested scope — this prevents prompt leakage to the wrong conversation
+   * or notebook tab when the extension fails to confirm activation.
+   */
+  addScopeFailClosed(expectedScope) {
+    const actual = this.currentScope;
+    if (!actual) {
+      const err = new Error("Scope not confirmed before forwarding prompt — refusing to proceed (fail-closed).");
+      err.code = "scope_unverified";
+      return err;
+    }
+    const norm = (s) => (s === "app" ? "app" : s);
+    const exp = norm(expectedScope);
+    const cur = norm(actual);
+    if (cur !== exp) {
+      const err = new Error(`Scope mismatch: expected '${this.redactScopeId(exp)}' but tab reported '${this.redactScopeId(cur)}' — refusing to forward prompt (fail-closed).`);
+      err.code = "scope_mismatch";
+      return err;
+    }
+    return null;
+  }
+
+  /**
    * PREPARE_SCOPE: ask the extension to make the requested conversation scope
    * active (navigate/promote a tab). Resolves with SCOPE_READY or rejects.
+   * The caller must invoke addScopeFailClosed() after this resolves and before
+   * forwarding any prompt, to verify the tab is actually at the expected scope.
    */
   async prepareScope(scope) {
     const requestId = `scope_${crypto.randomUUID()}`;
@@ -572,21 +1067,54 @@ export class GeminiBridgeDO extends DurableObject {
         return new Response("Unauthorized: Invalid Bridge Secret", { status: 401, headers: corsHeaders });
       }
 
-      const incomingOrigin = request.headers.get("origin") || "";
-      const isCurrentDevice = (!this.activeOrigin || !incomingOrigin || this.activeOrigin === incomingOrigin);
+      // ─── Phase 3: Instance-ID based identity ───
+      // Get instanceId from query parameter (sent by client)
+      const instanceId = url.searchParams.get("instanceId") || request.headers.get("x-instance-id") || "";
+      if (!instanceId || !/^[a-f0-9-]{36}$/.test(instanceId)) {
+        // Invalid or missing instanceId - reject for security
+        console.warn("[Bridge DO] Rejected connection: invalid or missing instanceId.");
+        return new Response("Unauthorized: Invalid instance ID", { status: 401, headers: corsHeaders });
+      }
 
-      // Protect healthy active bridge session from being hijacked by a secondary device/node
-      if (this.activeSocket && this.activeSocket.readyState === 1 && this.isExtensionReady()) {
-        if (!isCurrentDevice) {
-          console.warn(`[Bridge DO] Rejected connection from secondary device (${incomingOrigin}) because primary (${this.activeOrigin}) is healthy.`);
-          return new Response("Conflict: Primary bridge device is currently active and healthy", { status: 409, headers: corsHeaders });
+      // ─── Connection acceptance logic using instanceId ───
+      // Check if there's an active connection for this instanceId
+      const existingConnection = this.activeConnections.get(instanceId);
+
+      // Same instanceId always allows reconnect (replaces old connection)
+      if (existingConnection) {
+        console.log(`[Bridge DO] Instance ${instanceId} reconnecting — replacing existing connection (epoch ${existingConnection.epoch}).`);
+        // Close old connection for this instance
+        try { existingConnection.socket.close(1000, "Replaced by reconnect"); } catch (e) {}
+        this.activeConnections.delete(instanceId);
+      }
+
+      // Check for stale connections from OTHER instance IDs
+      // A connection from a different instanceId is only allowed if the existing
+      // connection is stale (idle > 45s)
+      let staleConnectionEvicted = false;
+      for (const [otherId, state] of this.activeConnections.entries()) {
+        if (otherId === instanceId) continue;
+        const idleTime = Date.now() - state.lastActivityAt;
+        if (idleTime > this.STALE_CONNECTION_TIMEOUT_MS) {
+          console.log(`[Bridge DO] Evicting stale connection for instance ${otherId} (idle ${Math.round(idleTime/1000)}s > 45s) to allow new instance ${instanceId}.`);
+          try { state.socket.close(1000, "Stale connection evicted"); } catch (e) {}
+          this.activeConnections.delete(otherId);
+          staleConnectionEvicted = true;
         }
       }
 
-      // Protect in-flight active streams from duplicate connection collisions
-      if (this.activeSocket && this.activeSocket.readyState === 1 && this.activeStreams.size > 0) {
-        console.warn("[Bridge DO] Rejected duplicate WebSocket connection: active stream in flight.");
-        return new Response("Conflict: Bridge is currently streaming an active request", { status: 409, headers: corsHeaders });
+      // If there's still an active connection from a different instanceId and it's NOT stale,
+      // reject the new connection (protect healthy session from hijacking)
+      if (this.activeConnections.size > 0) {
+        for (const [otherId, state] of this.activeConnections.entries()) {
+          if (otherId === instanceId) continue;
+          const idleTime = Date.now() - state.lastActivityAt;
+          if (idleTime <= this.STALE_CONNECTION_TIMEOUT_MS) {
+            // Active healthy connection from different instance exists
+            console.warn(`[Bridge DO] Rejected connection from instance ${instanceId}: healthy active connection exists for instance ${otherId} (idle ${Math.round(idleTime/1000)}s).`);
+            return new Response("Conflict: Another instance is currently active and healthy", { status: 409, headers: corsHeaders });
+          }
+        }
       }
 
       const upgradeHeader = request.headers.get("Upgrade");
@@ -598,20 +1126,21 @@ export class GeminiBridgeDO extends DurableObject {
       const [client, server] = Object.values(webSocketPair);
 
       server.accept();
-      for (const handler of this.activeStreams.values()) handler({ type: "STREAM_ERROR", error: "Extension reconnected", code: "extension_reconnected" });
-      if (this.activeSocket) this.activeSocket.close(1000, "Replaced by new connection");
+
+      // ─── Record connection with instanceId tracking ───
+      this.resetModelCatalog();
+      const connectionState = this.recordConnection(instanceId, server);
       this.currentTokens = null;
       this.protocolVersion = 0;
       this.socketLostAt = null;
-      // Queued requests are NOT rejected here: a reconnect is good news for
-      // them and handleRequest() now waits out a short reconnect grace period.
-      this.resetModelCatalog();
-      this.activeSocket = server;
-      this.activeOrigin = incomingOrigin;
-      console.log("[Bridge DO] Chrome Extension connected via WebSocket. Device origin:", incomingOrigin || "local");
 
+      console.log(`[Bridge DO] Chrome Extension connected via WebSocket. Instance: ${instanceId}, Epoch: ${connectionState.epoch}`);
+
+      // Update server message handler to track activity per instance
       server.addEventListener("message", (event) => {
         if (this.activeSocket !== server) return;
+        // Record activity for this instance
+        this.touchConnection(instanceId);
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === "SESSION_READY" || msg.type === "MODELS_DISCOVERED") {
@@ -629,7 +1158,25 @@ export class GeminiBridgeDO extends DurableObject {
             if (msg.extendedThinking !== undefined) this.extendedThinkingActive = msg.extendedThinking;
             console.log(`[Bridge DO] Model Updated from UI: Model=${this.activeBrowserModel}, Thinking=${this.extendedThinkingActive}`);
           } else if (msg.type === "PONG") {
-            // Heartbeat pong received
+            // Heartbeat pong received - already recorded via touchConnection
+          } else if (msg.type === "SCOPE_SWITCH") {
+            // Phase 4: Handle SCOPE_SWITCH from extension (multiplexed protocol)
+            // Extension is requesting to switch to a new scope
+            // Use .then() to handle async without await in event listener
+            this.handleScopeSwitchFromExtension(msg).catch(err => {
+              console.error("[Bridge DO] Scope switch error:", err);
+            });
+          } else if (msg.type === "SCOPE_READY") {
+            // Phase 4: Extension confirmed scope switch is complete
+            if (msg.scope) {
+              this.currentScope = msg.scope;
+              console.log(`[Bridge DO] Scope confirmed: ${msg.scope} (requestId: ${msg.requestId || 'N/A'})`);
+              // Resolve any pending scope switch
+              if (this.pendingScopeSwitch && this.pendingScopeSwitch.requestId === msg.requestId) {
+                clearTimeout(this.pendingScopeSwitch.timer);
+                this.pendingScopeSwitch = null;
+              }
+            }
           } else if (msg.requestId && this.activeStreams.has(msg.requestId)) {
             const handler = this.activeStreams.get(msg.requestId);
             if (handler) handler(msg);
@@ -640,7 +1187,9 @@ export class GeminiBridgeDO extends DurableObject {
       });
 
       server.addEventListener("close", (event) => {
-        console.warn(`[Bridge DO] Chrome Extension disconnected (code: ${event.code}).`);
+        console.warn(`[Bridge DO] Chrome Extension disconnected (code: ${event.code}). Instance: ${instanceId}`);
+        // Remove connection for this instance
+        this.removeConnection(instanceId);
         if (this.activeSocket === server) {
           this.socketLostAt = Date.now();
           for (const handler of this.activeStreams.values()) {
@@ -649,7 +1198,6 @@ export class GeminiBridgeDO extends DurableObject {
           // Queued requests are kept: they will wait for a reconnect inside
           // waitForExtension() instead of failing instantly (reconnect grace).
           this.activeSocket = null;
-          this.activeOrigin = null;
           this.protocolVersion = 0;
           this.currentTokens = null;
           this.resetModelCatalog();
@@ -659,6 +1207,9 @@ export class GeminiBridgeDO extends DurableObject {
       server.addEventListener("error", (err) => {
         console.error("[Bridge DO] WebSocket error:", err);
       });
+
+      // Set activeSocket for backward compatibility (single socket assumption)
+      this.activeSocket = server;
 
       return new Response(null, { status: 101, webSocket: client, headers: corsHeaders });
     }
@@ -786,6 +1337,10 @@ export class GeminiBridgeDO extends DurableObject {
           try {
             const ready = await this.prepareScope(targetScope);
             this.currentScope = ready.scope || targetScope;
+            const scopeErr = this.addScopeFailClosed(targetScope);
+            if (scopeErr) {
+              return this.failure(422, scopeErr.code, scopeErr.message);
+            }
           } catch (error) {
             return this.failure(error.code === "extension_disconnected" ? 503 : 422, error.code || "scope_switch_failed", error.message);
           }
@@ -1370,11 +1925,15 @@ export class GeminiBridgeDO extends DurableObject {
         if (!scopeInput) return { ok: true, scope: this.currentScope };
         const targetScope = this.resolveScopeInput(scopeInput);
         if (!targetScope) {
-          return { ok: false, message: `Unrecognized bridge scope '${scopeInput}'. Use "app", "app:<conversationId>", "notebook:<notebookId>", or a gemini.google.com URL/path.` };
+          return { ok: false, message: `Unrecognized bridge scope '${this.redactScopeId(scopeInput)}'. Use "app", "app:<conversationId>", "notebook:<notebookId>", or a gemini.google.com URL/path.` };
         }
         if (this.currentScope === targetScope) return { ok: true, scope: targetScope };
         const ready = await this.prepareScope(targetScope);
         this.currentScope = ready.scope || targetScope;
+        const failClosedErr = this.addScopeFailClosed(targetScope);
+        if (failClosedErr) {
+          return { ok: false, message: failClosedErr.message };
+        }
         return { ok: true, scope: this.currentScope };
       };
 
@@ -1598,6 +2157,19 @@ export class GeminiBridgeDO extends DurableObject {
     // ─── 5. Status Dashboard (GET / หรือ /health) ───
     if (url.pathname === "/" || url.pathname === "/health") {
       const isReady = this.isExtensionReady();
+      // Collect information about active connections
+      const activeConnectionsInfo = [];
+      for (const [instanceId, state] of this.activeConnections.entries()) {
+        const idleMs = Date.now() - state.lastActivityAt;
+        activeConnectionsInfo.push({
+          instanceId,
+          epoch: state.epoch,
+          connectedAt: state.connectedAt,
+          lastActivityAt: state.lastActivityAt,
+          idleSeconds: Math.round(idleMs / 1000),
+          isStale: idleMs > this.STALE_CONNECTION_TIMEOUT_MS
+        });
+      }
       return new Response(JSON.stringify({
         status: "ok",
         service: "gemini-web-bridge-cloud-hub",
@@ -1618,6 +2190,13 @@ export class GeminiBridgeDO extends DurableObject {
         conversation_state: {
           active: Boolean(this.conversationState.conversationId),
           conversationId: this.conversationState.conversationId || null
+        },
+        // ─── Phase 3: Instance-ID Tracking + Epoch Counter ───
+        instance_tracking: {
+          epoch_counter: this.epochCounter,
+          active_connections_count: this.activeConnections.size,
+          stale_connection_timeout_ms: this.STALE_CONNECTION_TIMEOUT_MS,
+          connections: activeConnectionsInfo
         },
         endpoints: {
           mcp: `https://${url.host}/mcp`,
