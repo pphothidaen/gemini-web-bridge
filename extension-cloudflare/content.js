@@ -150,6 +150,13 @@
   let resolvedSettings = Settings.resolveSettings({});
   let indicatorEl = null;
 
+  // ─── Leader Heartbeat (Risk #2 mitigation) ────────────────────
+  // The content script (when leader) must periodically send HEARTBEAT
+  // messages to the background coordinator so checkLeaderHealth() can
+  // detect stagnation and auto-promote a standby tab.
+  let leaderHeartbeatTimer = null;
+  const HEARTBEAT_INTERVAL_MS = 5000; // 5s → 3 misses (15s) triggers auto-failover
+
   // Coordinator port to extension background service worker
   let coordinatorPort = null;
 
@@ -798,7 +805,7 @@
     // User amendment: sessionReady boolean only, tokens: { sessionReady: true }. No Google CSRF sent to Worker!
     sendToWorker({
       type: "SESSION_READY",
-      protocolVersion: 2,
+      protocolVersion: 3,
       capabilities: { verifiedRpc: true },
       enforcementMode: resolvedSettings.enforcementMode,
       tokens: { sessionReady: true },
@@ -833,7 +840,7 @@
     if (bridgeReady()) {
       sendToWorker({
         type: "MODELS_DISCOVERED",
-        protocolVersion: 2,
+        protocolVersion: 3,
         capabilities: { verifiedRpc: true },
         enforcementMode: resolvedSettings.enforcementMode,
         scope: currentScope,
@@ -996,15 +1003,15 @@
     const { requestId, payload } = msg;
     console.log(`[Bridge] 📥 EXECUTE_REQUEST received: ${requestId}, model: ${payload?.model}`);
 
-    if (!payload || payload.protocolVersion !== 2) {
-      sendToWorker({
-        type: "STREAM_ERROR",
-        requestId,
-        error: "Protocol version mismatch: protocolVersion 2 required",
-        code: "invalid_protocol_version"
-      });
-      return;
-    }
+      if (!payload || payload.protocolVersion < 2 || payload.protocolVersion > 3) {
+        sendToWorker({
+          type: "STREAM_ERROR",
+          requestId,
+          error: "Protocol version mismatch: supported versions 2-3",
+          code: "invalid_protocol_version"
+        });
+        return;
+      }
 
     if (!sessionState.sessionReady) {
       sendToWorker({
@@ -1244,10 +1251,12 @@
             if (msg.role === "leader") {
               console.log("[Bridge] 👑 Port notified: Leader role granted");
               isLeaderTab = true;
+              startLeaderHeartbeat();
               ensureBridgeConnected();
             } else if (msg.role === "standby") {
               console.log(`[Bridge] 💤 Port notified: Standby role assigned (Leader is ${msg.leaderTabId})`);
               isLeaderTab = false;
+              stopLeaderHeartbeat();
               // Never close the socket on standby: killing the connection here
               // used to tear down the whole bridge session on coordinator
               // races. A standby tab simply ignores execution commands.
@@ -1258,11 +1267,33 @@
 
         coordinatorPort.onDisconnect.addListener(() => {
           console.warn("[Bridge] Coordinator port disconnected. Attempting reconnect...");
+          stopLeaderHeartbeat();
           setTimeout(initCentralCoordinator, 1000);
         });
       } catch (e) {
         console.warn("[Bridge] Could not connect to background coordinator:", e);
       }
+    }
+  }
+
+  function startLeaderHeartbeat() {
+    stopLeaderHeartbeat();
+    leaderHeartbeatTimer = setInterval(() => {
+      if (coordinatorPort && isLeaderTab) {
+        try {
+          coordinatorPort.postMessage({ type: "HEARTBEAT", tabId: chrome?.runtime?.id, timestamp: Date.now() });
+        } catch (e) {
+          console.warn("[Bridge] Heartbeat send failed:", e.message);
+        }
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+    console.log(`[Bridge] 💓 Leader heartbeat started (${HEARTBEAT_INTERVAL_MS}ms interval)`);
+  }
+
+  function stopLeaderHeartbeat() {
+    if (leaderHeartbeatTimer) {
+      clearInterval(leaderHeartbeatTimer);
+      leaderHeartbeatTimer = null;
     }
   }
 

@@ -157,7 +157,56 @@ export class GeminiBridgeDO extends DurableObject {
 
     this.resetModelCatalog();
 
-    // Keepalive Ping Loop
+    // ─── Phase 4: ScopeRouter initialization ────────────────────────────────
+    // The ScopeRouter is initialized as an instance block (this.scopeSessions,
+    // this.scopeHandlers, etc.) and the built-in app/notebook handlers are
+    // registered here so they're available as soon as the DO starts.
+    this.registerScopeHandler('app', (envelope, session, connId) => {
+      const connection = this.getActiveConnection();
+      if (!connection || connection.socket.readyState !== 1) {
+        return { error: { code: -32000, message: 'No active extension connection' } };
+      }
+      try {
+        connection.socket.send(JSON.stringify({
+          type: envelope.method === 'chat.complete' ? 'EXECUTE_REQUEST' : envelope.method,
+          scope: session.scopeId,
+          requestId: envelope.id,
+          payload: envelope.params,
+        }));
+        return { result: { routed: true, scope: session.scopeId, via: 'app-handler' } };
+      } catch (e) {
+        return { error: { code: -32000, message: `Failed to forward: ${e.message}` } };
+      }
+    });
+
+    this.registerScopeHandler('app:*', (envelope, session, connId) => {
+      // Delegate specific app:<id> scopes to the generic app handler
+      return this.scopeHandlers.get('app')(envelope, session, connId);
+    });
+
+    this.registerScopeHandler('notebook', (envelope, session, connId) => {
+      const connection = this.getActiveConnection();
+      if (!connection || connection.socket.readyState !== 1) {
+        return { error: { code: -32000, message: 'No active extension connection' } };
+      }
+      try {
+        connection.socket.send(JSON.stringify({
+          type: envelope.method === 'chat.complete' ? 'EXECUTE_REQUEST' : envelope.method,
+          scope: session.scopeId,
+          requestId: envelope.id,
+          payload: envelope.params,
+        }));
+        return { result: { routed: true, scope: session.scopeId, via: 'notebook-handler' } };
+      } catch (e) {
+        return { error: { code: -32000, message: `Failed to forward: ${e.message}` } };
+      }
+    });
+
+    this.registerScopeHandler('notebook:*', (envelope, session, connId) => {
+      return this.scopeHandlers.get('notebook')(envelope, session, connId);
+    });
+
+    // ─── Keepalive Ping Loop
     this.initKeepalive();
     // TTL-based Stale Socket Cleanup: periodic alarm to detect and close stale sockets
     this.RunAlarm();
@@ -593,64 +642,448 @@ export class GeminiBridgeDO extends DurableObject {
     return scopeSwitchPromise;
   }
 
+  // ─── Phase 4: Multiplexed Connection + Scope Router ─────────────────────────
+  //
+  // The WebSocket envelope format (protocol v3) wraps every message in a
+  // JSON-RPC-style envelope so a single connection can carry traffic for many
+  // scopes without reconnecting:
+  //
+  //   Client → Server (inbound):
+  //     { jsonrpc: "2.0", id: <string>,      // envelope metadata
+  //       scope_id: "app:c_123" | "notebook:n456",  // routing key
+  //       instance_id: "<uuid>",                          // connection identity
+  //       method: "subscribe" | "unsubscribe" | "chat.complete" | ...,
+  //       params: { ... },                                // method payload
+  //       scope_session_id: "<uuid>" }                    // scope session handle
+  //
+  //   Server → Client (outbound):
+  //     { jsonrpc: "2.0", id: <string>,       // echoes request id
+  //       scope_id: "...",                         // echoed for convenience
+  //       result: { ... } | null,
+  //       error: { code, message } | null,
+  //       scope_session_id: "<uuid>" }
+  //
+  // Scope lifecycle:
+  //   subscribe  → creates a ScopeSession in this.scopeSessions per (connectionId, scope_id)
+  //   unsubscribe → removes that ScopeSession and fires its onUnsubscribe hook
+  //   connection close → removes ALL ScopeSessions for that connectionId
+  //
+  // The router keeps three indexes:
+  //   this.scopeSessions   Map<connId, Map<scopeId, ScopeSession>>
+  //   this.connectionOwner Map<scopeId, connId>            (reverse lookup for cleanup)
+  //   this.scopeHandlers   Map<scopePattern, handlerFn>    (registered scope handlers)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /** @type {Map<string, Map<string, ScopeSession>>} connectionId -> scopeId -> session */
+  scopeSessions = new Map();
+
+  /** @type {Map<string, string>} scopeId -> connectionId (reverse index for cleanup) */
+  connectionOwner = new Map();
+
+  /** @type {Map<string, Function>} scope pattern -> handler */
+  scopeHandlers = new Map();
+
+  /** @type {Function|null} default handler for scopes without a registered handler */
+  defaultHandler = null;
+
+  /** @type {Map<string, number>} scopeId -> last activity timestamp (for idle pruning) */
+  scopeLastActivity = new Map();
+
+  /** Monotonically increasing connection counter used to derive connection IDs */
+  _connectionSeq = 0;
+
   /**
-   * Phase 4: ScopeRouter - routes requests by scope in message body.
-   * Maintains a map of scope handlers for different scope types.
+   * Derive a stable connection identifier from the socket pair + instanceId.
+   * Used as the top-level key in scopeSessions so that a reconnect (same
+   * instanceId, new socket) gets a fresh connection bucket and old sessions
+   * are cleaned up by the close handler.
    */
-  scopeRouter = {
-    /**
-     * Route a message to the appropriate handler based on scope.
-     * @param {Object} msg - The message with scope field
-     * @param {Function} defaultHandler - Default handler for unknown scopes
-     */
-    route(msg, defaultHandler) {
-      const scope = msg.scope || this.currentScope || 'app';
-      const validatedScope = this.resolveScopeInput(scope);
-      
-      if (!validatedScope) {
-        console.warn(`[ScopeRouter] Invalid scope: ${scope}, using default handler`);
-        return defaultHandler ? defaultHandler(msg) : null;
+  _connectionId(instanceId, webSocketPair) {
+    const serverSocket = webSocketPair && webSocketPair[1];
+    let tag = 'ws';
+    if (serverSocket) {
+      try {
+        tag = serverSocket[Symbol.toStringTag] || String(serverSocket[Symbol.toStringTag] || '') || 'ws';
+      } catch (e) {
+        tag = 'ws';
       }
-      
-      console.log(`[ScopeRouter] Routing message to scope: ${validatedScope}`);
-      
-      // Route based on scope kind
-      if (validatedScope === 'app' || validatedScope.startsWith('app:')) {
-        return this.handleAppScope(msg, validatedScope);
-      } else if (validatedScope === 'notebook' || validatedScope.startsWith('notebook:')) {
-        return this.handleNotebookScope(msg, validatedScope);
-      }
-      
-      // Default fallback
-      return defaultHandler ? defaultHandler(msg) : null;
-    },
-    
-    /**
-     * Handle messages for app scope.
-     */
-    handleAppScope(msg, scope) {
-      console.log(`[ScopeRouter] Handling app scope message: ${msg.type}`);
-      const connection = this.getActiveConnection();
-      if (connection && connection.socket.readyState === 1) {
-        connection.socket.send(JSON.stringify(msg));
-        return { routed: true, scope };
-      }
-      return { routed: false, error: 'No active connection' };
-    },
-    
-    /**
-     * Handle messages for notebook scope.
-     */
-    handleNotebookScope(msg, scope) {
-      console.log(`[ScopeRouter] Handling notebook scope message: ${msg.type}`);
-      const connection = this.getActiveConnection();
-      if (connection && connection.socket.readyState === 1) {
-        connection.socket.send(JSON.stringify(msg));
-        return { routed: true, scope };
-      }
-      return { routed: false, error: 'No active connection' };
     }
-  };
+    const serializable = `${instanceId}::${tag}::${++this._connectionSeq}`;
+    return crypto.createHash('sha256').update(serializable).digest('hex').slice(0, 16);
+  }
+
+  /**
+   * Register a handler for a scope pattern.
+   * Patterns: "app", "app:*", "app:c_123", "notebook", "notebook:*", "*"
+   */
+  registerScopeHandler(pattern, handler) {
+    this.scopeHandlers.set(pattern, handler);
+    console.log(`[ScopeRouter] Registered handler for pattern "${pattern}"`);
+  }
+
+  /**
+   * Set the fallback handler for messages whose scope doesn't match any
+   * registered pattern.
+   */
+  setDefaultHandler(fn) {
+    this.defaultHandler = fn;
+  }
+
+  // ── Scope session lifecycle ──────────────────────────────────────────────
+
+  /**
+   * ScopeSession: per-connection, per-scope state.
+   * @typedef {Object} ScopeSession
+   * @property {string} scopeId         canonical scope, e.g. "app:c_123"
+   * @property {string} sessionId       client- or server-supplied session handle
+   * @property {string} connId          owning connection id
+   * @property {number} subscribedAt    epoch ms when subscribed
+   * @property {Object} [params]        subscribe params
+   * @property {Function} [onUnsubscribe] cleanup hook
+   * @property {*} [context]            opaque per-session context set by handlers
+   */
+
+  /**
+   * Subscribe to a scope on a connection. Creates (or reuses) a ScopeSession.
+   * @param {string} connId
+   * @param {string} scopeId  canonical scope, e.g. "app:c_123" or "notebook:n456"
+   * @param {Object} [opts]
+   * @param {string} [opts.sessionId]  client-supplied session handle (optional)
+   * @param {Object} [opts.params]     subscribe params from the envelope
+   * @returns {ScopeSession}
+   */
+  subscribeScope(connId, scopeId, opts = {}) {
+    const canonical = this.resolveScopeInput(scopeId);
+    if (!canonical) {
+      throw new Error(`[ScopeRouter] Invalid scope_id: ${scopeId}`);
+    }
+
+    let byConn = this.scopeSessions.get(connId);
+    if (!byConn) {
+      byConn = new Map();
+      this.scopeSessions.set(connId, byConn);
+    }
+
+    let session = byConn.get(canonical);
+    if (!session) {
+      const id = opts.sessionId || crypto.randomUUID?.() || `${canonical}::${Date.now()}`;
+      session = {
+        scopeId: canonical,
+        sessionId: id,
+        connId,
+        subscribedAt: Date.now(),
+        params: opts.params || null,
+        onUnsubscribe: null,
+        context: null,
+      };
+      byConn.set(canonical, session);
+      this.connectionOwner.set(canonical, connId);
+      console.log(`[ScopeRouter] Subscribed conn=${connId} scope=${canonical} session=${id}`);
+    } else {
+      if (opts.params) session.params = opts.params;
+      if (opts.sessionId && !session.sessionId) session.sessionId = opts.sessionId;
+    }
+
+    this.scopeLastActivity.set(canonical, Date.now());
+    return session;
+  }
+
+  /**
+   * Unsubscribe from a scope on a connection. Runs the onUnsubscribe hook
+   * and removes the session from both indexes.
+   * @returns {ScopeSession|null} the removed session, or null if not subscribed
+   */
+  unsubscribeScope(connId, scopeId) {
+    const canonical = this.resolveScopeInput(scopeId) || scopeId;
+    const byConn = this.scopeSessions.get(connId);
+    if (!byConn) return null;
+    const session = byConn.get(canonical);
+    if (!session) return null;
+
+    byConn.delete(canonical);
+    this.connectionOwner.delete(canonical);
+    this.scopeLastActivity.delete(canonical);
+
+    // Clean up empty connection bucket so scopeSessions.get(connId) returns undefined
+    if (byConn.size === 0) {
+      this.scopeSessions.delete(connId);
+    }
+
+    console.log(`[ScopeRouter] Unsubscribed conn=${connId} scope=${canonical} session=${session.sessionId}`);
+    if (typeof session.onUnsubscribe === 'function') {
+      try { session.onUnsubscribe(session); } catch (e) {
+        console.error(`[ScopeRouter] onUnsubscribe hook threw for ${canonical}:`, e);
+      }
+    }
+    return session;
+  }
+
+  /**
+   * Get the active session for a given connection + scope, if any.
+   */
+  getSession(connId, scopeId) {
+    const canonical = this.resolveScopeInput(scopeId) || scopeId;
+    const byConn = this.scopeSessions.get(connId);
+    return byConn ? byConn.get(canonical) || null : null;
+  }
+
+  /**
+   * Remove ALL scope sessions for a connection (called on WS close).
+   * Returns the count of sessions removed.
+   */
+  removeConnectionSessions(connId) {
+    const byConn = this.scopeSessions.get(connId);
+    if (!byConn || byConn.size === 0) return 0;
+
+    let removed = 0;
+    for (const [scopeId, session] of byConn.entries()) {
+      this.connectionOwner.delete(scopeId);
+      this.scopeLastActivity.delete(scopeId);
+      if (typeof session.onUnsubscribe === 'function') {
+        try { session.onUnsubscribe(session); } catch (e) {
+          console.error(`[ScopeRouter] onUnsubscribe hook threw for ${scopeId}:`, e);
+        }
+      }
+      byConn.delete(scopeId);
+      removed++;
+    }
+    this.scopeSessions.delete(connId);
+    console.log(`[ScopeRouter] Removed ${removed} scope session(s) for conn=${connId}`);
+    return removed;
+  }
+
+  // ── Scope handler resolution ─────────────────────────────────────────────
+
+  /**
+   * Resolve a scope to a handler function. Checks exact match, then pattern
+   * match, then falls back to defaultHandler.
+   */
+  _resolveHandler(scopeId) {
+    const canonical = this.resolveScopeInput(scopeId) || scopeId;
+
+    if (this.scopeHandlers.has(canonical)) {
+      return { handler: this.scopeHandlers.get(canonical), scope: canonical };
+    }
+
+    for (const [pattern, handler] of this.scopeHandlers.entries()) {
+      if (this._matchScopePattern(canonical, pattern)) {
+        return { handler, scope: canonical };
+      }
+    }
+
+    if (this.defaultHandler) {
+      return { handler: this.defaultHandler, scope: canonical };
+    }
+
+    return null;
+  }
+
+  /**
+   * Pattern matching rules:
+   *   "app"       → "app" and "app:*"
+   *   "notebook"  → "notebook" and "notebook:*"
+   *   "app:*"     → any "app:<id>"
+   *   "notebook:*"→ any "notebook:<id>"
+   *   "*"         → matches everything
+   */
+  _matchScopePattern(scope, pattern) {
+    if (pattern === '*') return true;
+    if (pattern === scope) return true;
+    if (pattern === 'app' && (scope === 'app' || scope.startsWith('app:'))) return true;
+    if (pattern === 'notebook' && (scope === 'notebook' || scope.startsWith('notebook:'))) return true;
+    if (pattern === 'app:*' && scope.startsWith('app:')) return true;
+    if (pattern === 'notebook:*' && scope.startsWith('notebook:')) return true;
+    return false;
+  }
+
+  /**
+   * Prune scope-session activity entries older than maxAgeMs.
+   */
+  pruneScopeActivity(maxAgeMs = 600000) {
+    const cutoff = Date.now() - maxAgeMs;
+    let pruned = 0;
+    for (const [scopeId, ts] of this.scopeLastActivity.entries()) {
+      if (ts < cutoff) {
+        this.scopeLastActivity.delete(scopeId);
+        pruned++;
+      }
+    }
+    if (pruned > 0) console.log(`[ScopeRouter] Pruned ${pruned} stale scope activity entries`);
+    return pruned;
+  }
+
+  // ── Envelope parsing ─────────────────────────────────────────────────────
+
+  /**
+   * Parse and validate an inbound JSON-RPC envelope from the extension.
+   * Returns a normalized envelope object, or throws on bad input.
+   *
+   * Required envelope fields: jsonrpc, scope_id, instance_id, method
+   * Optional: id, params, scope_session_id
+   */
+  parseEnvelope(raw) {
+    if (typeof raw !== 'object' || raw === null) {
+      throw new Error('[ScopeRouter] Envelope must be a JSON object');
+    }
+    const { jsonrpc, scope_id, instance_id, method, id, params, scope_session_id } = raw;
+
+    if (jsonrpc !== '2.0') {
+      throw new Error(`[ScopeRouter] Unsupported jsonrpc version: ${jsonrpc}`);
+    }
+    if (!scope_id || typeof scope_id !== 'string') {
+      throw new Error('[ScopeRouter] Missing or invalid scope_id');
+    }
+    if (!instance_id || typeof instance_id !== 'string') {
+      throw new Error('[ScopeRouter] Missing or invalid instance_id');
+    }
+    if (!method || typeof method !== 'string') {
+      throw new Error('[ScopeRouter] Missing or invalid method');
+    }
+
+    const canonicalScope = this.resolveScopeInput(scope_id);
+    if (!canonicalScope && !this.scopeHandlers.has('*')) {
+      throw new Error(`[ScopeRouter] Unknown scope_id: ${scope_id}`);
+    }
+
+    return {
+      jsonrpc: '2.0',
+      id: id != null ? String(id) : null,
+      scope_id: canonicalScope || scope_id,
+      instance_id,
+      method,
+      params: params || null,
+      scope_session_id: scope_session_id != null ? String(scope_session_id) : null,
+      raw,
+    };
+  }
+
+  /**
+   * Build an outbound JSON-RPC envelope.
+   */
+  buildEnvelope({ id, scope_id, method, result, error, scope_session_id }) {
+    const envelope = { jsonrpc: '2.0' };
+    if (id != null) envelope.id = id;
+    if (scope_id) envelope.scope_id = scope_id;
+    if (scope_session_id) envelope.scope_session_id = scope_session_id;
+    if (method) envelope.method = method;
+    if (error) envelope.error = error;
+    else if (result !== undefined) envelope.result = result;
+    return envelope;
+  }
+
+  // ── Main route entry point ───────────────────────────────────────────────
+
+  /**
+   * Route an inbound envelope to the correct scope handler.
+   *
+   * Lifecycle side-effects:
+   *   - "subscribe"    → creates a ScopeSession
+   *   - "unsubscribe"  → removes the ScopeSession
+   *   - other methods  → requires an active session (auto-subscribes if missing)
+   *
+   * @param {Object} envelope  parsed envelope from parseEnvelope()
+   * @param {string} connId    connection identifier (from _connectionId())
+   * @returns {Object} response envelope to send back to the client
+   */
+  async routeEnvelope(envelope, connId) {
+    const { id, scope_id, instance_id, method, params, scope_session_id } = envelope;
+    const scope = scope_id;
+
+    try {
+      if (method === 'subscribe') {
+        const session = this.subscribeScope(connId, scope, { params, sessionId: scope_session_id });
+        return this.buildEnvelope({
+          id,
+          scope_id: scope,
+          scope_session_id: session.sessionId,
+          result: {
+            scope: session.scopeId,
+            session_id: session.sessionId,
+            subscribed_at: session.subscribedAt,
+          },
+        });
+      }
+
+      if (method === 'unsubscribe') {
+        const session = this.unsubscribeScope(connId, scope);
+        if (!session) {
+          return this.buildEnvelope({
+            id,
+            scope_id: scope,
+            error: { code: -32001, message: `Not subscribed to scope: ${scope}` },
+          });
+        }
+        return this.buildEnvelope({
+          id,
+          scope_id: scope,
+          scope_session_id: session.sessionId,
+          result: { unsubscribed: true, scope: session.scopeId },
+        });
+      }
+
+      const resolved = this._resolveHandler(scope);
+      if (!resolved) {
+        return this.buildEnvelope({
+          id,
+          scope_id: scope,
+          error: { code: -32005, message: `No handler for scope: ${scope}` },
+        });
+      }
+
+      const { handler, scope: canonicalScope } = resolved;
+
+      let session = null;
+      if (scope_session_id) {
+        session = this.getSession(connId, canonicalScope);
+        if (!session || session.sessionId !== scope_session_id) {
+          return this.buildEnvelope({
+            id,
+            scope_id: scope,
+            error: { code: -32002, message: `Unknown scope_session_id for scope: ${scope}` },
+          });
+        }
+      }
+
+      if (!session && method !== 'subscribe' && method !== 'unsubscribe') {
+        session = this.subscribeScope(connId, canonicalScope, { params });
+      }
+
+      const response = await handler(envelope, session, connId);
+
+      if (response && typeof response === 'object') {
+        if (response.error) {
+          return this.buildEnvelope({
+            id,
+            scope_id: scope,
+            scope_session_id: session?.sessionId,
+            error: response.error,
+          });
+        }
+        if (response.result !== undefined) {
+          return this.buildEnvelope({
+            id,
+            scope_id: scope,
+            scope_session_id: session?.sessionId,
+            result: response.result,
+          });
+        }
+      }
+
+      return this.buildEnvelope({
+        id,
+        scope_id: scope,
+        scope_session_id: session?.sessionId,
+        result: response,
+      });
+    } catch (err) {
+      console.error(`[ScopeRouter] Handler error for ${method} on ${scope}:`, err);
+      return this.buildEnvelope({
+        id,
+        scope_id: scope,
+        error: { code: -32603, message: err.message || 'Internal error' },
+      });
+    }
+  }
 
   /**
    * Reconnect grace: instead of failing immediately when the extension drops,
@@ -658,11 +1091,11 @@ export class GeminiBridgeDO extends DurableObject {
    * brief tab reloads / network blips from surfacing as 503s to clients.
    */
   async waitForExtension(maxWaitMs = 12000) {
-    if (this.isExtensionReady() && this.protocolVersion === 2) return true;
+    if (this.isExtensionReady() && this.protocolVersion >= 2 && this.protocolVersion <= 3) return true;
     const deadline = Date.now() + maxWaitMs;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 500));
-      if (this.isExtensionReady() && this.protocolVersion === 2) return true;
+      if (this.isExtensionReady() && this.protocolVersion >= 2 && this.protocolVersion <= 3) return true;
     }
     return false;
   }
@@ -898,7 +1331,7 @@ export class GeminiBridgeDO extends DurableObject {
         this.activeSocket.send(JSON.stringify({
           type: "EXECUTE_REQUEST",
           requestId,
-          payload: { f_req: encodedReq, model, protocolVersion: 2, catalogRevision: this.catalogRevision, mappingRevision: this.dynamicModels.find(m=>m.id===model)?.mapping_revision }
+          payload: { f_req: encodedReq, model, protocolVersion: 3, catalogRevision: this.catalogRevision, mappingRevision: this.dynamicModels.find(m=>m.id===model)?.mapping_revision }
         }));
       } catch (err) {
         cleanup();
@@ -1134,6 +1567,11 @@ export class GeminiBridgeDO extends DurableObject {
       this.protocolVersion = 0;
       this.socketLostAt = null;
 
+      // Derive a connection id for scope-session bucketing. A reconnect (same
+      // instanceId, new socket) produces a new connId so old sessions are
+      // naturally abandoned and cleaned up by the close handler below.
+      const connId = this._connectionId(instanceId, webSocketPair);
+
       console.log(`[Bridge DO] Chrome Extension connected via WebSocket. Instance: ${instanceId}, Epoch: ${connectionState.epoch}`);
 
       // Update server message handler to track activity per instance
@@ -1143,6 +1581,31 @@ export class GeminiBridgeDO extends DurableObject {
         this.touchConnection(instanceId);
         try {
           const msg = JSON.parse(event.data);
+
+          // Phase 4: Multiplexed envelope routing. Detect JSON-RPC v2
+          // envelopes and route them through the ScopeRouter. Legacy
+          // msg.type-based messages fall through to the dispatch below.
+          if (msg.jsonrpc === "2.0" && msg.scope_id && msg.instance_id && msg.method) {
+            // Use .then()/.catch() to avoid await in the sync event listener
+            this.parseEnvelope(msg)
+              .then(envelope => this.routeEnvelope(envelope, connId))
+              .then(response => {
+                if (response && this.activeSocket === server && server.readyState === 1) {
+                  server.send(JSON.stringify(response));
+                }
+              })
+              .catch(parseErr => {
+                console.error("[Bridge DO] ScopeRouter envelope error:", parseErr.message);
+                if (this.activeSocket === server && server.readyState === 1) {
+                  server.send(JSON.stringify({
+                    jsonrpc: "2.0",
+                    error: { code: -32700, message: parseErr.message },
+                  }));
+                }
+              });
+            return;
+          }
+
           if (msg.type === "SESSION_READY" || msg.type === "MODELS_DISCOVERED") {
             if (msg.tokens) this.currentTokens = msg.tokens;
             if (typeof msg.scope === "string" && msg.scope) {
@@ -1190,6 +1653,10 @@ export class GeminiBridgeDO extends DurableObject {
         console.warn(`[Bridge DO] Chrome Extension disconnected (code: ${event.code}). Instance: ${instanceId}`);
         // Remove connection for this instance
         this.removeConnection(instanceId);
+        // Phase 4: Tear down all scope sessions belonging to this connection.
+        // Each session's onUnsubscribe hook is fired so handlers can flush
+        // pending work before the socket is gone.
+        this.removeConnectionSessions(connId);
         if (this.activeSocket === server) {
           this.socketLostAt = Date.now();
           for (const handler of this.activeStreams.values()) {
@@ -1216,7 +1683,7 @@ export class GeminiBridgeDO extends DurableObject {
 
     if (url.pathname === "/bridge/auth-check") {
       const supplied=request.headers.get("x-bridge-token");
-      return new Response(JSON.stringify({ok:Boolean(BRIDGE_SECRET && supplied===BRIDGE_SECRET),protocolVersion:2}),
+      return new Response(JSON.stringify({ok:Boolean(BRIDGE_SECRET && supplied===BRIDGE_SECRET),protocolVersion:3,minSupportedVersion:2,maxSupportedVersion:3}),
         {status:BRIDGE_SECRET && supplied===BRIDGE_SECRET ? 200 : 401,headers:{...corsHeaders,"Content-Type":"application/json","Cache-Control":"no-store"}});
     }
 
@@ -1277,7 +1744,7 @@ export class GeminiBridgeDO extends DurableObject {
 
       // ตรวจสอบสถานะการเชื่อมต่อของ Extension ก่อนแบบ Strict Fail-Fast หรือ GCP Fallback
       // (พร้อม reconnect grace: รอสั้นๆ ก่อนยอมแพ้ เพื่อกลืน blip ระยะสั้น)
-      if (!this.isExtensionReady() || this.protocolVersion !== 2) {
+      if (!this.isExtensionReady() || this.protocolVersion < 2 || this.protocolVersion > 3) {
         const reconnected = await this.waitForExtension();
         if (!reconnected) {
           if (this.env.GEMINI_API_KEY && body?.stream !== true && Array.isArray(body?.messages)) {
@@ -1349,7 +1816,7 @@ export class GeminiBridgeDO extends DurableObject {
       }
 
       const requestedModel = body?.model;
-      if (this.protocolVersion !== 2) return this.failure(503,"extension_upgrade_required","Reload the updated extension (protocol v2 required)");
+      if (this.protocolVersion < 2 || this.protocolVersion > 3) return this.failure(503,"extension_upgrade_required",`Protocol v${this.protocolVersion || 0} unsupported. Min: 2, Max: 3. Reload the extension.`);
       let rawModel = !requestedModel || requestedModel === "gemini-web"
         ? recommendedModel(this.dynamicModels) : requestedModel;
       if (!rawModel && (!requestedModel || requestedModel === "gemini-web")) {

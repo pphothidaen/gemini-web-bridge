@@ -1,0 +1,88 @@
+{
+  "title": "Red Team Verification Checklist — Phase 5",
+  "source": "Phase 5 Architecture Design handoff",
+  "created": "2026-09-25",
+  "category": "red-team",
+  "items": [
+    {
+      "id": "RT-001",
+      "category": "token-exposure",
+      "check": "No hardcoded bridge tokens in extension source or build output",
+      "method": "grep -r 'gemini-bridge-[0-9a-f]' extension-cloudflare/ dist/extension/; also search .zip output for token patterns",
+      "pass_criteria": "Zero matches in source files; zero matches in built extension zip",
+      "automated": true
+    },
+    {
+      "id": "RT-002",
+      "category": "token-exposure",
+      "check": "Bridge auth token not leaked via browser history, referer headers, or devtools",
+      "method": "Inspect all fetch()/WebSocket URLs for token in query string; verify token sent only via x-bridge-token header or Authorization header, never in URL",
+      "pass_criteria": "Token never appears in URL, history, or referer; sent only via headers",
+      "automated": false
+    },
+    {
+      "id": "RT-003",
+      "category": "token-exposure",
+      "check": "Error messages do not contain sensitive data (tokens, session IDs, internal paths)",
+      "method": "Grep all error response strings in index.js for variables that could contain secrets; verify error messages use generic strings",
+      "pass_criteria": "No error message template includes token, session ID, or internal file path variables",
+      "automated": true
+    },
+    {
+      "id": "RT-004",
+      "category": "leader-stagnation",
+      "check": "Standby tab auto-promotes within 15s when leader heartbeat stops",
+      "method": "Simulate leader tab crash: set isLeaderTab=true, stop sending HEARTBEAT, verify background.js checkLeaderHealth() promotes standby after 15s (3 missed beats at 5s interval)",
+      "pass_criteria": "Standby promoted within 15s ± 1s; new leader sends SESSION_READY; no duplicate active connections",
+      "automated": true
+    },
+    {
+      "id": "RT-005",
+      "category": "protocol-fuzzing",
+      "check": "Server rejects malformed WebSocket messages without crashing",
+      "method": "Send truncated JSON, oversized payloads (>1MB), non-string message type, null payload; verify server returns error response, does not crash or hang",
+      "pass_criteria": "All malformed messages get error response; server stays alive; no DoS",
+      "automated": true
+    },
+    {
+      "id": "RT-006",
+      "category": "scope-escape",
+      "check": "Prompt/response isolation between tab scopes (app vs notebook vs horo_consult)",
+      "method": "Connect two clients with different scopes; send execution request on scope A; verify response only delivered to scope A tab, not scope B",
+      "pass_criteria": "Cross-scope data does not leak; each scope receives only its own responses",
+      "automated": true
+    },
+    {
+      "id": "RT-007",
+      "category": "queue-exhaustion",
+      "check": "11th concurrent request returns 429 when queue is full (concurrent=1, queue=10)",
+      "method": "Send 12 concurrent POST /v1/chat/completions requests with extension disconnected; first request queues, 10 fill queue, 11th+ returns 429 Too Many Requests",
+      "pass_criteria": "11th and subsequent requests return HTTP 429; first 11 are queued or processed",
+      "automated": true
+    },
+    {
+      "id": "RT-008",
+      "category": "version-mismatch",
+      "check": "Client v4.3.3 (protocolVersion 2) works against server v4.3.4 (supports 2-3)",
+      "method": "Simulate SESSION_READY with protocolVersion: 2 to server; verify server accepts (in range 2-3), returns 200; verify auth-check reports minSupportedVersion: 2",
+      "pass_criteria": "v2 client connects successfully; graceful degradation to legacy mode; no 503 or connection reset",
+      "automated": true
+    },
+    {
+      "id": "RT-009",
+      "category": "tab-crash-recovery",
+      "check": "Extension service worker restart restores connection without 409 or duplicate instance IDs",
+      "method": "Simulate SW restart: destroy socket, clear storage, re-init; verify INSTANCE_ID is regenerated, new SESSION_READY sent, server accepts (old instance timed out via 45s stale cleanup)",
+      "pass_criteria": "No 409 conflict; new instance ID accepted; session restored; no orphaned connections",
+      "automated": true
+    },
+    {
+      "id": "RT-010",
+      "category": "error-content",
+      "check": "Error responses use generic messages, no internal state leakage",
+      "method": "Trigger 400 (bad JSON), 401 (bad token), 503 (no extension), 429 (queue full); inspect response bodies for internal paths, model names, or session details",
+      "pass_criteria": "All error responses contain only generic messages; no internal architecture details exposed",
+      "automated": true
+    }
+  ]
+}

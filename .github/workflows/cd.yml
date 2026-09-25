@@ -1,0 +1,190 @@
+name: CD — Deploy & Secret Sync
+
+# ─── Triggers ─────────────────────────────────────────────────────
+# Deploys to staging on every push to main (after CI passes), then
+# waits for manual approval before promoting to production.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare-worker/**'
+      - 'extension-cloudflare/**'
+      - 'scripts/build-extension.py'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Deployment target'
+        required: false
+        type: choice
+        default: 'staging'
+        options: [staging, production]
+      skip_doppler:
+        description: 'Skip Doppler secret fetch (use GitHub Secrets fallback)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  NODE_VERSION: '22'
+  WORKER_DIR: 'cloudflare-worker'
+  STAGING_WORKER: 'gemini-web-bridge-staging'
+  PROD_WORKER: 'gemini-web-bridge'
+  WSS_ENDPOINT: 'wss://gemini-web-bridge.pansakorn-pho.workers.dev/bridge'
+  OPENAI_ENDPOINT: 'https://gemini-web-bridge.pansakorn-pho.workers.dev/v1'
+
+jobs:
+  # ─── Doppler Secret Fetch (Primary) ───────────────────────────────
+  fetch-secrets:
+    name: Fetch Secrets from Doppler
+    runs-on: ubuntu-latest
+    outputs:
+      bridge_token: ${{ steps.fetch.outputs.bridge_token }}
+      client_token: ${{ steps.fetch.outputs.client_token }}
+      source: ${{ steps.fetch.outputs.source }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Doppler CLI
+        run: |
+          curl -Ls https://cli.doppler.com/install.sh | sh
+          sudo ln -sf ~/.doppler/bin/doppler /usr/local/bin/doppler
+
+      - name: Fetch secrets from Doppler (primary)
+        id: fetch
+        env:
+          DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
+          GH_BRIDGE_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
+          GH_CLIENT_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
+        run: |
+          if [ "${{ inputs.skip_doppler }}" = "true" ]; then
+            echo "bridge_token=$GH_BRIDGE_TOKEN" >> $GITHUB_OUTPUT
+            echo "client_token=$GH_CLIENT_TOKEN" >> $GITHUB_OUTPUT
+            echo "source=github_secrets" >> $GITHUB_OUTPUT
+            echo "⚠️ Doppler fetch skipped — using GitHub Secrets fallback"
+          else
+            doppler setup --project gemini-web-bridge --config prd_worker --no-interactive 2>/dev/null || true
+            echo "bridge_token=$(doppler secrets get BRIDGE_AUTH_TOKEN --raw)" >> $GITHUB_OUTPUT
+            echo "client_token=$(doppler secrets get CLIENT_API_TOKEN --raw)" >> $GITHUB_OUTPUT
+            echo "source=doppler" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify secrets are non-empty
+        run: |
+          if [ -z "${{ steps.fetch.outputs.bridge_token }}" ]; then
+            echo "❌ BRIDGE_AUTH_TOKEN is empty" && exit 1
+          fi
+          if [ -z "${{ steps.fetch.outputs.client_token }}" ]; then
+            echo "❌ CLIENT_API_TOKEN is empty" && exit 1
+          fi
+          echo "✅ Secrets fetched from: ${{ steps.fetch.outputs.source }}"
+
+  # ─── Deploy to Staging ────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: fetch-secrets
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    environment:
+      name: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.WORKER_DIR }}/package-lock.json
+
+      - name: Install worker dependencies
+        working-directory: ${{ env.WORKER_DIR }}
+        run: npm ci
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@latest
+
+      - name: Set staging worker secrets
+        working-directory: ${{ env.WORKER_DIR }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BRIDGE_AUTH_TOKEN: ${{ needs.fetch-secrets.outputs.bridge_token }}
+          CLIENT_API_TOKEN: ${{ needs.fetch-secrets.outputs.client_token }}
+        run: |
+          echo "$BRIDGE_AUTH_TOKEN" | npx wrangler secret put BRIDGE_AUTH_TOKEN --env staging
+          echo "$CLIENT_API_TOKEN" | npx wrangler secret put CLIENT_API_TOKEN --env staging
+
+      - name: Deploy to staging
+        working-directory: ${{ env.WORKER_DIR }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --env staging
+
+      - name: Verify staging deployment
+        run: |
+          sleep 5
+          HEALTH=$(curl -s --retry 3 --retry-delay 2 --max-time 30 https://gemini-web-bridge-staging.pansakorn-pho.workers.dev/health)
+          echo "$HEALTH" | grep -q '"status": *"ok"' && echo "✅ Staging health OK" || (echo "❌ Staging health check failed" && echo "$HEALTH" && exit 1)
+
+  # ─── Production Deploy (Manual Approval Gate) ────────────────────
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.event_name == 'push'
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.WORKER_DIR }}/package-lock.json
+
+      - name: Install worker dependencies
+        working-directory: ${{ env.WORKER_DIR }}
+        run: npm ci
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@latest
+
+      - name: Set production worker secrets
+        working-directory: ${{ env.WORKER_DIR }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BRIDGE_AUTH_TOKEN: ${{ needs.fetch-secrets.outputs.bridge_token }}
+          CLIENT_API_TOKEN: ${{ needs.fetch-secrets.outputs.client_token }}
+        run: |
+          echo "$BRIDGE_AUTH_TOKEN" | npx wrangler secret put BRIDGE_AUTH_TOKEN
+          echo "$CLIENT_API_TOKEN" | npx wrangler secret put CLIENT_API_TOKEN
+
+      - name: Deploy to production
+        working-directory: ${{ env.WORKER_DIR }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
+
+      - name: Verify production deployment
+        run: |
+          sleep 5
+          HEALTH=$(curl -s --retry 3 --retry-delay 2 --max-time 30 ${{ env.WSS_ENDPOINT }}/../health)
+          echo "$HEALTH" | grep -q '"status": *"ok"' && echo "✅ Production health OK" || (echo "❌ Production health check failed" && echo "$HEALTH" && exit 1)
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "## 🚀 Production Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Worker deployed via cd.yml (Doppler: ${{ needs.fetch-secrets.outputs.source }})" >> $GITHUB_STEP_SUMMARY
+          echo "WSS: \`${{ env.WSS_ENDPOINT }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "OpenAI: \`${{ env.OPENAI_ENDPOINT }}\`" >> $GITHUB_STEP_SUMMARY

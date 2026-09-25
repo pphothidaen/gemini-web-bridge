@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Gemini Web-Bridge Cloudflare",
-  "version": "4.3.7",
-  "description": "Bridge active authenticated Gemini web session to Cloudflare Worker (Protocol v2 Verified RPC)",
+  "version": "4.4.1",
+  "description": "Bridge active authenticated Gemini web session to Cloudflare Worker (Protocol v2 Verified RPC) - Fixed: scope re-detection after navigation",
   "permissions": [
     "storage",
     "tabs",
@@ -18,13 +18,19 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://gemini.google.com/*"],
-      "js": ["injected.js"],
+      "matches": [
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "injected.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://gemini.google.com/*"],
+      "matches": [
+        "https://gemini.google.com/*"
+      ],
       "js": [
         "settings.js",
         "model-adapter.js",

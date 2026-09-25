@@ -408,10 +408,31 @@
       };
 
       try {
-        await new Promise((resolve) => {
-          this.storage.set({ [STORAGE_KEY]: payload }, () => resolve());
+        await new Promise((resolve, reject) => {
+          // Use a short timeout to avoid hanging if context is invalidated
+          const timer = setTimeout(() => reject(new Error("Storage timeout")), 1000);
+          this.storage.set({ [STORAGE_KEY]: payload }, () => {
+            clearTimeout(timer);
+            const err = chrome.runtime.lastError;
+            if (err) {
+              // Extension context may be invalidated or storage unavailable
+              if (err.message && /invalidated|context/i.test(err.message)) {
+                console.warn("[EvidenceRegistry] Extension context invalidated — storage skipped.");
+                resolve(); // Don't treat as error, just skip
+                return;
+              }
+              reject(err);
+            } else {
+              resolve();
+            }
+          });
         });
       } catch (e) {
+        // If context invalidated, just skip — evidence will be re-collected on next init
+        if (e && typeof e.message === "string" && /invalidated|context/i.test(e.message)) {
+          console.warn("[EvidenceRegistry] Context invalidated during save — skipping.");
+          return;
+        }
         console.warn("[EvidenceRegistry] Error saving to storage:", e);
       }
     }

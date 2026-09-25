@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Git commit-msg hook enforcing KAN ticket format
+
+COMMIT_MSG_FILE="$1"
+FIRST_LINE=$(head -n 1 "$COMMIT_MSG_FILE")
+
+# Allow merge commits and rebase internal commits
+if [[ "$FIRST_LINE" =~ ^Merge.* ]] || [[ "$FIRST_LINE" =~ ^fixup!.* ]] || [[ "$FIRST_LINE" =~ ^squash!.* ]]; then
+  exit 0
+fi
+
+# Regex checking KAN ticket format
+PATTERN="^KAN-[0-9]+(:| ).+"
+
+if [[ ! "$FIRST_LINE" =~ $PATTERN ]]; then
+  echo "❌ [Governance Hook] Commit rejected: Missing or invalid Jira Ticket ID."
+  echo "👉 Commit message must start with 'KAN-<id>: <description>'"
+  echo "   Example: KAN-118: feat: implement governance commit hook"
+  exit 1
+fi
+
+echo "✅ [Governance Hook] Commit message validated: $FIRST_LINE"
+exit 0

@@ -1,0 +1,1829 @@
+{
+  "test_scenarios": [
+    {
+      "id": "TS-001",
+      "name": "Connection Singleton Guard - Concurrent Connect Calls",
+      "description": "Verify that multiple concurrent calls to BridgeSocketManager.connect() from different entry points (chrome.storage.onChanged, chrome.alarms.onAlarm, manual trigger) result in only ONE WebSocket connection being created, not multiple competing connections.",
+      "setup": {
+        "environment": "Unit test with mocked Chrome APIs",
+        "mock_apis": [
+          "chrome.storage.sync",
+          "chrome.storage.session",
+          "chrome.alarms",
+          "chrome.runtime.onConnect",
+          "WebSocket"
+        ]
+      },
+      "steps": [
+        "Create a BridgeSocketManager instance with mocked WebSocket that counts constructor calls",
+        "Call connect() from 3 concurrent 'threads' (using Promise.resolve().then() chains)",
+        "Verify WebSocket constructor was called exactly ONCE",
+        "Verify all 3 callers received the same connection success event",
+        "After connection, call connect() again - verify it's a no-op (no new WebSocket)",
+        "Simulate connection drop, then call connect() from 2 entry points simultaneously - verify only one reconnect attempt"
+      ],
+      "expected_results": [
+        "WebSocket constructor call count: 1 (not 3)",
+        "All concurrent callers resolve with same connected state",
+        "Second connect() call during CONNECTED state is immediate no-op",
+        "Reconnect after disconnect spawns exactly one new WebSocket"
+      ],
+      "category": "connection_singleton",
+      "risk_level": "critical",
+      "automated": true
+    },
+    {
+      "id": "TS-002",
+      "name": "Connection Singleton Guard - SW Restart State Recovery",
+      "description": "Verify that after a Chrome MV3 Service Worker restart, the connection state is properly recovered from chrome.storage.session and only one reconnect is attempted, not a storm of concurrent connects.",
+      "setup": {
+        "environment": "Unit test with mocked Chrome APIs simulating SW restart",
+        "simulators": [
+          "service_worker_restart"
+        ]
+      },
+      "steps": [
+        "Establish a connection (WebSocket open, state = CONNECTED)",
+        "Simulate SW restart: clear all JS state (this.socket = null, this.state = DISCONNECTED)",
+        "Simulate chrome.storage.session containing saved instanceId",
+        "Fire chrome.alarms.onAlarm (keepalive) AND chrome.storage.onChanged simultaneously",
+        "Verify only ONE connect() is in-flight at a time",
+        "Verify connection is re-established successfully",
+        "Verify instanceId is preserved across restart"
+      ],
+      "expected_results": [
+        "No 'Cannot construct WebSocket' errors from multiple concurrent attempts",
+        "Single WebSocket connection re-established",
+        "instanceId from chrome.storage.session is used (not regenerated)",
+        "Connection state machine transitions: DISCONNECTED -> CONNECTING -> CONNECTED"
+      ],
+      "category": "connection_singleton",
+      "risk_level": "critical",
+      "automated": true
+    },
+    {
+      "id": "TS-003",
+      "name": "TTL Cleanup - Server-Side Idle Connection Auto-Close",
+      "description": "Verify that the server-side Durable Object closes a WebSocket connection that has been idle (no PING/PONG/any message) for more than 45 seconds, and clears the activeConnection state.",
+      "setup": {
+        "environment": "Integration test against staging worker OR isolated DO test harness",
+        "timing": "45s idle threshold + 15s keepalive interval = ~60s total test time"
+      },
+      "steps": [
+        "Connect a WebSocket to /bridge with valid token",
+        "Send SESSION_READY to establish session",
+        "Do NOT send any messages for 46+ seconds (no PING responses either)",
+        "Verify server closes the connection (onclose fires with code 1000, reason 'Stale connection')",
+        "Verify activeConnection is null after close",
+        "Verify a new connection from same instanceId is accepted (not 409)"
+      ],
+      "expected_results": [
+        "After 46s idle: WebSocket onclose fires with close code 1000",
+        "Server log shows: '[Bridge DO] Socket idle >45s, closing as stale'",
+        "activeConnection === null after cleanup",
+        "New connection from same instanceId: accepted (reconnect)"
+      ],
+      "category": "ttl_cleanup",
+      "risk_level": "high",
+      "automated": true,
+      "note": "Can be accelerated in test by temporarily setting idle threshold to 5s"
+    },
+    {
+      "id": "TS-004",
+      "name": "TTL Cleanup - Client-Side Stale Socket Detection",
+      "description": "Verify that the client-side BridgeSocketManager detects a stale connection (open WebSocket but no messages for 60s) and initiates a reconnect.",
+      "setup": {
+        "environment": "Unit test with mocked WebSocket and timers"
+      },
+      "steps": [
+        "Create BridgeSocketManager, connect() succeeds",
+        "Mock WebSocket to be 'open' but never deliver messages",
+        "Advance timer past 60s idle threshold",
+        "Verify manager transitions to RECONNECTING state",
+        "Verify reconnect attempt is made",
+        "After successful reconnect, verify state returns to CONNECTED"
+      ],
+      "expected_results": [
+        "After 60s idle: state changes from CONNECTED to RECONNECTING",
+        "Reconnect attempt scheduled",
+        "On successful reconnect: state returns to CONNECTED",
+        "reconnectAttempts counter incremented appropriately"
+      ],
+      "category": "ttl_cleanup",
+      "risk_level": "high",
+      "automated": true
+    },
+    {
+      "id": "TS-005",
+      "name": "Instance ID Tracking - Same Instance Reconnect",
+      "description": "Verify that when the same extension instance (same instanceId) reconnects after a disconnect, the server accepts the connection and properly replaces the old socket.",
+      "setup": {
+        "environment": "Integration test against staging worker",
+        "identity": "Single instanceId used for both connections"
+      },
+      "steps": [
+        "Connect WebSocket with instanceId=A, token=valid",
+        "Send SESSION_READY to establish session state",
+        "Close the WebSocket (normal close, code 1000)",
+        "Immediately connect a new WebSocket with same instanceId=A",
+        "Verify connection is ACCEPTED (not 409)",
+        "Verify old socket was closed by server (if still open)",
+        "Verify new connection receives session state or requests sync"
+      ],
+      "expected_results": [
+        "First connection: 101 Switching Protocols (accepted)",
+        "Second connection with same instanceId: 101 (accepted, reconnect)",
+        "Server log shows: 'Same device reconnecting - closing old connection'",
+        "No 409 Conflict returned for same-instance reconnect"
+      ],
+      "category": "instance_id_tracking",
+      "risk_level": "critical",
+      "automated": true
+    },
+    {
+      "id": "TS-006",
+      "name": "Instance ID Tracking - Different Instance, Stale Old Connection",
+      "description": "Verify that when a DIFFERENT instanceId connects and the old connection is stale (idle >45s), the server treats the old connection as stale, closes it, and accepts the new connection.",
+      "setup": {
+        "environment": "Integration test against staging worker",
+        "identity": "instanceId=A for first connection, instanceId=B for second"
+      },
+      "steps": [
+        "Connect WebSocket with instanceId=A",
+        "Leave connection idle for 46+ seconds (no messages)",
+        "Verify server closes connection A as stale (on server side)",
+        "Connect new WebSocket with instanceId=B (different instance, same token)",
+        "Verify connection B is ACCEPTED (not 409)",
+        "Verify server log shows stale detection and replacement"
+      ],
+      "expected_results": [
+        "Connection A closed by server after 45s idle (stale cleanup)",
+        "Connection B from different instanceId: accepted (old was stale)",
+        "NOT a 409 - server recognized old connection was dead"
+      ],
+      "category": "instance_id_tracking",
+      "risk_level": "high",
+      "automated": true
+    },
+    {
+      "id": "TS-007",
+      "name": "Instance ID Tracking - Different Instance, Healthy Old Connection (Genuine 409)",
+      "description": "Verify that when a DIFFERENT instanceId tries to connect while the old connection is still HEALTHY (recent activity), the server correctly rejects with 409 Conflict.",
+      "setup": {
+        "environment": "Integration test against staging worker",
+        "identity": "instanceId=A for first connection, instanceId=B for second"
+      },
+      "steps": [
+        "Connect WebSocket with instanceId=A",
+        "Send PONG responses to keep connection healthy (within 45s window)",
+        "Attempt to connect new WebSocket with instanceId=B (same token)",
+        "Verify server returns 409 Conflict",
+        "Verify server log shows: 'Rejected connection from secondary device'",
+        "Verify original connection A remains healthy and active"
+      ],
+      "expected_results": [
+        "Connection B: HTTP 409 Conflict returned",
+        "Connection A: remains open and healthy",
+        "Server correctly distinguishes 'reconnect' from 'new device'",
+        "This is the GENUINE 409 case that should still be rejected"
+      ],
+      "category": "instance_id_tracking",
+      "risk_level": "critical",
+      "automated": true,
+      "verification_goal": "Confirm 409 still correctly rejected for genuine conflicts"
+    },
+    {
+      "id": "TS-008",
+      "name": "Multiplexed Protocol - Multiple Requests on Same Connection",
+      "description": "Verify that multiple concurrent requests (EXECUTE_REQUEST, PREPARE_MODEL, PREPARE_SCOPE) can be multiplexed over a single WebSocket connection without requiring reconnection.",
+      "setup": {
+        "environment": "Integration test against staging worker OR unit test with mocked DO",
+        "protocol_version": 2
+      },
+      "steps": [
+        "Connect WebSocket, send SESSION_READY with tokens",
+        "Send PREPARE_MODEL for model X, wait for MODEL_READY",
+        "While model is preparing, send a second PREPARE_MODEL for model Y",
+        "Send EXECUTE_REQUEST for conversation 1",
+        "Send EXECUTE_REQUEST for conversation 2 (different requestId)",
+        "Send PREPARE_SCOPE for notebook scope",
+        "Verify all requests are handled concurrently without connection drops",
+        "Verify response streams are correctly routed to waiting handlers"
+      ],
+      "expected_results": [
+        "All requests use the same WebSocket connection (no reconnect triggered)",
+        "Each requestId gets its own response handler",
+        "No 409 errors from concurrent request handling",
+        "STREAM_CHUNK, STREAM_DONE, STREAM_ERROR correctly delivered to respective handlers"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "medium",
+      "automated": true
+    },
+    {
+      "id": "TS-009",
+      "name": "Multiplexed Protocol - Scope Switch Without Reconnect",
+      "description": "Verify that switching scope (app -> notebook, or app -> app:conversationId) happens over the existing WebSocket connection without requiring a reconnect.",
+      "setup": {
+        "environment": "Integration test against staging worker with mock tab coordinator",
+        "scenarios": [
+          "app_to_notebook",
+          "app_to_app_conversation",
+          "notebook_to_app"
+        ]
+      },
+      "steps": [
+        "Connect WebSocket, establish SESSION_READY with scope='app'",
+        "Send PREPARE_SCOPE with target='notebook:abc123'",
+        "Verify SCOPE_READY response received on SAME WebSocket",
+        "Verify no WebSocket close/reconnect occurred",
+        "Verify currentScope on server is updated to 'notebook:abc123'",
+        "Send another PREPARE_SCOPE to 'app:conv456'",
+        "Verify second scope switch also completes without reconnect"
+      ],
+      "expected_results": [
+        "Scope switch completes over existing connection",
+        "No onclose/onopen cycle during scope switch",
+        "Server currentScope updated correctly",
+        "PREPARE_SCOPE -> SCOPE_READY round-trip succeeds"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "medium",
+      "automated": true
+    },
+    {
+      "id": "TS-010",
+      "name": "Edge Case - Service Worker Restart and Re-establish",
+      "description": "End-to-end simulation of a Chrome MV3 Service Worker restart: connection drops without close frame, SW restarts, reads state from chrome.storage.session, and re-establishes connection with same instanceId.",
+      "setup": {
+        "environment": "Full integration test with Chrome extension loaded in test browser OR simulated environment",
+        "simulators": [
+          "service_worker_restart",
+          "network_layer"
+        ]
+      },
+      "steps": [
+        "Load extension, establish WebSocket connection to staging worker",
+        "Send SESSION_READY, verify session established",
+        "Simulate SW restart: all JS state lost (socket=null, state=disconnected)",
+        "Simulate SW startup: reads instanceId from chrome.storage.session",
+        "SW automatically calls connect() (from startup code or alarm)",
+        "New WebSocket connects with SAME instanceId",
+        "Server sees same instanceId, accepts reconnect",
+        "Extension sends SESSION_READY to re-establish session state",
+        "Verify full functionality restored (can send EXECUTE_REQUEST successfully)"
+      ],
+      "expected_results": [
+        "SW restart does NOT cause 409 (same instanceId reconnects)",
+        "Connection re-established within 5 seconds of restart",
+        "Session state re-synchronized (protocol version, model catalog)",
+        "No user-visible error; extension continues working"
+      ],
+      "category": "edge_cases",
+      "risk_level": "critical",
+      "automated": false,
+      "note": "Requires Chrome extension test environment or manual verification with browser devtools"
+    },
+    {
+      "id": "TS-011",
+      "name": "Edge Case - Network Blip (Transient Connection Loss)",
+      "description": "Simulate a brief network interruption (TCP connection drop) and verify the client detects the disconnect, waits for the network to recover, and reconnects successfully without triggering a 409.",
+      "setup": {
+        "environment": "Integration test with network simulation OR manual test with browser devtools throttling",
+        "scenarios": [
+          "3-second dropout",
+          "10-second dropout",
+          "intermittent packet loss"
+        ]
+      },
+      "steps": [
+        "Establish stable WebSocket connection to staging worker",
+        "Send periodic PONG responses to keep connection healthy",
+        "Simulate network drop: block WebSocket traffic for 5 seconds",
+        "Client onclose fires (connection lost)",
+        "Client transitions to RECONNECTING, schedules reconnect with backoff",
+        "Restore network (unblock WebSocket traffic)",
+        "Client reconnect attempt succeeds",
+        "Server accepts reconnect (same instanceId, old connection was dropped)",
+        "Verify session recovery: protocol version synced, can send requests"
+      ],
+      "expected_results": [
+        "Network blip detected: onclose fires with appropriate code",
+        "Client reconnect triggered after backoff (not immediate storm)",
+        "Server accepts reconnect (old socket was dead, same instanceId)",
+        "No 409 for network blip reconnect",
+        "Session recovers automatically"
+      ],
+      "category": "edge_cases",
+      "risk_level": "high",
+      "automated": false,
+      "note": "Can be tested with Chrome devtools Network throttling or tc/netem in staging"
+    },
+    {
+      "id": "TS-012",
+      "name": "Edge Case - 409 Handling Improvement Verification",
+      "description": "Comprehensive verification that 409 Conflict is STILL correctly returned for genuine conflicts (different device, different token, or different instance with healthy existing connection), while NOT being returned incorrectly for legitimate reconnects.",
+      "setup": {
+        "environment": "Integration test against staging worker with multiple WebSocket clients",
+        "matrix": [
+          [
+            "same_instance_id",
+            "same_token",
+            "old_connection_stale",
+            "expected: ACCEPT"
+          ],
+          [
+            "same_instance_id",
+            "same_token",
+            "old_connection_healthy",
+            "expected: ACCEPT (reconnect replaces)"
+          ],
+          [
+            "different_instance_id",
+            "same_token",
+            "old_connection_stale",
+            "expected: ACCEPT (stale replaced)"
+          ],
+          [
+            "different_instance_id",
+            "same_token",
+            "old_connection_healthy",
+            "expected: 409 Conflict"
+          ],
+          [
+            "different_token",
+            "any",
+            "any",
+            "expected: 401 Unauthorized"
+          ]
+        ]
+      },
+      "steps": [
+        "For each row in the matrix above:",
+        "  1. Set up the 'old connection' state as specified",
+        "  2. Attempt a new WebSocket connection with the specified parameters",
+        "  3. Record the HTTP status code returned",
+        "  4. Verify against expected result",
+        "Verify server logs correctly identify the reason for each decision",
+        "Verify instanceId is logged on every connection accept/reject event"
+      ],
+      "expected_results": [
+        "Matrix row 1 (same_id, stale): ACCEPT - reconnect after stale cleanup",
+        "Matrix row 2 (same_id, healthy): ACCEPT - reconnect replaces old",
+        "Matrix row 3 (diff_id, stale): ACCEPT - stale connection replaced",
+        "Matrix row 4 (diff_id, healthy): 409 - GENUINE conflict, correctly rejected",
+        "Matrix row 5 (diff_token): 401 - authentication failure",
+        "All decisions logged with instanceId for audit trail"
+      ],
+      "category": "edge_cases",
+      "risk_level": "critical",
+      "automated": true,
+      "verification_goal": "Verify 409 still correctly rejected for genuine conflicts"
+    },
+    {
+      "id": "TS-013",
+      "name": "Edge Case - Extension Reinstall (New Instance ID)",
+      "description": "Verify that when the extension is reinstalled (new instanceId generated, chrome.storage.session cleared), the server accepts the new connection because the old instance is no longer active (browser restart clears old socket).",
+      "setup": {
+        "environment": "Manual test or simulated environment",
+        "simulators": [
+          "extension_reinstall"
+        ]
+      },
+      "steps": [
+        "Install extension, establish connection with instanceId=A",
+        "Close browser completely (clears chrome.storage.session, closes sockets)",
+        "Reinstall extension (or clear extension data and reload)",
+        "New instanceId=B is generated",
+        "Connect with instanceId=B",
+        "Server has no active connection for instanceId=A (browser was closed)",
+        "Verify connection accepted (not 409)",
+        "Verify server treats this as a fresh connection"
+      ],
+      "expected_results": [
+        "New instanceId accepted (no existing healthy connection to conflict with)",
+        "Not a 409 - this is a legitimate new installation",
+        "Server starts fresh with new instance"
+      ],
+      "category": "edge_cases",
+      "risk_level": "medium",
+      "automated": false,
+      "note": "Requires manual browser testing or simulated extension environment"
+    },
+    {
+      "id": "TS-014",
+      "name": "Multiplexed Protocol - Single WS Carries 3 Scopes Simultaneously",
+      "description": "Verify that a single WebSocket connection can carry message traffic for 3 different scopes (app, app:conv-X, notebook:Y) concurrently without scope collision or cross-contamination. Each scope maintains its own session state, streaming handlers, and model preparation state.",
+      "setup": {
+        "environment": "Integration test against staging worker with mocked extension that simulates 3 scope sessions",
+        "protocol_version": 3,
+        "scopes": [
+          "app",
+          "app:conv-a1b2c3",
+          "notebook:ntb-456def"
+        ]
+      },
+      "steps": [
+        "Connect WebSocket with instanceId=A, send SESSION_READY with scope='app'",
+        "Send PREPARE_SCOPE for 'app:conv-a1b2c3' - verify SCOPE_READY received, currentScope updated",
+        "Send PREPARE_SCOPE for 'notebook:ntb-456def' - verify SCOPE_READY received",
+        "Verify server tracks all 3 scopes as active session contexts (not just currentScope)",
+        "Send EXECUTE_REQUEST with scope='app' - verify routed to app handler",
+        "Send EXECUTE_REQUEST with scope='app:conv-a1b2c3' - verify routed to conversation handler, NOT app handler",
+        "Send EXECUTE_REQUEST with scope='notebook:ntb-456def' - verify routed to notebook handler",
+        "Verify each requestId's response is delivered to the correct scope's waiting handler",
+        "Verify no scope cross-contamination: app:conv response does not leak to app handler",
+        "Verify server log shows 3 active scope sessions for this instanceId"
+      ],
+      "expected_results": [
+        "Single WebSocket connection carries all 3 scopes (no reconnect triggered)",
+        "Each scope has independent session state (conversationId, responseId, choiceId per scope)",
+        "EXECUTE_REQUEST for app:conv-a1b2c3 does NOT route to app handler",
+        "EXECUTE_REQUEST for notebook:ntb-456def does NOT route to app handler",
+        "STREAM_CHUNK for notebook scope is not delivered to app:conv handler",
+        "Server maintains scopeSessions Map with 3 entries for this instanceId",
+        "currentScope reflects the MOST RECENT scope switch, but other scopes remain active"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "critical",
+      "automated": true,
+      "phase4_only": true,
+      "note": "Requires server-side scopeSessions Map (multi-scope session state). Currently only currentScope is tracked - this test validates the multi-scope enhancement."
+    },
+    {
+      "id": "TS-015",
+      "name": "Multiplexed Protocol - Scope Subscribe/Unsubscribe Mid-Session",
+      "description": "Verify that scopes can be dynamically subscribed (PREPARE_SCOPE) and unsubscribed (SCOPE_UNSUBSCRIBE or scope cleanup on navigation away) during an active session, without disrupting other active scopes or the WebSocket connection.",
+      "setup": {
+        "environment": "Integration test against staging worker",
+        "protocol_version": 3,
+        "initial_scope": "app"
+      },
+      "steps": [
+        "Connect WebSocket, establish SESSION_READY with scope='app'",
+        "Subscribe to scope 'app:conv-a1b2c3' via PREPARE_SCOPE - verify SCOPE_READY",
+        "Subscribe to scope 'notebook:ntb-456def' via PREPARE_SCOPE - verify SCOPE_READY",
+        "Verify both scopes are in the active scopeSessions map",
+        "Simulate user navigating away from notebook tab (extension sends SCOPE_UNSUBSCRIBE or navigates to different scope)",
+        "Verify notebook:ntb-456def is removed from active scopeSessions",
+        "Verify app and app:conv-a1b2c3 scopes remain active and functional",
+        "Send EXECUTE_REQUEST to app:conv-a1b2c3 - verify it still works after notebook unsubscribe",
+        "Send EXECUTE_REQUEST to app - verify it still works",
+        "Subscribe to a NEW scope 'app:conv-new789' - verify it works without affecting existing scopes",
+        "Unsubscribe from app:conv-a1b2c3 - verify it's removed, other scopes unaffected",
+        "Verify WebSocket remains open throughout all subscribe/unsubscribe operations"
+      ],
+      "expected_results": [
+        "Scope subscribe (PREPARE_SCOPE -> SCOPE_READY) adds scope to active sessions",
+        "Scope unsubscribe removes scope from active sessions without disrupting others",
+        "WebSocket connection remains stable throughout (no onclose events)",
+        "Active scope count decreases correctly after unsubscribe",
+        "Remaining scopes continue to receive messages correctly",
+        "No STREAM_ERROR for remaining scopes after another scope unsubscribes",
+        "Server log shows scope added/removed events with scope ID"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "high",
+      "automated": true,
+      "phase4_only": true,
+      "note": "Requires server-side scope unsubscribe handling. Extension sends SCOPE_UNSUBSCRIBE or navigates away; server cleans up scope session."
+    },
+    {
+      "id": "TS-016",
+      "name": "Multiplexed Protocol - Reconnect Preserves All Scope Sessions",
+      "description": "Verify that after a WebSocket reconnect (SW restart, network blip, or deliberate disconnect), all previously active scope sessions are preserved and re-established, not lost. The extension retransmits scope state for each active scope.",
+      "setup": {
+        "environment": "Integration test against staging worker with mocked extension",
+        "protocol_version": 3,
+        "pre_reconnect_scopes": [
+          "app",
+          "app:conv-a1b2c3",
+          "notebook:ntb-456def"
+        ]
+      },
+      "steps": [
+        "Connect WebSocket, establish SESSION_READY with scope='app'",
+        "Subscribe to app:conv-a1b2c3 and notebook:ntb-456def (3 scopes active)",
+        "Send EXECUTE_REQUEST to each scope - verify all 3 work",
+        "Simulate disconnect: close WebSocket (normal close, code 1000)",
+        "Simulate SW restart: extension reinitializes, retrieves instanceId from chrome.storage.session",
+        "Extension reconnects with SAME instanceId",
+        "Extension sends SESSION_READY with full scope list: ['app', 'app:conv-a1b2c3', 'notebook:ntb-456def']",
+        "Server receives reconnect with same instanceId - accepts (not 409)",
+        "Server restores all 3 scope sessions from the SESSION_READY scope list",
+        "Extension sends PREPARE_SCOPE for each scope that needs reconfirmation",
+        "Verify all 3 scopes are re-established and functional",
+        "Send EXECUTE_REQUEST to each of the 3 scopes - verify all respond correctly",
+        "Verify no scope session data was lost during reconnect"
+      ],
+      "expected_results": [
+        "Reconnect with same instanceId: accepted (101, no 409)",
+        "All 3 scope sessions restored after reconnect",
+        "Extension can re-send scope state in SESSION_READY (multi-scope aware)",
+        "Scope sessions that were in-flight (streaming) are re-established or cleanly terminated",
+        "No STREAM_ERROR for scopes that were active before disconnect",
+        "Server log shows: 'Reconnected instance A, restoring N scope sessions'",
+        "Epoch counter increments on reconnect but scope session data is preserved"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "critical",
+      "automated": true,
+      "phase4_only": true,
+      "note": "Requires: (1) server persists scopeSessions per instanceId across reconnects, (2) extension sends multi-scope list in SESSION_READY, (3) epoch bump does not clear scopeSessions."
+    },
+    {
+      "id": "TS-017",
+      "name": "Multiplexed Protocol - Message Ordering Across Scopes",
+      "description": "Verify that messages for different scopes sent over the same WebSocket maintain correct ordering per-scope. A stream of messages for scope A should not be interleaved with or reordered relative to scope B messages in a way that corrupts either stream.",
+      "setup": {
+        "environment": "Integration test against staging worker with mocked extension",
+        "protocol_version": 3,
+        "scenarios": [
+          "Interleaved sends: app chunk, notebook chunk, app chunk, app done - verify each scope gets correct sequence",
+          "Concurrent streams: 2 EXECUTE_REQUESTs (different scopes) in-flight simultaneously - responses arrive in order per scope",
+          "Fast scope switch: send to scope A, switch to B, send to B, switch back to A - verify A's in-flight stream is not corrupted"
+        ]
+      },
+      "steps": [
+        "Connect WebSocket, establish 2 scopes: app and notebook:ntb-456def",
+        "Scenario 1 - Interleaved messages:",
+        "  Send STREAM_CHUNK for scope=app (chunk 1)",
+        "  Send STREAM_CHUNK for scope=notebook (chunk 1)",
+        "  Send STREAM_CHUNK for scope=app (chunk 2)",
+        "  Send STREAM_DONE for scope=app",
+        "  Send STREAM_CHUNK for scope=notebook (chunk 2)",
+        "  Send STREAM_DONE for scope=notebook",
+        "  Verify app received: chunk1, chunk2, done (in order, no notebook chunks mixed in)",
+        "  Verify notebook received: chunk1, chunk2, done (in order, no app chunks mixed in)",
+        "Scenario 2 - Concurrent streams:",
+        "  Send EXECUTE_REQUEST for scope=app (requestId=req-app-1)",
+        "  Send EXECUTE_REQUEST for scope=notebook (requestId=req-nb-1)",
+        "  Verify both streams progress independently",
+        "  Verify req-app-1 response never contains notebook data",
+        "  Verify req-nb-1 response never contains app data",
+        "Scenario 3 - Fast scope switch during stream:",
+        "  Start EXECUTE_REQUEST for scope=app (long-running stream)",
+        "  While streaming, switch scope to notebook",
+        "  Send EXECUTE_REQUEST for scope=notebook",
+        "  Switch back to app",
+        "  Verify app stream continues and completes correctly (not cancelled or mixed)",
+        "  Verify notebook stream also completes correctly"
+      ],
+      "expected_results": [
+        "Per-scope message ordering is preserved regardless of interleaving",
+        "STREAM_CHUNK for scope X is always delivered to scope X's handler",
+        "STREAM_DONE for scope X correctly terminates only scope X's stream",
+        "Concurrent streams for different scopes do not interfere",
+        "Scope switch during an active stream does NOT cancel or corrupt the in-flight stream",
+        "requestId uniquely identifies a stream within a scope; no cross-scope collisions",
+        "Server log shows scope-tagged message routing for each message"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "high",
+      "automated": true,
+      "phase4_only": true,
+      "note": "The current implementation uses a single activeStreams Map keyed by requestId. This test validates that requestId is unique per scope session and that routing prefix (scope) is preserved end-to-end."
+    },
+    {
+      "id": "TS-018",
+      "name": "Multiplexed Protocol - Epoch Bump Doesn't Lose Scope State",
+      "description": "Verify that when the server's epoch counter increments (on new connection/reconnect), the scope session state for the reconnecting instance is preserved, not cleared. The epoch is a session-lifecycle marker, not a scope-state reset trigger.",
+      "setup": {
+        "environment": "Integration test against staging worker",
+        "protocol_version": 3,
+        "initial_scopes": [
+          "app",
+          "app:conv-a1b2c3",
+          "notebook:ntb-456def"
+        ]
+      },
+      "steps": [
+        "Connect WebSocket with instanceId=A, epoch=1",
+        "Establish 3 scope sessions: app, app:conv-a1b2c3, notebook:ntb-456def",
+        "Record epoch=1 and scope session state (scope IDs, conversation state per scope)",
+        "Disconnect (normal close)",
+        "Reconnect with same instanceId=A - server assigns epoch=2",
+        "Extension sends SESSION_READY with scope list (multi-scope aware)",
+        "Verify server restores all 3 scope sessions",
+        "Verify epoch=2 in server log but scopeSessions Map still has 3 entries",
+        "Verify conversation state (conversationId, responseId, choiceId) per scope is preserved or re-synchronized",
+        "Send EXECUTE_REQUEST to each scope - verify all 3 work with epoch=2",
+        "Disconnect again, reconnect - epoch=3",
+        "Verify scope sessions still preserved after epoch=3",
+        "Verify epoch counter incremented correctly (1->2->3) but scope state survived each bump"
+      ],
+      "expected_results": [
+        "Epoch increments on each reconnect (1->2->3)",
+        "Scope session state (scopeSessions Map) is NOT cleared on epoch bump",
+        "All 3 scopes functional after each reconnect with new epoch",
+        "Server log shows: 'Epoch bumped to N, preserving M scope sessions for instance A'",
+        "conversationState per scope is re-synced from extension on SESSION_READY if needed",
+        "No scope session loss across epoch boundaries",
+        "The epoch is used for conflict detection (stale connection identification), not scope state management"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "critical",
+      "automated": true,
+      "phase4_only": true,
+      "note": "Current implementation increments epochCounter on every recordConnection() call. This test ensures that scopeSessions (if implemented) are NOT cleared by the epoch increment - they are separate concerns."
+    }
+  ],
+  "integration_test_plan": {
+    "overview": "Phase 5 integration testing validates that all phases 1-4 changes work correctly together in a staging environment before production rollout. Tests are organized into unit tests (mocked dependencies), integration tests (against staging worker), and manual/end-to-end tests (Chrome extension in browser).",
+    "test_environments": [
+      {
+        "name": "Unit Test Environment",
+        "description": "Node.js test runner with mocked Chrome APIs and WebSocket. Runs offline without network access.",
+        "command": "cd /Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker && npm test -- tests/phase5-connection.test.mjs",
+        "dependencies": [
+          "node >= 22",
+          "wrangler ^4.0.0"
+        ],
+        "tests_run": [
+          "TS-001",
+          "TS-002",
+          "TS-004",
+          "TS-008",
+          "TS-009"
+        ]
+      },
+      {
+        "name": "Staging Worker Integration Environment",
+        "description": "Tests against the deployed staging worker at gemini-web-bridge-staging.pansakorn-pho.workers.dev. Requires valid staging token.",
+        "command": "cd /Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker && WORKER_URL=https://gemini-web-bridge-staging.pansakorn-pho.workers.dev CF_TOKEN=staging-token-change-me npm test -- tests/phase5-integration.test.mjs",
+        "dependencies": [
+          "staging worker deployed",
+          "CF_TOKEN configured"
+        ],
+        "tests_run": [
+          "TS-003",
+          "TS-005",
+          "TS-006",
+          "TS-007",
+          "TS-012"
+        ]
+      },
+      {
+        "name": "Manual/Browser E2E Environment",
+        "description": "Chrome extension loaded with staging worker URL, tested manually via Chrome DevTools or automated via ChromeDriver/Puppeteer.",
+        "setup": [
+          "Load unpacked extension with modified background.js pointing to staging URL",
+          "Open Chrome DevTools Console to monitor logs",
+          "Use chrome.alarms and chrome.storage APIs to simulate events"
+        ],
+        "tests_run": [
+          "TS-010",
+          "TS-011",
+          "TS-013"
+        ]
+      }
+    ],
+    "test_execution_order": [
+      {
+        "phase": "Pre-Deployment validation",
+        "tests": [
+          "TS-001",
+          "TS-002",
+          "TS-004",
+          "TS-008",
+          "TS-009"
+        ],
+        " rationale": "Run unit tests first to catch logic errors before deploying to staging"
+      },
+      {
+        "phase": "Staging Deployment",
+        "action": "Deploy server-side changes to staging worker"
+      },
+      {
+        "phase": "Post-Deployment Integration Tests",
+        "tests": [
+          "TS-003",
+          "TS-005",
+          "TS-006",
+          "TS-007",
+          "TS-012"
+        ],
+        "rationale": "Run against live staging worker to validate server-side behavior"
+      },
+      {
+        "phase": "Manual E2E Verification",
+        "tests": [
+          "TS-010",
+          "TS-011",
+          "TS-013"
+        ],
+        "rationale": "Browser-level tests that require Chrome extension environment"
+      },
+      {
+        "phase": "Go/No-Go Decision",
+        "criteria": [
+          "All automated tests pass",
+          "No unexpected 409 errors in staging logs",
+          "409 correctly returned for genuine conflicts (TS-007, TS-012)",
+          "TTL cleanup functioning (TS-003)"
+        ]
+      }
+    ],
+    "success_criteria": {
+      "critical_pass": [
+        "TS-001: Connection singleton prevents concurrent WebSocket creation",
+        "TS-005: Same instanceId reconnect is accepted (no 409)",
+        "TS-007: Different instanceId + healthy old connection returns 409",
+        "TS-012: Full 409 decision matrix produces correct results",
+        "TS-010: SW restart does not cause spurious 409"
+      ],
+      "high_pass": [
+        "TS-003: Server TTL cleanup closes idle connections after 45s",
+        "TS-006: Different instance + stale old connection is accepted",
+        "TS-011: Network blip reconnect succeeds without 409"
+      ],
+      "medium_pass": [
+        "TS-002: SW restart state recovery works",
+        "TS-004: Client-side stale socket detection triggers reconnect",
+        "TS-008: Multiple requests multiplex over single connection",
+        "TS-009: Scope switch happens without reconnect",
+        "TS-013: Extension reinstall (new instanceId) is accepted"
+      ]
+    },
+    "failure_handling": {
+      "unit_test_failure": "Fix the code and re-run unit tests. Do not deploy to staging until unit tests pass.",
+      "integration_test_failure": "Check staging worker logs for errors. If server-side bug, fix and redeploy to staging. If test bug, fix test and re-run.",
+      "409_regression": "If TS-007 or TS-012 shows 409 NOT being returned for genuine conflicts, this is a critical regression. Do NOT proceed to production. Investigate server-side connection acceptance logic.",
+      "false_409": "If TS-005 or TS-010 shows 409 being returned for legitimate reconnects, this is the original bug recurring. Fix server-side instance ID tracking and redeploy.",
+      "ttl_not_working": "If TS-003 shows connections not being closed after 45s idle, check server-side keepalive loop and stale detection logic."
+    }
+  },
+  "staging_deployment": {
+    "target_environment": "Cloudflare Workers staging",
+    "worker_name": "gemini-web-bridge-staging",
+    "staging_url": "wss://gemini-web-bridge-staging.pansakorn-pho.workers.dev/bridge",
+    "staging_dashboard": "https://dash.cloudflare.com/<account>/workers-and-pages/gemini-web-bridge-staging",
+    "prerequisites": [
+      "Cloudflare Wrangler CLI installed and authenticated (wrangler --version)",
+      "Access to staging worker via Cloudflare dashboard or wrangler",
+      "Staging BRIDGE_AUTH_TOKEN configured (currently: 'staging-token-change-me' in wrangler.staging.toml)",
+      "Durable Object migration applied (v1-staging tag)"
+    ],
+    "deployment_steps": [
+      {
+        "step": 1,
+        "action": "Review and commit all Phase 1-4 changes",
+        "commands": [
+          "cd /Users/kimlenglim/Project/gemini-web-bridge",
+          "git status",
+          "git diff --stat",
+          "git add cloudflare-worker/src/index.js extension-cloudflare/background.js",
+          "git commit -m 'Phase 1-4: Connection singleton guard, instance ID tracking, TTL cleanup, scope-agnostic connection layer'"
+        ]
+      },
+      {
+        "step": 2,
+        "action": "Configure wrangler for staging",
+        "commands": [
+          "cd /Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker",
+          "# Ensure wrangler.toml has correct staging config",
+          "# Verify wrangler.staging.toml exists and is configured",
+          "cp wrangler.staging.toml wrangler.toml.tmp && wrangler deploy --env staging --config wrangler.toml.tmp"
+        ]
+      },
+      {
+        "step": 3,
+        "action": "Deploy to staging worker",
+        "commands": [
+          "cd /Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker",
+          "wrangler deploy --env staging"
+        ],
+        "expected_output": "Success message with staging worker URL",
+        "verification": "Visit https://gemini-web-bridge-staging.pansakorn-pho.workers.dev/health and confirm status: ok"
+      },
+      {
+        "step": 4,
+        "action": "Verify Durable Object migration",
+        "commands": [
+          "wrangler inspect --env staging"
+        ],
+        "verification": "Check that GeminiBridgeDO class is present and migration v1-staging is applied"
+      },
+      {
+        "step": 5,
+        "action": "Configure extension for staging",
+        "action_detail": "Modify the extension's background.js to point to staging URL instead of production",
+        "code_change": "In extension-cloudflare/background.js, change DEFAULT_WORKER_URL to staging URL for testing",
+        "temporary_change": "const DEFAULT_WORKER_URL = 'https://gemini-web-bridge-staging.pansakorn-pho.workers.dev'",
+        "note": "This change is ONLY for testing. Do NOT commit this change to the main branch. Use a separate test branch or local override."
+      },
+      {
+        "step": 6,
+        "action": "Package and load extension for testing",
+        "commands": [
+          "cd /Users/kimlenglim/Project/gemini-web-bridge",
+          "# Use the zip-extension.py script or manual packaging",
+          "python3 scripts/zip-extension.py --output /tmp/gemini-bridge-staging-test.zip"
+        ],
+        "chrome_load": "chrome://extensions -> Load unpacked -> select extension-cloudflare directory (with modified background.js)"
+      },
+      {
+        "step": 7,
+        "action": "Monitor staging deployment health",
+        "endpoints": [
+          "GET https://gemini-web-bridge-staging.pansakorn-pho.workers.dev/health",
+          "GET https://gemini-web-bridge-staging.pansakorn-pho.workers.dev/bridge/auth-check (with staging token)",
+          "GET https://gemini-web-bridge-staging.pansakorn-pho.workers.dev/v1/models (with API token)"
+        ],
+        "logs": "Cloudflare Workers dashboard -> Logs for gemini-web-bridge-staging",
+        "metrics": "Cloudflare Dashboard -> Observability -> Worker metrics"
+      }
+    ],
+    "rollback_steps": [
+      {
+        "step": 1,
+        "action": "Identify the last known good commit",
+        "command": "git log --oneline -10",
+        "action_detail": "Find the commit hash BEFORE the Phase 1-4 changes"
+      },
+      {
+        "step": 2,
+        "action": "Revert staging to previous version",
+        "commands": [
+          "cd /Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker",
+          "git checkout <last-good-commit-hash> -- src/index.js",
+          "wrangler deploy --env staging"
+        ]
+      },
+      {
+        "step": 3,
+        "action": "Verify rollback",
+        "verification": [
+          "GET /health returns status: ok",
+          "WebSocket connection works with original behavior",
+          "Extension can connect without errors"
+        ]
+      },
+      {
+        "step": 4,
+        "action": "Restore extension to production URL",
+        "action_detail": "Revert DEFAULT_WORKER_URL in background.js to production URL",
+        "command": "git checkout HEAD -- extension-cloudflare/background.js"
+      }
+    ],
+    "post_deployment_verification": [
+      "Health endpoint: GET /health returns 200 with status: ok",
+      "Auth endpoint: GET /bridge/auth-check with staging token returns 200",
+      "Model endpoint: GET /v1/models returns model catalog",
+      "WebSocket upgrade: New WebSocket to wss://.../bridge?token=staging-token establishes connection",
+      "Connection log: Server log shows 'Chrome Extension connected via WebSocket'",
+      "Instance ID logging: Server log shows instanceId on connection (if implemented in Phase 3)",
+      "No errors in staging logs for the first 5 minutes after deployment"
+    ]
+  },
+  "rollback_plan": {
+    "trigger_conditions": [
+      {
+        "condition": "TS-007 or TS-012 fails - 409 not returned for genuine conflicts",
+        "severity": "critical",
+        "action": "IMMEDIATE rollback. This is a security regression - allows device hijacking."
+      },
+      {
+        "condition": "TS-005 or TS-010 fails - legitimate reconnect returns 409",
+        "severity": "critical",
+        "action": "IMMEDIATE rollback. This is the original bug - extension becomes unusable after SW restart."
+      },
+      {
+        "condition": "TS-003 fails - TTL cleanup not working, stale connections persist",
+        "severity": "high",
+        "action": "Rollback recommended. Stale connections consume Durable Object resources and may cause issues."
+      },
+      {
+        "condition": "Multiple unit tests fail (TS-001, TS-002, TS-004)",
+        "severity": "high",
+        "action": "Do NOT deploy to production. Fix issues in staging branch and re-test."
+      },
+      {
+        "condition": "Staging worker fails to deploy or crashes on startup",
+        "severity": "critical",
+        "action": "IMMEDIATE rollback to previous working version."
+      },
+      {
+        "condition": "Extension cannot connect to staging worker at all",
+        "severity": "high",
+        "action": "Check server logs. If server-side issue, rollback. If config issue, fix and re-test."
+      }
+    ],
+    "rollback_procedure": {
+      "method": "Git revert of the Phase 1-4 commit",
+      "preserved_artifacts": [
+        "All Phase 1-4 code is committed to git before deployment",
+        "Previous production deployment is preserved in Cloudflare Workers (production worker is separate from staging)",
+        "Production worker is NOT affected by staging deployment or rollback"
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "description": "Identify the last good commit hash",
+          "command": "git log --oneline --all | head -20"
+        },
+        {
+          "step": 2,
+          "description": "Revert the Phase 1-4 commit",
+          "command": "git revert <phase-1-4-commit-hash> --no-edit"
+        },
+        {
+          "step": 3,
+          "description": "Deploy reverted code to staging",
+          "command": "wrangler deploy --env staging"
+        },
+        {
+          "step": 4,
+          "description": "Verify staging is back to previous behavior",
+          "verification": [
+            "WebSocket connections work as before",
+            "409 behavior matches pre-Phase-1-4 implementation",
+            "No instance ID tracking (reverted to origin-based checks)"
+          ]
+        },
+        {
+          "step": 5,
+          "description": "If needed, revert production as well",
+          "command": "wrangler deploy",
+          "note": "Only if production was also updated. Staging-only deploy does not require production rollback."
+        }
+      ]
+    },
+    "emergency_contact": {
+      "primary": "Developer who implemented Phase 1-4 changes",
+      "secondary": "Team lead or on-call engineer",
+      "escalation": "If rollback fails or issues persist after rollback, escalate to Cloudflare support (if worker crash) or investigate Durable Object state issues"
+    },
+    "post_rollback_actions": [
+      "Document the failure in project notes",
+      "Analyze root cause of the issue",
+      "Fix the specific issue in a new branch",
+      "Re-run all Phase 5 tests against the fix",
+      "Only re-deploy after all tests pass"
+    ]
+  },
+  "verification_checklist": [
+    {
+      "id": "VC-001",
+      "category": "Connection Singleton",
+      "check": "Verify that calling connect() three times concurrently results in exactly ONE WebSocket constructor call",
+      "method": "Unit test TS-001 with mocked WebSocket constructor counter",
+      "pass_criteria": "WebSocket constructor called exactly 1 time",
+      "automated": true
+    },
+    {
+      "id": "VC-002",
+      "category": "Connection Singleton",
+      "check": "Verify that after SW restart simulation, only one reconnect is attempted (not a storm)",
+      "method": "Unit test TS-002 with mocked Chrome APIs",
+      "pass_criteria": "Single connect() in-flight, single WebSocket created",
+      "automated": true
+    },
+    {
+      "id": "VC-003",
+      "category": "TTL Cleanup",
+      "check": "Verify server closes WebSocket connection after 45+ seconds of idle (no PING/PONG/messages)",
+      "method": "Integration test TS-003 against staging worker",
+      "pass_criteria": "onclose fires with code 1000, reason 'Stale connection' after 46s idle",
+      "automated": true
+    },
+    {
+      "id": "VC-004",
+      "category": "TTL Cleanup",
+      "check": "Verify activeConnection is null after stale socket cleanup",
+      "method": "Check server state after TS-003 completes",
+      "pass_criteria": "this.activeConnection === null",
+      "automated": true
+    },
+    {
+      "id": "VC-005",
+      "category": "Instance ID Tracking",
+      "check": "Verify same instanceId reconnect is accepted (101 Switching Protocols, not 409)",
+      "method": "Integration test TS-005 against staging worker",
+      "pass_criteria": "Second connection with same instanceId returns 101",
+      "automated": true
+    },
+    {
+      "id": "VC-006",
+      "category": "Instance ID Tracking",
+      "check": "Verify different instanceId + healthy old connection returns 409 Conflict",
+      "method": "Integration test TS-007 against staging worker",
+      "pass_criteria": "HTTP 409 returned, old connection remains healthy",
+      "automated": true,
+      "verification_goal": "Verify 409 still correctly rejected for genuine conflicts"
+    },
+    {
+      "id": "VC-007",
+      "category": "Instance ID Tracking",
+      "check": "Verify different instanceId + stale old connection is accepted (not 409)",
+      "method": "Integration test TS-006 against staging worker",
+      "pass_criteria": "HTTP 101 returned, old stale connection was cleaned up",
+      "automated": true
+    },
+    {
+      "id": "VC-008",
+      "category": "Multiplexed Protocol",
+      "check": "Verify multiple EXECUTE_REQUEST calls can be in-flight simultaneously on same connection",
+      "method": "Integration test TS-008",
+      "pass_criteria": "All requests receive responses without connection drops",
+      "automated": true
+    },
+    {
+      "id": "VC-009",
+      "category": "Multiplexed Protocol",
+      "check": "Verify PREPARE_SCOPE / SCOPE_READY exchange completes without WebSocket reconnect",
+      "method": "Integration test TS-009",
+      "pass_criteria": "No onclose/onopen during scope switch, SCOPE_READY received",
+      "automated": true
+    },
+    {
+      "id": "VC-010",
+      "category": "Edge Cases",
+      "check": "Verify SW restart does not cause spurious 409 (same instanceId reconnects successfully)",
+      "method": "Manual/browser test TS-010",
+      "pass_criteria": "Extension reconnects after SW restart, no 409 error",
+      "automated": false
+    },
+    {
+      "id": "VC-011",
+      "category": "Edge Cases",
+      "check": "Verify network blip reconnect succeeds without 409",
+      "method": "Manual/browser test TS-011 with network throttling",
+      "pass_criteria": "After brief network drop, reconnect succeeds, session recovers",
+      "automated": false
+    },
+    {
+      "id": "VC-012",
+      "category": "Edge Cases",
+      "check": "Verify full 409 decision matrix produces correct results for all 5 scenarios",
+      "method": "Integration test TS-012 against staging worker",
+      "pass_criteria": "All 5 matrix rows return expected HTTP status codes",
+      "automated": true,
+      "verification_goal": "Verify 409 still correctly rejected for genuine conflicts"
+    },
+    {
+      "id": "VC-013",
+      "category": "Server Logs",
+      "check": "Verify server logs contain instanceId on every connection accept/reject event",
+      "method": "Inspect Cloudflare Workers logs in dashboard during integration tests",
+      "pass_criteria": "Log entries include instanceId=... for each connection event",
+      "automated": false
+    },
+    {
+      "id": "VC-014",
+      "category": "Health Endpoint",
+      "check": "Verify /bridge/status or /health endpoint shows connection health information",
+      "method": "GET request to health endpoint",
+      "pass_criteria": "Response includes connected status, instanceId (if connected), idle duration",
+      "automated": true
+    },
+    {
+      "id": "VC-015",
+      "category": "Production Safety",
+      "check": "Verify production worker is UNCHANGED by staging deployment",
+      "method": "Compare production worker version/hash before and after staging deploy",
+      "pass_criteria": "Production worker hash unchanged",
+      "automated": false
+    }
+  ],
+  "monitoring_setup": {
+    "overview": "Post-deployment monitoring to detect issues early and verify the fix is working correctly in production.",
+    "cloudflare_workers_dashboard": {
+      "logs": {
+        "location": "Cloudflare Dashboard -> Workers & Pages -> gemini-web-bridge -> Logs",
+        "filter": "Select 'All logs' or filter by severity: warn, error",
+        "key_messages_to_watch": [
+          "[Bridge DO] Rejected connection from secondary device - 409 triggered",
+          "[Bridge DO] Same device reconnecting - closing old connection",
+          "[Bridge DO] Socket idle >45s, closing as stale",
+          "[Bridge DO] Connection from instanceId=... token=...",
+          "[BridgeSocket] Connection rejected (409 Conflict)"
+        ],
+        "alert_on": [
+          "Multiple 409 errors in short time window (>5 in 5 minutes)",
+          "Stale connection closures without corresponding reconnects",
+          "Auth failures (401) spikes"
+        ]
+      },
+      "metrics": {
+        "location": "Cloudflare Dashboard -> Workers & Pages -> gemini-web-bridge -> Analytics",
+        "key_metrics": [
+          "Requests per second (WebSocket upgrades)",
+          "Error rate (4xx/5xx responses)",
+          "Latency (p50, p95, p99 for HTTP requests)",
+          "Durable Object CPU time",
+          "Durable Object memory usage"
+        ],
+        "baseline_establishment": "Record metrics for 1 week before Phase 5 rollout to establish baseline",
+        "alert_thresholds": {
+          "error_rate": "Alert if 4xx error rate exceeds 5% of total requests",
+          "latency_p95": "Alert if p95 latency exceeds 2 seconds",
+          "do_cpu": "Alert if Durable Object CPU exceeds 10ms per request average"
+        }
+      }
+    },
+    "client_side_monitoring": {
+      "chrome_extension_logs": {
+        "access": "chrome://extensions -> Gemini Web Bridge -> Inspect views: Service Worker",
+        "console_filter": "Filter by '[BridgeSocket]' or '[BackgroundCoordinator]'",
+        "key_messages_to_watch": [
+          "[BridgeSocket] \u2705 Connected to Cloudflare DO Hub",
+          "[BridgeSocket] Disconnected (code: X, reason: ...)",
+          "[BridgeSocket] Connection rejected (409 Conflict)",
+          "[BridgeSocket] Reconnecting in Xs (attempt N)...",
+          "[BackgroundCoordinator] \ud83d\udc51 Tab X elected as Leader"
+        ]
+      },
+      "error_rate_tracking": {
+        "method": "Count 409 errors seen by extension over time",
+        "expected_after_fix": "Near-zero 409 errors for normal usage (SW restart, network blip)",
+        "acceptable_409_sources": "Only when another Chrome profile/device genuinely holds the active connection"
+      }
+    },
+    "health_endpoint_monitoring": {
+      "endpoints": [
+        {
+          "url": "https://gemini-web-bridge.pansakorn-pho.workers.dev/health",
+          "method": "GET",
+          "expected": "200 OK with status: ok",
+          "monitoring_frequency": "Every 60 seconds",
+          "alert_if": "status != ok or response time > 3 seconds"
+        },
+        {
+          "url": "https://gemini-web-bridge.pansakorn-pho.workers.dev/bridge/auth-check",
+          "method": "GET with x-bridge-token header",
+          "expected": "200 OK with ok: true",
+          "monitoring_frequency": "Every 60 seconds",
+          "alert_if": "status != 200"
+        }
+      ],
+      "external_monitoring_tools": [
+        "Uptime Robot or similar uptime monitoring service",
+        "Cloudflare Worker analytics (built-in)",
+        "Custom monitoring script (see scripts/health-check.sh)"
+      ]
+    },
+    "alerting_rules": {
+      "critical_alerts": [
+        {
+          "condition": "409 errors in server logs exceed 10 in 5-minute window",
+          "severity": "critical",
+          "message": "Possible connection conflict issue - investigate instance ID tracking",
+          "action": "Check server logs for instanceId patterns. If same-instance reconnects are getting 409, trigger rollback."
+        },
+        {
+          "condition": "WebSocket upgrade failures exceed 20% of attempts",
+          "severity": "critical",
+          "message": "Extension cannot connect to bridge - service degradation",
+          "action": "Check server health, Durable Object status, and auth token configuration."
+        },
+        {
+          "condition": "Health endpoint returns non-200 for more than 2 consecutive checks",
+          "severity": "critical",
+          "message": "Worker may be down or degraded",
+          "action": "Check Cloudflare dashboard for worker status. Trigger rollback if recent deploy caused issue."
+        }
+      ],
+      "warning_alerts": [
+        {
+          "condition": "Stale connection closures exceed 20 in 10-minute window",
+          "severity": "warning",
+          "message": "High rate of stale connection cleanup - possible network instability or SW restart issues",
+          "action": "Check client-side logs for reconnect patterns. May indicate network issues or frequent SW restarts."
+        },
+        {
+          "condition": "Reconnect attempts (client-side) exceed 10 in 5 minutes for single installation",
+          "severity": "warning",
+          "message": "Extension is having trouble maintaining stable connection",
+          "action": "Investigate network conditions, server response times, and SW lifecycle issues."
+        }
+      ]
+    },
+    "post_rollout_checks": {
+      "immediate_1_hour": [
+        "Check Cloudflare Workers logs for any errors or unexpected 409s",
+        "Verify health endpoint is responding normally",
+        "Check that extension users are not reporting connection issues",
+        "Verify /v1/models returns model catalog correctly"
+      ],
+      "short_term_24_hours": [
+        "Review 409 error count - should be near zero for normal usage",
+        "Check stale connection cleanup is functioning (some stale closures expected, but not excessive)",
+        "Verify instanceId appears in server logs for all connections",
+        "Confirm no auth failures (401) unless users changed tokens"
+      ],
+      "medium_term_1_week": [
+        "Establish baseline metrics for connection stability",
+        "Compare 409 error rate before and after fix",
+        "Gather user feedback on connection reliability",
+        "Document any edge cases discovered during monitoring"
+      ]
+    },
+    "monitoring_dashboard_suggested_widgets": [
+      {
+        "name": "Connection Accept/Reject Rate",
+        "type": "Time series",
+        "data": "Count of WebSocket upgrades (101) vs 409/401 responses per minute",
+        "goal": "See 409 rate drop to near-zero after fix, except for genuine conflicts"
+      },
+      {
+        "name": "Active Connections",
+        "type": "Gauge",
+        "data": "Number of currently active WebSocket connections (from DO health state)",
+        "goal": "Should be 0 or 1 (single active extension connection)"
+      },
+      {
+        "name": "Stale Connection Cleanup Rate",
+        "type": "Time series",
+        "data": "Count of stale connection closures per hour",
+        "goal": "Some cleanup expected (idle connections), but spikes indicate issues"
+      },
+      {
+        "name": "Instance ID Diversity",
+        "type": "Card/text",
+        "data": "Recent unique instanceIds seen (last 10)",
+        "goal": "Verify instanceId tracking is working and logging correctly"
+      }
+    ]
+  },
+  "phase4_test_scenarios": [
+    {
+      "id": "TS-014",
+      "name": "Multiplexed Protocol - Single WS Carries 3 Scopes Simultaneously",
+      "description": "Verify that a single WebSocket connection can carry message traffic for 3 different scopes (app, app:conv-X, notebook:Y) concurrently without scope collision or cross-contamination. Each scope maintains its own session state, streaming handlers, and model preparation state.",
+      "setup": {
+        "environment": "Integration test against staging worker with mocked extension that simulates 3 scope sessions",
+        "protocol_version": 3,
+        "scopes": [
+          "app",
+          "app:conv-a1b2c3",
+          "notebook:ntb-456def"
+        ]
+      },
+      "steps": [
+        "Connect WebSocket with instanceId=A, send SESSION_READY with scope='app'",
+        "Send PREPARE_SCOPE for 'app:conv-a1b2c3' - verify SCOPE_READY received, currentScope updated",
+        "Send PREPARE_SCOPE for 'notebook:ntb-456def' - verify SCOPE_READY received",
+        "Verify server tracks all 3 scopes as active session contexts (not just currentScope)",
+        "Send EXECUTE_REQUEST with scope='app' - verify routed to app handler",
+        "Send EXECUTE_REQUEST with scope='app:conv-a1b2c3' - verify routed to conversation handler, NOT app handler",
+        "Send EXECUTE_REQUEST with scope='notebook:ntb-456def' - verify routed to notebook handler",
+        "Verify each requestId's response is delivered to the correct scope's waiting handler",
+        "Verify no scope cross-contamination: app:conv response does not leak to app handler",
+        "Verify server log shows 3 active scope sessions for this instanceId"
+      ],
+      "expected_results": [
+        "Single WebSocket connection carries all 3 scopes (no reconnect triggered)",
+        "Each scope has independent session state (conversationId, responseId, choiceId per scope)",
+        "EXECUTE_REQUEST for app:conv-a1b2c3 does NOT route to app handler",
+        "EXECUTE_REQUEST for notebook:ntb-456def does NOT route to app handler",
+        "STREAM_CHUNK for notebook scope is not delivered to app:conv handler",
+        "Server maintains scopeSessions Map with 3 entries for this instanceId",
+        "currentScope reflects the MOST RECENT scope switch, but other scopes remain active"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "critical",
+      "automated": true,
+      "phase4_only": true,
+      "note": "Requires server-side scopeSessions Map (multi-scope session state). Currently only currentScope is tracked - this test validates the multi-scope enhancement."
+    },
+    {
+      "id": "TS-015",
+      "name": "Multiplexed Protocol - Scope Subscribe/Unsubscribe Mid-Session",
+      "description": "Verify that scopes can be dynamically subscribed (PREPARE_SCOPE) and unsubscribed (SCOPE_UNSUBSCRIBE or scope cleanup on navigation away) during an active session, without disrupting other active scopes or the WebSocket connection.",
+      "setup": {
+        "environment": "Integration test against staging worker",
+        "protocol_version": 3,
+        "initial_scope": "app"
+      },
+      "steps": [
+        "Connect WebSocket, establish SESSION_READY with scope='app'",
+        "Subscribe to scope 'app:conv-a1b2c3' via PREPARE_SCOPE - verify SCOPE_READY",
+        "Subscribe to scope 'notebook:ntb-456def' via PREPARE_SCOPE - verify SCOPE_READY",
+        "Verify both scopes are in the active scopeSessions map",
+        "Simulate user navigating away from notebook tab (extension sends SCOPE_UNSUBSCRIBE or navigates to different scope)",
+        "Verify notebook:ntb-456def is removed from active scopeSessions",
+        "Verify app and app:conv-a1b2c3 scopes remain active and functional",
+        "Send EXECUTE_REQUEST to app:conv-a1b2c3 - verify it still works after notebook unsubscribe",
+        "Send EXECUTE_REQUEST to app - verify it still works",
+        "Subscribe to a NEW scope 'app:conv-new789' - verify it works without affecting existing scopes",
+        "Unsubscribe from app:conv-a1b2c3 - verify it's removed, other scopes unaffected",
+        "Verify WebSocket remains open throughout all subscribe/unsubscribe operations"
+      ],
+      "expected_results": [
+        "Scope subscribe (PREPARE_SCOPE -> SCOPE_READY) adds scope to active sessions",
+        "Scope unsubscribe removes scope from active sessions without disrupting others",
+        "WebSocket connection remains stable throughout (no onclose events)",
+        "Active scope count decreases correctly after unsubscribe",
+        "Remaining scopes continue to receive messages correctly",
+        "No STREAM_ERROR for remaining scopes after another scope unsubscribes",
+        "Server log shows scope added/removed events with scope ID"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "high",
+      "automated": true,
+      "phase4_only": true,
+      "note": "Requires server-side scope unsubscribe handling. Extension sends SCOPE_UNSUBSCRIBE or navigates away; server cleans up scope session."
+    },
+    {
+      "id": "TS-016",
+      "name": "Multiplexed Protocol - Reconnect Preserves All Scope Sessions",
+      "description": "Verify that after a WebSocket reconnect (SW restart, network blip, or deliberate disconnect), all previously active scope sessions are preserved and re-established, not lost. The extension retransmits scope state for each active scope.",
+      "setup": {
+        "environment": "Integration test against staging worker with mocked extension",
+        "protocol_version": 3,
+        "pre_reconnect_scopes": [
+          "app",
+          "app:conv-a1b2c3",
+          "notebook:ntb-456def"
+        ]
+      },
+      "steps": [
+        "Connect WebSocket, establish SESSION_READY with scope='app'",
+        "Subscribe to app:conv-a1b2c3 and notebook:ntb-456def (3 scopes active)",
+        "Send EXECUTE_REQUEST to each scope - verify all 3 work",
+        "Simulate disconnect: close WebSocket (normal close, code 1000)",
+        "Simulate SW restart: extension reinitializes, retrieves instanceId from chrome.storage.session",
+        "Extension reconnects with SAME instanceId",
+        "Extension sends SESSION_READY with full scope list: ['app', 'app:conv-a1b2c3', 'notebook:ntb-456def']",
+        "Server receives reconnect with same instanceId - accepts (not 409)",
+        "Server restores all 3 scope sessions from the SESSION_READY scope list",
+        "Extension sends PREPARE_SCOPE for each scope that needs reconfirmation",
+        "Verify all 3 scopes are re-established and functional",
+        "Send EXECUTE_REQUEST to each of the 3 scopes - verify all respond correctly",
+        "Verify no scope session data was lost during reconnect"
+      ],
+      "expected_results": [
+        "Reconnect with same instanceId: accepted (101, no 409)",
+        "All 3 scope sessions restored after reconnect",
+        "Extension can re-send scope state in SESSION_READY (multi-scope aware)",
+        "Scope sessions that were in-flight (streaming) are re-established or cleanly terminated",
+        "No STREAM_ERROR for scopes that were active before disconnect",
+        "Server log shows: 'Reconnected instance A, restoring N scope sessions'",
+        "Epoch counter increments on reconnect but scope session data is preserved"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "critical",
+      "automated": true,
+      "phase4_only": true,
+      "note": "Requires: (1) server persists scopeSessions per instanceId across reconnects, (2) extension sends multi-scope list in SESSION_READY, (3) epoch bump does not clear scopeSessions."
+    },
+    {
+      "id": "TS-017",
+      "name": "Multiplexed Protocol - Message Ordering Across Scopes",
+      "description": "Verify that messages for different scopes sent over the same WebSocket maintain correct ordering per-scope. A stream of messages for scope A should not be interleaved with or reordered relative to scope B messages in a way that corrupts either stream.",
+      "setup": {
+        "environment": "Integration test against staging worker with mocked extension",
+        "protocol_version": 3,
+        "scenarios": [
+          "Interleaved sends: app chunk, notebook chunk, app chunk, app done - verify each scope gets correct sequence",
+          "Concurrent streams: 2 EXECUTE_REQUESTs (different scopes) in-flight simultaneously - responses arrive in order per scope",
+          "Fast scope switch: send to scope A, switch to B, send to B, switch back to A - verify A's in-flight stream is not corrupted"
+        ]
+      },
+      "steps": [
+        "Connect WebSocket, establish 2 scopes: app and notebook:ntb-456def",
+        "Scenario 1 - Interleaved messages:",
+        "  Send STREAM_CHUNK for scope=app (chunk 1)",
+        "  Send STREAM_CHUNK for scope=notebook (chunk 1)",
+        "  Send STREAM_CHUNK for scope=app (chunk 2)",
+        "  Send STREAM_DONE for scope=app",
+        "  Send STREAM_CHUNK for scope=notebook (chunk 2)",
+        "  Send STREAM_DONE for scope=notebook",
+        "  Verify app received: chunk1, chunk2, done (in order, no notebook chunks mixed in)",
+        "  Verify notebook received: chunk1, chunk2, done (in order, no app chunks mixed in)",
+        "Scenario 2 - Concurrent streams:",
+        "  Send EXECUTE_REQUEST for scope=app (requestId=req-app-1)",
+        "  Send EXECUTE_REQUEST for scope=notebook (requestId=req-nb-1)",
+        "  Verify both streams progress independently",
+        "  Verify req-app-1 response never contains notebook data",
+        "  Verify req-nb-1 response never contains app data",
+        "Scenario 3 - Fast scope switch during stream:",
+        "  Start EXECUTE_REQUEST for scope=app (long-running stream)",
+        "  While streaming, switch scope to notebook",
+        "  Send EXECUTE_REQUEST for scope=notebook",
+        "  Switch back to app",
+        "  Verify app stream continues and completes correctly (not cancelled or mixed)",
+        "  Verify notebook stream also completes correctly"
+      ],
+      "expected_results": [
+        "Per-scope message ordering is preserved regardless of interleaving",
+        "STREAM_CHUNK for scope X is always delivered to scope X's handler",
+        "STREAM_DONE for scope X correctly terminates only scope X's stream",
+        "Concurrent streams for different scopes do not interfere",
+        "Scope switch during an active stream does NOT cancel or corrupt the in-flight stream",
+        "requestId uniquely identifies a stream within a scope; no cross-scope collisions",
+        "Server log shows scope-tagged message routing for each message"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "high",
+      "automated": true,
+      "phase4_only": true,
+      "note": "The current implementation uses a single activeStreams Map keyed by requestId. This test validates that requestId is unique per scope session and that routing prefix (scope) is preserved end-to-end."
+    },
+    {
+      "id": "TS-018",
+      "name": "Multiplexed Protocol - Epoch Bump Doesn't Lose Scope State",
+      "description": "Verify that when the server's epoch counter increments (on new connection/reconnect), the scope session state for the reconnecting instance is preserved, not cleared. The epoch is a session-lifecycle marker, not a scope-state reset trigger.",
+      "setup": {
+        "environment": "Integration test against staging worker",
+        "protocol_version": 3,
+        "initial_scopes": [
+          "app",
+          "app:conv-a1b2c3",
+          "notebook:ntb-456def"
+        ]
+      },
+      "steps": [
+        "Connect WebSocket with instanceId=A, epoch=1",
+        "Establish 3 scope sessions: app, app:conv-a1b2c3, notebook:ntb-456def",
+        "Record epoch=1 and scope session state (scope IDs, conversation state per scope)",
+        "Disconnect (normal close)",
+        "Reconnect with same instanceId=A - server assigns epoch=2",
+        "Extension sends SESSION_READY with scope list (multi-scope aware)",
+        "Verify server restores all 3 scope sessions",
+        "Verify epoch=2 in server log but scopeSessions Map still has 3 entries",
+        "Verify conversation state (conversationId, responseId, choiceId) per scope is preserved or re-synchronized",
+        "Send EXECUTE_REQUEST to each scope - verify all 3 work with epoch=2",
+        "Disconnect again, reconnect - epoch=3",
+        "Verify scope sessions still preserved after epoch=3",
+        "Verify epoch counter incremented correctly (1->2->3) but scope state survived each bump"
+      ],
+      "expected_results": [
+        "Epoch increments on each reconnect (1->2->3)",
+        "Scope session state (scopeSessions Map) is NOT cleared on epoch bump",
+        "All 3 scopes functional after each reconnect with new epoch",
+        "Server log shows: 'Epoch bumped to N, preserving M scope sessions for instance A'",
+        "conversationState per scope is re-synced from extension on SESSION_READY if needed",
+        "No scope session loss across epoch boundaries",
+        "The epoch is used for conflict detection (stale connection identification), not scope state management"
+      ],
+      "category": "multiplexed_protocol",
+      "risk_level": "critical",
+      "automated": true,
+      "phase4_only": true,
+      "note": "Current implementation increments epochCounter on every recordConnection() call. This test ensures that scopeSessions (if implemented) are NOT cleared by the epoch increment - they are separate concerns."
+    }
+  ],
+  "phase4_staging_checklist": {
+    "phase4_staging_deployment": {
+      "overview": "Phase 4 deployment adds the multiplexed protocol (single WS carries multiple scopes) and scope router. Unlike Phases 1-3 which were connection-lifecycle fixes, Phase 4 changes message routing semantics. Rollback must restore the single-scope model.",
+      "scope_changes_from_phases_1_3": [
+        "protocol-messages.js: PROTOCOL_VERSION bumped from 2 to 3; new message types SCOPE_SWITCH, SCOPE_READY, SCOPE_NAVIGATE",
+        "background.js: ScopeSessionManager class added; handleScopeSwitch() and resolvePendingScopes() handle multiplexed scope flow",
+        "index.js (server): scopeRouter object added; handleScopeSwitchFromExtension(), requestScopeSwitch(), prepareScope() handle server-side scope routing",
+        "index.js (server): currentScope + lastNotebookScope tracking; resolveScopeInput() normalizes scope strings; addScopeFailClosed() enforces scope verification before prompt forwarding",
+        "No changes to Phases 1-3 connection singleton, instance ID, or TTL cleanup - those remain intact"
+      ],
+      "prerequisites": [
+        "Phase 1-3 changes committed and tested (TS-001 through TS-013 passing)",
+        "protocol-messages.js updated to PROTOCOL_VERSION 3 with multiplexed message types",
+        "ScopeSessionManager class implemented in background.js",
+        "ScopeRouter + handleScopeSwitchFromExtension + requestScopeSwitch implemented in index.js",
+        "Extension built with PROTOCOL_VERSION 3 (background.js imports protocol-messages.js v3)",
+        "Staging worker deployed with Phase 1-3 changes (baseline)",
+        "Staging BRIDGE_AUTH_TOKEN configured",
+        "Wrangler CLI authenticated",
+        "Chrome extension test environment available (chrome://extensions with developer mode)"
+      ],
+      "extension_build_steps": [
+        {
+          "step": 1,
+          "action": "Verify protocol-messages.js version",
+          "check": "Open extension-cloudflare/protocol-messages.js and confirm PROTOCOL_VERSION = 3",
+          "command": "grep 'PROTOCOL_VERSION' /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare/protocol-messages.js",
+          "expected": "export const PROTOCOL_VERSION = 3;",
+          "failure_action": "If version is 2, update to 3 and add missing message types (SCOPE_SWITCH, SCOPE_READY, SCOPE_NAVIGATE)"
+        },
+        {
+          "step": 2,
+          "action": "Verify ScopeSessionManager is imported in background.js",
+          "check": "Open extension-cloudflare/background.js and confirm ScopeSessionManager import",
+          "command": "grep 'ScopeSessionManager' /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare/background.js",
+          "expected": "import { ... ScopeSessionManager ... } from './protocol-messages.js';",
+          "failure_action": "Add ScopeSessionManager to imports from protocol-messages.js"
+        },
+        {
+          "step": 3,
+          "action": "Verify BridgeSocketManager initializes ScopeSessionManager",
+          "check": "Confirm this.scopeSessionManager = new ScopeSessionManager() in BridgeSocketManager constructor",
+          "command": "grep 'scopeSessionManager' /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare/background.js",
+          "expected": "this.scopeSessionManager = new ScopeSessionManager();",
+          "failure_action": "Add ScopeSessionManager initialization to BridgeSocketManager constructor"
+        },
+        {
+          "step": 4,
+          "action": "Verify SCOPE_SWITCH message handler in background.js",
+          "check": "Confirm handleScopeSwitch() method exists and handles MessageTypes.SCOPE_SWITCH",
+          "command": "grep -n 'handleScopeSwitch\\|MessageTypes.SCOPE_SWITCH' /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare/background.js",
+          "expected": "handleScopeSwitch method and SCOPE_SWITCH case in handleWorkerMessage switch",
+          "failure_action": "Implement handleScopeSwitch() and add SCOPE_SWITCH case to message handler"
+        },
+        {
+          "step": 5,
+          "action": "Verify resolvePendingScopes handles multi-scope resolution",
+          "check": "Confirm resolvePendingScopes() updates scopeSessionManager and resolves all pending scopes",
+          "command": "grep -n 'resolvePendingScopes' /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare/background.js",
+          "expected": "resolvePendingScopes method that calls scopeSessionManager.confirmScope()",
+          "failure_action": "Implement resolvePendingScopes with scopeSessionManager integration"
+        },
+        {
+          "step": 6,
+          "action": "Verify server-side scopeRouter in index.js",
+          "check": "Confirm scopeRouter object with route(), handleAppScope(), handleNotebookScope() methods exists",
+          "command": "grep -n 'scopeRouter\\|handleScopeSwitchFromExtension\\|requestScopeSwitch\\|prepareScope' /Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker/src/index.js",
+          "expected": "scopeRouter object, handleScopeSwitchFromExtension(), requestScopeSwitch(), prepareScope() methods",
+          "failure_action": "Implement missing server-side scope handling methods"
+        },
+        {
+          "step": 7,
+          "action": "Build extension package",
+          "command": "cd /Users/kimlenglim/Project/gemini-web-bridge && python3 scripts/zip-extension.py --output /tmp/gemini-bridge-phase4-test.zip",
+          "expected_output": "ZIP file created at /tmp/gemini-bridge-phase4-test.zip",
+          "verification": "Unzip and verify background.js contains PROTOCOL_VERSION 3 and ScopeSessionManager references"
+        },
+        {
+          "step": 8,
+          "action": "Load extension in Chrome for staging test",
+          "steps": [
+            "Open chrome://extensions",
+            "Enable Developer Mode",
+            "Remove any previously loaded gemini-web-bridge extension",
+            "Load unpacked: select /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare directory",
+            "OR use the ZIP: chrome://extensions -> Load unpacked -> extract ZIP first"
+          ],
+          "note": "For staging, modify DEFAULT_WORKER_URL in background.js to staging URL BEFORE loading. Do NOT commit this change."
+        }
+      ],
+      "worker_deployment_steps": [
+        {
+          "step": 1,
+          "action": "Review all Phase 4 server-side changes",
+          "command": "cd /Users/kimlenglim/Project/gemini-web-bridge && git diff cloudflare-worker/src/index.js",
+          "check": "Verify: scopeRouter added, handleScopeSwitchFromExtension() added, requestScopeSwitch() added, prepareScope() updated, currentScope tracking in WS message handler",
+          "expected": "No unintended changes to Phases 1-3 logic (singleton, instance ID, TTL)"
+        },
+        {
+          "step": 2,
+          "action": "Commit Phase 4 changes",
+          "command": "cd /Users/kimlenglim/Project/gemini-web-bridge && git add cloudflare-worker/src/index.js extension-cloudflare/protocol-messages.js extension-cloudflare/background.js && git commit -m 'Phase 4: Multiplexed protocol (v3) + scope router - single WS carries multiple scopes'",
+          "verification": "git log --oneline -3 shows Phase 4 commit"
+        },
+        {
+          "step": 3,
+          "action": "Run unit tests for Phase 4 scope logic",
+          "command": "cd /Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker && npm test -- tests/phase4-scope.test.mjs 2>&1 | tail -30",
+          "expected": "All Phase 4 unit tests pass (scope validation, scope router routing, scope session manager)",
+          "note": "Create tests/phase4-scope.test.mjs if it doesn't exist - test resolveScopeInput, scopeRouter.route, ScopeSessionManager"
+        },
+        {
+          "step": 4,
+          "action": "Deploy to staging worker",
+          "command": "cd /Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker && wrangler deploy --env staging",
+          "expected_output": "Successfully deployed to gemini-web-bridge-staging.pansakorn-pho.workers.dev",
+          "verification": "curl -s https://gemini-web-bridge-staging.pansakorn-pho.workers.dev/health | grep '\"status\":\"ok\"'"
+        },
+        {
+          "step": 5,
+          "action": "Verify Durable Object state schema compatibility",
+          "check": "Confirm that existing DO instances (from Phase 1-3 deployment) are compatible with Phase 4 code",
+          "command": "wrangler inspect --env staging",
+          "note": "Phase 4 adds new properties (scopeSessions Map, currentScope) but does not change existing properties. Existing connections should continue to work. New connections get Phase 4 behavior.",
+          "verification": "No DO state migration needed if only adding new optional properties. Verify by connecting a test WS and checking server logs."
+        },
+        {
+          "step": 6,
+          "action": "Verify protocol version negotiation",
+          "check": "Connect a test WebSocket to staging and verify the server accepts protocol version 3",
+          "command": "websocat wss://gemini-web-bridge-staging.pansakorn-pho.workers.dev/bridge?token=staging-token-change-me&instanceId=test-phase4-$(uuidgen) 2>&1 | head -20",
+          "expected": "Connection established (101). Server should not reject protocol version 3.",
+          "note": "If server rejects v3, check that protocol-messages.js PROTOCOL_VERSION is correctly set to 3 and server accepts it in SESSION_READY handling."
+        }
+      ],
+      "verification_steps": [
+        {
+          "id": "PV-001",
+          "category": "Protocol Version",
+          "check": "Verify extension connects with PROTOCOL_VERSION 3 and server accepts it",
+          "method": "Connect extension to staging worker, check console logs for '[BridgeSocket] Connected' and server log for 'protocolVersion: 3' in SESSION_READY",
+          "pass_criteria": "No protocol version mismatch error; connection established with v3",
+          "automated": false
+        },
+        {
+          "id": "PV-002",
+          "category": "Scope Session Manager",
+          "check": "Verify ScopeSessionManager initializes correctly and tracks currentScope",
+          "method": "In Chrome DevTools Console for Service Worker: check manager.scopeSessionManager.getScopeInfo() after connection",
+          "pass_criteria": "getScopeInfo() returns currentScope='app', isSwitching=false, no targetScope",
+          "automated": false
+        },
+        {
+          "id": "PV-003",
+          "category": "Scope Switch (Basic)",
+          "check": "Verify SCOPE_SWITCH -> SCOPE_READY flow works end-to-end (single scope switch)",
+          "method": "TS-009 re-run against Phase 4 staging: switch from app to notebook:ntb-X, verify SCOPE_READY received without reconnect",
+          "pass_criteria": "No onclose/onopen during switch; SCOPE_READY received; currentScope updated",
+          "automated": true,
+          "related_test": "TS-009"
+        },
+        {
+          "id": "PV-004",
+          "category": "Multi-Scope Carry (TS-014)",
+          "check": "Verify single WS carries 3 scopes simultaneously",
+          "method": "Run TS-014 against staging worker with mocked extension simulating 3 scope sessions",
+          "pass_criteria": "All 3 scopes functional on same WS; no cross-contamination; server log shows 3 scope sessions",
+          "automated": true,
+          "related_test": "TS-014"
+        },
+        {
+          "id": "PV-005",
+          "category": "Scope Subscribe/Unsubscribe (TS-015)",
+          "check": "Verify dynamic scope subscribe/unsubscribe without disrupting other scopes",
+          "method": "Run TS-015: subscribe 2 scopes, unsubscribe one, verify other remains functional",
+          "pass_criteria": "Unsubscribed scope removed; remaining scopes unaffected; WS stays open",
+          "automated": true,
+          "related_test": "TS-015"
+        },
+        {
+          "id": "PV-006",
+          "category": "Reconnect Scope Preservation (TS-016)",
+          "check": "Verify reconnect preserves all scope sessions",
+          "method": "Run TS-016: establish 3 scopes, disconnect, reconnect with same instanceId, verify all 3 restored",
+          "pass_criteria": "All 3 scopes functional after reconnect; no scope session loss; no 409",
+          "automated": true,
+          "related_test": "TS-016"
+        },
+        {
+          "id": "PV-007",
+          "category": "Message Ordering (TS-017)",
+          "check": "Verify per-scope message ordering is preserved across interleaved sends",
+          "method": "Run TS-017 Scenario 1 (interleaved chunks) and Scenario 2 (concurrent streams)",
+          "pass_criteria": "Each scope receives correct ordered sequence; no cross-scope contamination",
+          "automated": true,
+          "related_test": "TS-017"
+        },
+        {
+          "id": "PV-008",
+          "category": "Epoch Bump Scope Survival (TS-018)",
+          "check": "Verify epoch increment does not clear scope session state",
+          "method": "Run TS-018: establish scopes, disconnect/reconnect 3 times (epoch 1->2->3->4), verify scopes survive",
+          "pass_criteria": "All scopes functional after each epoch bump; scopeSessions Map not cleared",
+          "automated": true,
+          "related_test": "TS-018"
+        },
+        {
+          "id": "PV-009",
+          "category": "Fail-Closed Scope Guard",
+          "check": "Verify addScopeFailClosed() blocks prompt forwarding when scope is unconfirmed",
+          "method": "Send EXECUTE_REQUEST without scope confirmation - verify 422 scope_unverified error",
+          "pass_criteria": "Request rejected with code scope_unverified when currentScope is null or mismatched",
+          "automated": true
+        },
+        {
+          "id": "PV-010",
+          "category": "Scope Conflict Detection",
+          "check": "Verify scope mismatch between requested scope and actual tab scope is detected",
+          "method": "Request scope=app:conv-X but tab is at notebook:Y - verify scope_mismatch error",
+          "pass_criteria": "addScopeFailClosed returns scope_mismatch error; prompt not forwarded",
+          "automated": false
+        },
+        {
+          "id": "PV-011",
+          "category": "Phases 1-3 Regression",
+          "check": "Verify Phase 4 changes did NOT break Phases 1-3 functionality",
+          "method": "Re-run TS-001, TS-005, TS-007, TS-012 against Phase 4 staging",
+          "pass_criteria": "All Phase 1-3 tests still pass; singleton guard, instance ID tracking, 409 logic intact",
+          "automated": true,
+          "note": "Critical regression check - Phase 4 must not break the connection lifecycle fixes"
+        },
+        {
+          "id": "PV-012",
+          "category": "Health Endpoint",
+          "check": "Verify /health endpoint reflects Phase 4 state (currentScope, scope count)",
+          "method": "GET https://gemini-web-bridge-staging.pansakorn-pho.workers.dev/health",
+          "pass_criteria": "Response includes status: ok; if connected, includes currentScope and active scope count",
+          "automated": true
+        }
+      ],
+      "rollback_triggers": [
+        {
+          "trigger": "TS-014 fails - single WS cannot carry multiple scopes",
+          "severity": "critical",
+          "action": "Rollback Phase 4. Multi-scope capability is the core Phase 4 feature; if it fails, the entire phase must be reverted.",
+          "rollback_scope": "Revert protocol-messages.js to v2, remove ScopeSessionManager from background.js, remove scopeRouter from index.js, restore single-scope currentScope-only model"
+        },
+        {
+          "trigger": "TS-015 fails - scope unsubscribe disrupts other active scopes",
+          "severity": "critical",
+          "action": "Rollback Phase 4. Scope lifecycle management is broken; scope sessions are not isolated.",
+          "rollback_scope": "Full Phase 4 revert"
+        },
+        {
+          "trigger": "TS-016 fails - reconnect loses scope sessions",
+          "severity": "critical",
+          "action": "Rollback Phase 4. Scope state loss on reconnect breaks the multiplexed session model. Users lose active conversations on SW restart.",
+          "rollback_scope": "Full Phase 4 revert"
+        },
+        {
+          "trigger": "TS-017 fails - message ordering corrupted across scopes",
+          "severity": "high",
+          "action": "Fix message routing to include scope prefix in requestId or route table. If fix is complex, rollback Phase 4 and iterate.",
+          "rollback_scope": "Consider rollback if fix requires major redesign of activeStreams Map"
+        },
+        {
+          "trigger": "TS-018 fails - epoch bump clears scope state",
+          "severity": "critical",
+          "action": "Rollback Phase 4. Epoch management is incorrectly coupled to scope state lifecycle.",
+          "rollback_scope": "Full Phase 4 revert"
+        },
+        {
+          "trigger": "PV-011 fails - Phases 1-3 regression detected",
+          "severity": "critical",
+          "action": "IMMEDIATE rollback. Phase 4 must not break connection singleton, instance ID tracking, or 409 logic.",
+          "rollback_scope": "Full Phase 4 revert; investigate which Phase 4 change caused the regression"
+        },
+        {
+          "trigger": "Extension cannot connect to staging worker after Phase 4 deploy",
+          "severity": "critical",
+          "action": "Check server logs for protocol version rejection or message type errors. If v3 protocol is rejected, rollback to v2.",
+          "rollback_scope": "Revert PROTOCOL_VERSION to 2, remove v3 message types"
+        },
+        {
+          "trigger": "409 errors spike after Phase 4 deploy (PV-011 secondary check)",
+          "severity": "high",
+          "action": "Investigate if scope router changes affected instance ID connection acceptance logic. Rollback if 409 logic is broken.",
+          "rollback_scope": "Full Phase 4 revert"
+        },
+        {
+          "trigger": "Extension console shows 'Invalid protocol version' or 'Message type not recognized'",
+          "severity": "high",
+          "action": "Mismatch between extension v3 and server v2 (or vice versa). Ensure both are deployed together. If mismatch cannot be resolved quickly, rollback both to v2.",
+          "rollback_scope": "Coordinate rollback of both extension and worker to Phase 3 baseline"
+        }
+      ],
+      "rollback_procedure_phase4": {
+        "method": "Git revert of Phase 4 commit + extension rebuild",
+        "steps": [
+          {
+            "step": 1,
+            "action": "Identify Phase 4 commit hash",
+            "command": "cd /Users/kimlenglim/Project/gemini-web-bridge && git log --oneline | grep 'Phase 4'",
+            "note": "Record the commit hash for the Phase 4 commit"
+          },
+          {
+            "step": 2,
+            "action": "Revert Phase 4 commit (worker code)",
+            "command": "cd /Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker && git revert <phase4-commit-hash> --no-edit",
+            "note": "This reverts index.js changes (scopeRouter, handleScopeSwitchFromExtension, requestScopeSwitch). May conflict with Phase 1-3 changes if they touch the same lines. Resolve conflicts by keeping Phase 1-3 logic and removing Phase 4 additions."
+          },
+          {
+            "step": 3,
+            "action": "Revert Phase 4 commit (extension code)",
+            "command": "cd /Users/kimlenglim/Project/gemini-web-bridge && git revert <phase4-commit-hash> --no-edit",
+            "note": "This reverts protocol-messages.js (PROTOCOL_VERSION back to 2, remove v3 message types) and background.js (remove ScopeSessionManager, handleScopeSwitch). Resolve conflicts by keeping Phase 1-3 changes."
+          },
+          {
+            "step": 4,
+            "action": "Deploy reverted worker to staging",
+            "command": "cd /Users/kimlenglim/Project/gemini-web-bridge/cloudflare-worker && wrangler deploy --env staging",
+            "verification": "Health endpoint returns ok; WebSocket connection works with v2 protocol"
+          },
+          {
+            "step": 5,
+            "action": "Rebuild extension without Phase 4",
+            "command": "cd /Users/kimlenglim/Project/gemini-web-bridge && python3 scripts/zip-extension.py --output /tmp/gemini-bridge-phase3-revert.zip",
+            "verification": "background.js contains PROTOCOL_VERSION 2, no ScopeSessionManager, no handleScopeSwitch"
+          },
+          {
+            "step": 6,
+            "action": "Reload extension in Chrome with reverted build",
+            "steps": [
+              "Remove Phase 4 extension from chrome://extensions",
+              "Load unpacked with reverted extension-cloudflare directory",
+              "Verify console shows '[BridgeSocket] Connected' without protocol errors"
+            ]
+          },
+          {
+            "step": 7,
+            "action": "Verify Phase 1-3 functionality restored",
+            "method": "Re-run TS-001, TS-005, TS-007, TS-012 against rolled-back staging",
+            "pass_criteria": "All Phase 1-3 tests pass; connection singleton, instance ID, 409 logic working"
+          }
+        ],
+        "note": "Phase 4 changes are additive on top of Phases 1-3. The rollback must remove Phase 4 additions without disturbing Phase 1-3 code. Git revert should handle this automatically if Phase 4 was committed as a separate commit."
+      },
+      "post_deployment_monitoring_phase4": [
+        "Server logs: watch for '[ScopeRouter]' entries showing scope routing activity",
+        "Server logs: watch for '[Bridge DO] Scope confirmed' entries showing scope switches completing",
+        "Server logs: watch for scope cross-contamination indicators (e.g., notebook scope receiving app conversationId)",
+        "Extension console: watch for '[ScopeSessionManager] Scope confirmed' entries",
+        "Extension console: watch for '[BridgeSocket] Received SCOPE_SWITCH' entries",
+        "Monitor 409 error rate - should not increase vs Phase 3 baseline",
+        "Monitor stale connection cleanup rate - should not increase (scope sessions should not cause extra disconnects)",
+        "Monitor active scope count per instance (from server health state) - should be 1-3 for typical usage",
+        "Alert if scopeSessions Map size exceeds expected bounds (>5 scopes per instance may indicate a leak)",
+        "Track TS-014 through TS-018 results in staging for 24 hours before production rollout"
+      ]
+    }
+  }
+}

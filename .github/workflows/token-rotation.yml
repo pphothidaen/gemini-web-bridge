@@ -1,0 +1,184 @@
+name: Token Rotation
+
+# ─── Manual Token Rotation ─────────────────────────────────────────
+# Triggered manually when tokens need to be rotated for security.
+# Syncs new tokens from GitHub Secrets → Doppler → Cloudflare Worker.
+on:
+  workflow_dispatch:
+    inputs:
+      rotate_all:
+        description: 'Rotate all tokens (BRIDGE_AUTH_TOKEN + CLIENT_API_TOKEN)'
+        required: false
+        type: boolean
+        default: false
+      model_to_rotate:
+        description: 'Which token to rotate'
+        required: false
+        type: choice
+        default: 'all'
+        options: [BRIDGE_AUTH_TOKEN, CLIENT_API_TOKEN, all]
+      dry_run:
+        description: 'Only preview, do not rotate (output new token to logs)'
+        required: false
+        type: boolean
+        default: false
+      notes:
+        description: 'Reason for rotation'
+        required: false
+        type: string
+        default: ''
+
+env:
+  NODE_VERSION: '22'
+  WORKER_DIR: 'cloudflare-worker'
+  PROD_URL: 'https://gemini-web-bridge.pansakorn-pho.workers.dev'
+
+jobs:
+  rotate-tokens:
+    name: Rotate Tokens
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Wrangler
+        run: npm install -g wrangler@latest
+
+      - name: Install Doppler CLI
+        run: |
+          curl -Ls https://cli.doppler.com/install.sh | sh
+          sudo ln -sf ~/.doppler/bin/doppler /usr/local/bin/doppler
+
+      - name: Setup Doppler
+        env:
+          DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
+        run: doppler setup --project gemini-web-bridge --config prd_worker --no-interactive
+
+      - name: Determine tokens to rotate
+        id: targets
+        run: |
+          MODEL="${{ inputs.model_to_rotate }}"
+          if [ "$MODEL" = "all" ] || [ "$MODEL" = "BRIDGE_AUTH_TOKEN" ]; then
+            echo "rotate_bridge=true" >> $GITHUB_OUTPUT
+          fi
+          if [ "$MODEL" = "all" ] || [ "$MODEL" = "CLIENT_API_TOKEN" ]; then
+            echo "rotate_client=true" >> $GITHUB_OUTPUT
+          fi
+          echo "dry_run=${{ inputs.dry_run }}" >> $GITHUB_OUTPUT
+          echo "notes=${{ inputs.notes }}" >> $GITHUB_OUTPUT
+
+      - name: Rotate BRIDGE_AUTH_TOKEN
+        if: steps.targets.outputs.rotate_bridge == 'true'
+        env:
+          DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OLD_TOKEN: ${{ secrets.OLD_BRIDGE_AUTH_TOKEN }}
+        run: |
+          echo "## 🔑 Token Rotation: BRIDGE_AUTH_TOKEN" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "⚠️ Dry run — no rotation performed" >> $GITHUB_STEP_SUMMARY
+          else
+            NEW_TOKEN=$(openssl rand -hex 24 | sed 's/^/gemini-bridge-/')
+            # Save to Doppler (primary)
+            echo "$NEW_TOKEN" | doppler secrets set BRIDGE_AUTH_TOKEN --
+            # Update Cloudflare Worker secret
+            echo "$NEW_TOKEN" | npx wrangler secret put BRIDGE_AUTH_TOKEN
+            # Update GitHub Secret
+            echo "NEW_BRIDGE_AUTH_TOKEN=$NEW_TOKEN" >> $GITHUB_ENV
+            echo "Rotated BRIDGE_AUTH_TOKEN: $(echo "$NEW_TOKEN" | head -c 20)…" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Rotate CLIENT_API_TOKEN
+        if: steps.targets.outputs.rotate_client == 'true'
+        env:
+          DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "## 🔑 Token Rotation: CLIENT_API_TOKEN" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "⚠️ Dry run — no rotation performed" >> $GITHUB_STEP_SUMMARY
+          else
+            NEW_TOKEN=$(openssl rand -hex 24)
+            # Save to Doppler (primary)
+            echo "$NEW_TOKEN" | doppler secrets set CLIENT_API_TOKEN --
+            # Update Cloudflare Worker secret
+            echo "$NEW_TOKEN" | npx wrangler secret put CLIENT_API_TOKEN
+            # Update GitHub Secret
+            echo "NEW_CLIENT_API_TOKEN=$NEW_TOKEN" >> $GITHUB_ENV
+            echo "Rotated CLIENT_API_TOKEN: $(echo "$NEW_TOKEN" | head -c 20)…" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Verify — Old tokens rejected (401)
+        if: steps.targets.outputs.dry_run == 'false'
+        env:
+          OLD_BRIDGE_TOKEN: ${{ secrets.OLD_BRIDGE_AUTH_TOKEN }}
+          OLD_CLIENT_TOKEN: ${{ secrets.OLD_CLIENT_API_TOKEN }}
+        run: |
+          if [ -n "$OLD_BRIDGE_TOKEN" ]; then
+            BRIDGE_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.PROD_URL }}/bridge/auth-check" -H "x-bridge-token: $OLD_BRIDGE_TOKEN")
+            if [ "$BRIDGE_CODE" = "401" ]; then
+              echo "✅ Old BRIDGE_AUTH_TOKEN rejected (401)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ SECURITY ISSUE: Old bridge token returned $BRIDGE_CODE (expected 401)" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          fi
+          if [ -n "$OLD_CLIENT_TOKEN" ]; then
+            CLIENT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${{ env.PROD_URL }}/v1/chat/completions" \
+              -H "Authorization: Bearer $OLD_CLIENT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"model":"gemini-3.8-flash-thinking","messages":[{"role":"user","content":"test"}]}')
+            if [ "$CLIENT_CODE" = "401" ]; then
+              echo "✅ Old CLIENT_API_TOKEN rejected (401)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ SECURITY ISSUE: Old client token returned $CLIENT_CODE (expected 401)" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          fi
+
+      - name: Verify — New tokens accepted
+        if: steps.targets.outputs.dry_run == 'false'
+        env:
+          NEW_BRIDGE_AUTH_TOKEN: ${{ env.NEW_BRIDGE_AUTH_TOKEN }}
+          NEW_CLIENT_API_TOKEN: ${{ env.NEW_CLIENT_API_TOKEN }}
+        run: |
+          if [ -n "$NEW_BRIDGE_AUTH_TOKEN" ]; then
+            BCODE=$(curl -s "${{ env.PROD_URL }}/bridge/auth-check" -H "x-bridge-token: $NEW_BRIDGE_AUTH_TOKEN")
+            echo "$BCODE" | grep -q '"ok":true' && echo "✅ New BRIDGE_AUTH_TOKEN accepted" >> $GITHUB_STEP_SUMMARY || echo "⚠️ New BRIDGE_AUTH_TOKEN response: $BCODE" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -n "$NEW_CLIENT_API_TOKEN" ]; then
+            CCODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${{ env.PROD_URL }}/v1/chat/completions" \
+              -H "Authorization: Bearer $NEW_CLIENT_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"model":"gemini-3.8-flash-thinking","messages":[{"role":"user","content":"healthy"}]}')
+            if [ "$CCODE" = "200" ] || [ "$CCODE" = "503" ]; then
+              echo "✅ New CLIENT_API_TOKEN accepted (HTTP $CCODE)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ New CLIENT_API_TOKEN rejected (HTTP $CCODE)" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          fi
+
+      - name: Sync OLD tokens to GitHub Secrets
+        if: steps.targets.outputs.dry_run == 'false'
+        run: |
+          # Record what was rotated for audit trail
+          echo "## 📝 Rotation Summary — ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "Notes: ${{ inputs.notes }}" >> $GITHUB_STEP_SUMMARY
+          echo "Target: ${{ inputs.model_to_rotate }}" >> $GITHUB_STEP_SUMMARY
+          echo "Dry run: ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> ⚠️ GitHub Secrets (NEW_BRIDGE_AUTH_TOKEN, NEW_CLIENT_API_TOKEN) and Doppler (BRIDGE_AUTH_TOKEN, CLIENT_API_TOKEN) must be manually synced in the repo settings after this run." >> $GITHUB_STEP_SUMMARY
+
+      - name: Final health check
+        if: steps.targets.outputs.dry_run == 'false'
+        run: |
+          sleep 5
+          HEALTH=$(curl -s --retry 2 --retry-delay 2 --max-time 30 ${{ env.PROD_URL }}/health)
+          echo "$HEALTH" | grep -q '"status": *"ok"' && echo "✅ Post-rotation health OK" >> $GITHUB_STEP_SUMMARY || (echo "❌ Post-rotation health check failed" && echo "$HEALTH" && exit 1)

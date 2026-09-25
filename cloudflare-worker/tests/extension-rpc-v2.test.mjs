@@ -134,7 +134,7 @@ function setupExtensionVm(options = {}) {
   return sandbox;
 }
 
-test('SESSION_READY and MODELS_DISCOVERED emit protocolVersion 2 without leaking Google CSRF tokens', async () => {
+test('SESSION_READY and MODELS_DISCOVERED emit protocolVersion 3 without leaking Google CSRF tokens', async () => {
   const env = setupExtensionVm();
   await Promise.resolve();
 
@@ -153,7 +153,7 @@ test('SESSION_READY and MODELS_DISCOVERED emit protocolVersion 2 without leaking
 
   const sessionReady = env.messages.find(m => m.type === 'SESSION_READY');
   assert.ok(sessionReady, 'SESSION_READY must be sent');
-  assert.equal(sessionReady.protocolVersion, 2);
+  assert.equal(sessionReady.protocolVersion, 3);
   assert.deepEqual(sessionReady.capabilities, { verifiedRpc: true });
   assert.equal(sessionReady.enforcementMode, 'strict');
   assert.equal(sessionReady.sessionReady, true);

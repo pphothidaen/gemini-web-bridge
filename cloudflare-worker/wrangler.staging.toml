@@ -23,11 +23,8 @@ bindings = [
 tag = "v1-staging"
 new_sqlite_classes = ["GeminiBridgeDO"]
 
-# Staging route (use wrangler deploy --env staging)
-[env.staging]
-name = "gemini-web-bridge-staging"
-route = "gemini-web-bridge-staging.pansakorn-pho.workers.dev"
-
+# Staging worker - accessible via workers.dev
+workers_dev = true
 [env.staging.vars]
 ENVIRONMENT = "staging"
 LOG_LEVEL = "debug"
