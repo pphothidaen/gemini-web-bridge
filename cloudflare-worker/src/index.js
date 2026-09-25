@@ -1195,6 +1195,9 @@ export class GeminiBridgeDO extends DurableObject {
         }
       });
       try {
+        if (!this.activeSocket || this.activeSocket.readyState !== 1) {
+          throw Object.assign(new Error("Extension is not connected; cannot switch scope"), { code: "extension_disconnected" });
+        }
         this.activeSocket.send(JSON.stringify({ type: "PREPARE_SCOPE", requestId, scope }));
       } catch (error) {
         clearTimeout(timer);
@@ -2395,7 +2398,12 @@ export class GeminiBridgeDO extends DurableObject {
           return { ok: false, message: `Unrecognized bridge scope '${this.redactScopeId(scopeInput)}'. Use "app", "app:<conversationId>", "notebook:<notebookId>", or a gemini.google.com URL/path.` };
         }
         if (this.currentScope === targetScope) return { ok: true, scope: targetScope };
-        const ready = await this.prepareScope(targetScope);
+        let ready;
+        try {
+          ready = await this.prepareScope(targetScope);
+        } catch (error) {
+          return { ok: false, message: this.redactScopeId(error.message || "Scope switch failed"), code: error.code };
+        }
         this.currentScope = ready.scope || targetScope;
         const failClosedErr = this.addScopeFailClosed(targetScope);
         if (failClosedErr) {
