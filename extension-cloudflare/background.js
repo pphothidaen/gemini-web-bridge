@@ -115,53 +115,11 @@ async function getOrCreateInstanceId(storageSession) {
 }
 
 /**
- * Maps a gemini.google.com pathname to a canonical scope id.
- *   /app            -> "app"
- *   /app/<convId>   -> "app:<convId>"
- *   /notebook/<id>  -> "notebook:<id>"
- */
-export function scopeFromPath(pathname) {
-  let m = /^\/notebook\/([A-Za-z0-9_-]+)/.exec(pathname || "");
-  if (m) return `notebook:${m[1]}`;
-  m = /^\/app\/([A-Za-z0-9_-]+)/.exec(pathname || "");
-  if (m) return `app:${m[1]}`;
-  return "app";
-}
-
-/**
  * Allowed characters for a scope id; same charset as scopeFromPath's capture
+ * group ([A-Za-z0-9_-]+) so only well-formed ids can reach URL construction.
  * group ([A-Za-z0-9_-]+) so only well-formed ids can reach URL construction.
  */
 const SCOPE_ID_RE = /^[A-Za-z0-9_-]+$/;
-
-/**
- * Validates and normalizes an incoming scope value.
- * Accepts "app", "app:<id>", or "notebook:<id>" where <id> is non-empty and
- * contains only [A-Za-z0-9_-]. Returns a canonical scope string or null when
- * the input is malformed, preventing crafted scopes from reaching URL builds.
- */
-export function validateScope(scope) {
-  if (!scope) return null;
-  const s = String(scope);
-  if (s === "app") return "app";
-  const m = /^(app|notebook):([A-Za-z0-9_-]+)$/.exec(s);
-  if (m) return `${m[1]}:${m[2]}`;
-  return null;
-}
-
-/**
- * Maps a canonical scope id back to the gemini.google.com URL to open.
- * The id is validated against SCOPE_ID_RE and URL-encoded to prevent path
- * traversal via crafted scope values such as "app:../../etc/passwd".
- */
-export function scopeToUrl(scope) {
-  if (!scope || scope === "app") return "https://gemini.google.com/app";
-  const [kind, id] = String(scope).split(":");
-  if ((kind === "app" || kind === "notebook") && id && SCOPE_ID_RE.test(id)) {
-    return `https://gemini.google.com/${kind}/${encodeURIComponent(id)}`;
-  }
-  return "https://gemini.google.com/app";
-}
 
 function computeBackoff(attempt, base = 1000, max = 30000, rnd = Math.random) {
   const exp = Math.min(base * Math.pow(2, Math.max(0, attempt)), max);
@@ -174,6 +132,7 @@ export class CentralTabCoordinator {
     this.connectedPorts = new Map(); // tabId -> Port
     this.activeLeaderTabId = null;
     this.initialized = false;
+    this.lastLeaderHeartbeat = null; // Timestamp of last heartbeat from current leader (ms)
   }
 
   async init() {
@@ -217,6 +176,12 @@ export class CentralTabCoordinator {
       if (msg?.type === "CLAIM_LEADERSHIP") {
         this.promoteToLeader(tabId);
       }
+      if (msg?.type === "HEARTBEAT" && this.activeLeaderTabId === tabId) {
+        this.lastLeaderHeartbeat = Date.now();
+        this.sendPortMessage(port, { type: "HEARTBEAT_ACK", timestamp: Date.now() });
+      }
+      // Check leader health on every incoming message
+      this.checkLeaderHealth();
     });
 
     port.onDisconnect.addListener(() => {
@@ -238,6 +203,34 @@ export class CentralTabCoordinator {
         }
       }
     });
+  }
+
+  checkLeaderHealth() {
+    if (this.activeLeaderTabId === null) return;
+    if (typeof this.lastLeaderHeartbeat !== "number") return;
+    const now = Date.now();
+    const heartbeatAge = now - this.lastLeaderHeartbeat;
+    if (heartbeatAge > 15000) {
+      // Leader heartbeat stale > 15s (3 misses at 5s interval) — auto-failover
+      console.warn(`[BackgroundCoordinator] ⚠️ Leader heartbeat stale (${Math.round(heartbeatAge/1000)}s) — auto-failover`);
+      const nextEntry = this.connectedPorts.entries().next().value;
+      if (nextEntry) {
+        const [nextTabId, nextPort] = nextEntry;
+        const oldLeaderId = this.activeLeaderTabId;
+        this.activeLeaderTabId = nextTabId;
+        this.persistLeader(nextTabId);
+        // Demote old leader
+        if (this.connectedPorts.has(oldLeaderId)) {
+          const oldPort = this.connectedPorts.get(oldLeaderId);
+          this.sendPortMessage(oldPort, { type: "COORDINATOR_STATE", role: "standby", tabId: oldLeaderId, leaderTabId: nextTabId });
+        }
+        // Promote new leader
+        if (this.connectedPorts.has(nextTabId)) {
+          this.sendPortMessage(nextPort, { type: "COORDINATOR_STATE", role: "leader", tabId: nextTabId });
+        }
+        console.log(`[BackgroundCoordinator] 👑 Auto-failover: Tab ${nextTabId} promoted to Leader (leader unresponsive)`);
+      }
+    }
   }
 
   promoteToLeader(tabId) {
@@ -318,6 +311,12 @@ export class BridgeSocketManager {
     this.instanceId = null;
     // Phase 4: Scope session manager for multiplexed protocol
     this.scopeSessionManager = new ScopeSessionManager();
+    // Default handler: unscoped messages get forwarded to the active bridge tab.
+    // This is wired after connect() so `forwardToActiveTab` exists; set it here as
+    // a stable reference so the manager can call it before the socket is open too.
+    this.scopeSessionManager.setDefaultHandler((msg, scopeId) => {
+      this.forwardToActiveTab(msg);
+    });
   }
 
   async initInstanceId() {
@@ -419,6 +418,8 @@ export class BridgeSocketManager {
       console.log("[BridgeSocket] ✅ Connected to Cloudflare DO Hub");
       this.reconnectAttempts = 0;
       this._state = ConnectionState.CONNECTED;
+      // Wire the multiplexed scope session manager to the live socket.
+      this.scopeSessionManager.setSendFn((msg) => this.sendToWorker(msg));
       // Start stale-socket detection ticker.
       this._resetStaleCheckTimer();
       // After a SW restart the DO lost our session publish; ask the active
@@ -595,6 +596,19 @@ export class BridgeSocketManager {
 
   handleWorkerMessage(msg) {
     if (!msg || typeof msg !== "object") return;
+
+    // Phase 4: Route messages through the multiplexed scope session manager.
+    // The manager dispatches by envelope scope/scoping to the correct registered
+    // scope handler; messages without a scope fall to the default handler (set
+    // below to forward to the active bridge tab).
+    const routed = this.scopeSessionManager.routeMessage(msg);
+    if (routed) {
+      // Handled by a scope handler — nothing more to do here.
+      return;
+    }
+
+    // Fallback for legacy / control messages that carry no scope envelope:
+    // these are handled directly by the socket manager.
     switch (msg.type) {
       case "PING":
         this.sendToWorker({ type: "PONG" });
@@ -625,6 +639,16 @@ export class BridgeSocketManager {
         break;
       case MessageTypes.PROTOCOL_INFO:
         console.log("[BridgeSocket] Protocol info from worker:", msg);
+        break;
+      case MessageTypes.SUBSCRIBE:
+      case MessageTypes.UNSUBSCRIBE:
+        // Server acknowledges or relays subscription state changes.
+        // The client manager already tracks local interest; here we
+        // optionally notify the relevant scope handler that the server
+        // has processed the intent. The ScopeSessionManager emits these
+        // locally when subscribe/unsubscribe is called, so the server
+        // ack is informational unless the handler wants to reconcile.
+        this.scopeSessionManager.routeMessage(msg);
         break;
       default:
         break;
@@ -731,16 +755,17 @@ export class BridgeSocketManager {
     if (!this.pendingScopes.size) return;
     const effective = actualScope || "app";
     const validated = validateScope(actualScope) || actualScope;
-    
-    // Update scope session manager
+
+    // Confirm the scope via the session manager (it handles wire SCOPE_READY + listener resolution).
     this.scopeSessionManager.confirmScope(validated);
-    
+
     for (const [requestId, entry] of Array.from(this.pendingScopes.entries())) {
       if (entry.scope === effective || entry.scope === validated) {
         clearTimeout(entry.timer);
         this.pendingScopes.delete(requestId);
+        // The manager already emitted SCOPE_READY in confirmScope; ensure the worker
+        // also gets the explicit per-request SCOPE_READY for legacy compatibility.
         this.sendToWorker({ type: "SCOPE_READY", requestId, scope: validated });
-        this.scopeSessionManager.notifyScopeReady(requestId, validated);
       }
     }
   }
@@ -757,110 +782,54 @@ export class BridgeSocketManager {
 
   /**
    * Phase 4: Handle SCOPE_SWITCH message from worker (multiplexed protocol).
-   * This allows scope switching WITHOUT requiring a WebSocket reconnect.
+   * Delegates scope switching state machine to ScopeSessionManager.
+   * The manager validates, notifies handlers, emits the wire SCOPE_SWITCH,
+   * and (when wired) awaits a navigation callback to perform the tab switch.
    */
   async handleScopeSwitch(msg) {
-    const { requestId, scope: targetScope } = msg;
-    console.log(`[BridgeSocket] Received SCOPE_SWITCH: ${this.scopeSessionManager.getCurrentScope()} -> ${targetScope} (req: ${requestId})`);
-    
-    // Use ScopeSessionManager to handle the switch
-    const validatedScope = this.scopeSessionManager.requestScopeSwitch(targetScope, requestId);
-    if (!validatedScope) {
-      this.sendToWorker({
-        type: MessageTypes.STREAM_ERROR,
-        requestId,
-        error: `Invalid scope: ${targetScope}`,
-        code: "invalid_scope"
-      });
-      return;
-    }
-    
-    // Check if we're already at the target scope
-    const currentScope = this.scopeSessionManager.getCurrentScope();
-    if (validatedScope === currentScope) {
-      // Already at this scope, confirm immediately
-      this.sendToWorker(buildScopeReadyMessage(validatedScope, requestId));
-      return;
-    }
-    
-    // Resolve order: check existing tabs at target scope
-    try {
+    // Delegate entirely to the scope session manager; it handles validation,
+    // handler notifications, wire emission, and optional navigation callback.
+    // The navigation callback is wired inline: it updates the leader tab URL and
+    // requests scope detection from the content script — the same flow as the
+    // legacy path but owned by the manager now.
+    const navigateFn = async (url, validatedScope) => {
       const leaderId = this.coordinator?.activeLeaderTabId;
-      if (leaderId != null && (await this.tabScope(leaderId)) === validatedScope) {
-        this.forwardToActiveTab(msg);
-        return;
-      }
-      if (this.coordinator) {
-        for (const tabId of this.coordinator.connectedPorts.keys()) {
-          if (tabId === leaderId) continue;
-          if ((await this.tabScope(tabId)) === validatedScope) {
-            this.coordinator.promoteToLeader(tabId);
-            this.forwardToActiveTab(msg);
-            return;
-          }
+      if (leaderId != null && this.coordinator.connectedPorts.has(leaderId) && this.tabsApi) {
+        try {
+          await this.tabsApi.update(leaderId, { url });
+          console.log(`[BridgeSocket] Navigated leader tab ${leaderId} to ${url}; awaiting scope confirmation`);
+          setTimeout(() => {
+            this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
+          }, 300);
+          return;
+        } catch (e) {
+          console.warn("[BridgeSocket] Tab navigation failed:", e);
         }
       }
-    } catch (e) {
-      console.warn("[BridgeSocket] Scope tab probe failed:", e);
-    }
-    
-    // Navigation needed - set up pending scope with timeout
-    this.pendingScopes.set(requestId, {
-      scope: validatedScope,
-      timer: setTimeout(() => {
-        this.pendingScopes.delete(requestId);
-        this.scopeSessionManager.targetScope = null;
-        this.scopeSessionManager.scopeSwitching = false;
-        this.sendToWorker({
-          type: MessageTypes.STREAM_ERROR,
-          requestId,
-          error: `Scope switch to '${validatedScope}' timed out after ${Math.round(SCOPE_SWITCH_TIMEOUT_MS / 1000)}s`,
-          code: "scope_switch_failed"
-        });
-      }, SCOPE_SWITCH_TIMEOUT_MS)
-    });
-    
-    const url = scopeToUrl(validatedScope);
-    const leaderId = this.coordinator?.activeLeaderTabId;
-    if (leaderId != null && this.coordinator.connectedPorts.has(leaderId) && this.tabsApi) {
-      try {
-        await this.tabsApi.update(leaderId, { url });
-        console.log(`[BridgeSocket] Navigated leader tab ${leaderId} to ${url}; awaiting scope confirmation`);
-        setTimeout(() => {
-          this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
-        }, 300);
-        return;
-      } catch (e) {
-        console.warn("[BridgeSocket] Tab navigation failed:", e);
+      if (this.tabsApi) {
+        try {
+          await this.tabsApi.create({ url, active: false });
+          console.log(`[BridgeSocket] Created background tab for ${url}; awaiting scope confirmation`);
+          setTimeout(() => {
+            this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
+          }, 500);
+          return;
+        } catch (e) {
+          console.warn("[BridgeSocket] Tab creation failed:", e);
+        }
       }
-    }
-    if (this.tabsApi) {
-      try {
-        await this.tabsApi.create({ url, active: false });
-        console.log(`[BridgeSocket] Created background tab for ${url}; awaiting scope confirmation`);
-        setTimeout(() => {
-          this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
-        }, 500);
-        return;
-      } catch (e) {
-        console.warn("[BridgeSocket] Tab creation failed:", e);
-      }
-    }
-    
-    // Failed to navigate
-    const entry = this.pendingScopes.get(requestId);
-    if (entry) {
-      clearTimeout(entry.timer);
-      this.pendingScopes.delete(requestId);
-      this.scopeSessionManager.targetScope = null;
-      this.scopeSessionManager.scopeSwitching = false;
+      // No tab available to navigate — the manager will later get a scope
+      // confirmation failure; surface it here as a stream error.
+      const requestId = msg.requestId;
       this.sendToWorker({
         type: MessageTypes.STREAM_ERROR,
         requestId,
         error: `Scope switch to '${validatedScope}' failed: no tab available to navigate`,
-        code: "scope_switch_failed"
+        code: "scope_switch_failed",
       });
-    }
+    };
+
+    await this.scopeSessionManager.handleScopeSwitch(msg, navigateFn);
   }
 
   /** Messages arriving from content scripts over the "gemini-bridge-socket" port. */
@@ -886,10 +855,10 @@ export class BridgeSocketManager {
       // Forward scope re-detection requests to the active content script.
       this.sendToActiveTab(msg);
     }
-    // Phase 4: Handle SCOPE_READY from content script (multiplexed protocol)
+    // Phase 4: Handle SCOPE_READY from content script (multiplexed protocol).
+    // The session manager confirms the scope and emits SCOPE_READY over the wire.
     else if (msg.type === MessageTypes.SCOPE_READY) {
-      this.resolvePendingScopes(msg.scope);
-      this.scopeSessionManager.confirmScope(msg.scope);
+      this.scopeSessionManager.confirmScope(msg.scope, msg.requestId);
       this.sendToWorker(msg);
     }
   }
