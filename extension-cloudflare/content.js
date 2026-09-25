@@ -62,6 +62,18 @@
         saveToStorage() {}
       };
 
+  // ─── CSP Violation Handling ─────────────────────────────────
+  // Gemini's own CSP may trigger manifest-src 'none' violations
+  // for its internal _/BardChatUi/manifest.json. This is a site-side
+  // constraint, not an extension issue. We capture the event to reduce
+  // console noise while leaving the page's security model intact.
+  window.addEventListener('securitypolicyviolation', (event) => {
+    if (event && event.violatedDirective === 'manifest-src') {
+      console.warn('[Gemini Bridge] CSP manifest-src violation (Gemini UI):', event);
+      event.preventDefault();
+    }
+  });
+
   const AutoModelSelectorRef = (typeof globalThis !== "undefined" && globalThis.AutoModelSelector)
     ? globalThis.AutoModelSelector
     : null;
@@ -459,6 +471,11 @@
         handlePrepareScope(msg);
         break;
 
+      // Phase 4: SCOPE_SWITCH - multiplexed protocol allows scope switching without reconnect
+      case "SCOPE_SWITCH":
+        handleScopeSwitch(msg);
+        break;
+
       case "REQUEST_SYNC":
         if (isLeaderTab) {
           if (sessionState.sessionReady) publishSessionReady();
@@ -489,6 +506,16 @@
         }
         break;
 
+      case "REQUEST_SCOPE_DETECTION":
+        // Background asked us to re-detect our actual scope after navigation.
+        // Respond with the true current scope so the Worker can trust it.
+        if (isLeaderTab) {
+          const actual = detectScope();
+          console.log(`[Bridge] 📡 scope re-detection requested; reporting actual: ${actual}`);
+          sendToWorker({ type: "SCOPE_DETECTED", scope: actual });
+        }
+        break;
+
       default:
         break;
     }
@@ -498,19 +525,82 @@
    * PREPARE_SCOPE from the Worker. Navigation to the target scope URL is
    * performed by the background service worker; this tab only confirms
    * whether its current location already matches the requested scope.
+   * If mismatched, a grace window (500-1000ms) is granted to allow in-flight
+   * navigation to complete before sending a scope_mismatch error.
    */
   function handlePrepareScope(msg) {
     const current = detectScope();
     if (!msg.scope || current === msg.scope) {
       sendToWorker({ type: "SCOPE_READY", requestId: msg.requestId, scope: current });
-    } else {
+      return;
+    }
+
+    // Grace window for in-flight background navigation before failing
+    const GRACE_WINDOW_MS = 800;
+    setTimeout(() => {
+      const refreshedScope = detectScope();
+      if (!msg.scope || refreshedScope === msg.scope) {
+        sendToWorker({ type: "SCOPE_READY", requestId: msg.requestId, scope: refreshedScope });
+      } else {
+        sendToWorker({
+          type: "STREAM_ERROR",
+          requestId: msg.requestId,
+          error: `Tab scope '${refreshedScope}' does not match requested scope '${msg.scope}' (background navigation pending)`,
+          code: "scope_mismatch"
+        });
+      }
+    }, GRACE_WINDOW_MS);
+  }
+
+  /**
+   * Phase 4: Handle SCOPE_SWITCH message from Worker (multiplexed protocol).
+   * This allows scope switching without requiring a WebSocket reconnect.
+   * The background service worker handles the actual navigation.
+   */
+  function handleScopeSwitch(msg) {
+    const { scope: targetScope, requestId } = msg;
+    console.log(`[Bridge] 📡 SCOPE_SWITCH received: ${detectScope()} -> ${targetScope} (req: ${requestId})`);
+    
+    // Validate the target scope
+    const m = /^(app|notebook):([A-Za-z0-9_-]+)$/.exec(targetScope || "");
+    if (!m && targetScope !== 'app') {
+      console.warn(`[Bridge] Invalid scope in SCOPE_SWITCH: ${targetScope}`);
       sendToWorker({
         type: "STREAM_ERROR",
-        requestId: msg.requestId,
-        error: `Tab scope '${current}' does not match requested scope '${msg.scope}' (background navigation pending)`,
-        code: "scope_mismatch"
+        requestId: requestId,
+        error: `Invalid scope: ${targetScope}`,
+        code: "invalid_scope"
       });
+      return;
     }
+    
+    const current = detectScope();
+    if (targetScope === current || (targetScope === 'app' && current === 'app')) {
+      // Already at target scope, confirm immediately
+      console.log(`[Bridge] Already at scope ${current}, confirming SCOPE_SWITCH`);
+      sendToWorker({ type: "SCOPE_READY", requestId: requestId, scope: current });
+      return;
+    }
+    
+    // The background service worker handles navigation
+    // We just acknowledge and wait for navigation to complete
+    console.log(`[Bridge] SCOPE_SWITCH acknowledged; background will navigate to ${targetScope}`);
+    
+    // Grace window for in-flight background navigation before failing
+    const GRACE_WINDOW_MS = 800;
+    setTimeout(() => {
+      const refreshedScope = detectScope();
+      if (refreshedScope === targetScope || (targetScope === 'app' && refreshedScope === 'app')) {
+        sendToWorker({ type: "SCOPE_READY", requestId: requestId, scope: refreshedScope });
+      } else {
+        sendToWorker({
+          type: "STREAM_ERROR",
+          requestId: requestId,
+          error: `Scope switch to '${targetScope}' failed: tab is at '${refreshedScope}'`,
+          code: "scope_switch_failed"
+        });
+      }
+    }, GRACE_WINDOW_MS);
   }
 
   function scheduleReconnect() {
