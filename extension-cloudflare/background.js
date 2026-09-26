@@ -22,6 +22,7 @@ import {
 } from './protocol-messages.js';
 
 const DEFAULT_WORKER_URL = "https://gemini-web-bridge.pansakorn-pho.workers.dev";
+// Injected by scripts/build-extension.py at build time — never commit real values.
 const DEFAULT_BRIDGE_SECRET = "__BRIDGE_AUTH_TOKEN__";
 const SCOPE_SWITCH_TIMEOUT_MS = 45000;
 const INSTANCE_ID_STORAGE_KEY = "bridge_instance_id";
@@ -391,8 +392,34 @@ export class BridgeSocketManager {
       return;
     }
 
+    // Ensure instanceId is set before building the WebSocket URL.
+    // It can be null after _onConflict() clears it or if initInstanceId()
+    // hasn't resolved yet. A missing ?instanceId= param causes a 401 on the
+    // DO side, which would permanently lock out reconnection via AUTH_FAILED.
+    if (!this.instanceId) {
+      try {
+        await this.initInstanceId();
+      } catch (e) {
+        console.error("[BridgeSocket] Failed to reinitialize instanceId:", e);
+        // Generate a transient ID so we at least attempt the connection.
+        this.instanceId = (typeof crypto !== "undefined" && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : `fallback-${Date.now()}`;
+      }
+    }
+
+    let wsUrl;
     try {
-      this.socket = new this.WebSocketImpl(this.wsUrl());
+      wsUrl = this.wsUrl();
+    } catch (e) {
+      console.error("[BridgeSocket] wsUrl() construction failed:", e);
+      this._state = ConnectionState.DISCONNECTED;
+      this.scheduleReconnect();
+      return;
+    }
+
+    try {
+      this.socket = new this.WebSocketImpl(wsUrl);
     } catch (e) {
       console.error("[BridgeSocket] WebSocket creation failed:", e);
       this._state = ConnectionState.DISCONNECTED;
@@ -493,8 +520,11 @@ export class BridgeSocketManager {
   }
 
   /**
-   * Called on 409 Conflict. Clears instanceId so a future manual
-   * reconnect attempt gets a fresh identity.
+   * Called on 409 Conflict. Clears the stale instanceId, waits for the DO's
+   * 45-second stale-connection window to elapse (we wait 50s to be safe), then
+   * generates a fresh instanceId and retries. Without this retry the SW would
+   * stay DISCONNECTED forever because `_onConflict` was the only path out of the
+   * 409 branch that did NOT call scheduleReconnect().
    */
   _onConflict() {
     this.reconnectAttempts = 0;
@@ -502,6 +532,20 @@ export class BridgeSocketManager {
     const sessionStorage = (typeof chrome !== "undefined" && chrome.storage?.session) ? chrome.storage.session : null;
     if (sessionStorage) {
       try { sessionStorage.remove([INSTANCE_ID_STORAGE_KEY]); } catch (e) {}
+    }
+    // Schedule a reconnect attempt after the DO's 45s stale window (+5s grace).
+    // The state stays DISCONNECTED so checkStaleSocket() / alarms can also
+    // trigger the attempt independently.
+    const CONFLICT_RETRY_DELAY_MS = 50_000;
+    console.log(`[BridgeSocket] 409 Conflict: will retry with fresh identity in ${CONFLICT_RETRY_DELAY_MS / 1000}s.`);
+    if (!this.reconnectTimer) {
+      this._state = ConnectionState.RECONNECTING;
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        // Re-initialize instanceId before the next attempt so wsUrl() always
+        // includes the required ?instanceId= param (missing it causes 401).
+        this.initInstanceId().then(() => this.connect()).catch(() => this.connect());
+      }, CONFLICT_RETRY_DELAY_MS);
     }
   }
 
@@ -597,22 +641,25 @@ export class BridgeSocketManager {
   handleWorkerMessage(msg) {
     if (!msg || typeof msg !== "object") return;
 
-    // Phase 4: Route messages through the multiplexed scope session manager.
-    // The manager dispatches by envelope scope/scoping to the correct registered
-    // scope handler; messages without a scope fall to the default handler (set
-    // below to forward to the active bridge tab).
-    const routed = this.scopeSessionManager.routeMessage(msg);
-    if (routed) {
-      // Handled by a scope handler — nothing more to do here.
+    // Control messages must be handled directly by the socket manager
+    // before any envelope/scope routing. Specifically, DO keepalive PING
+    // must always reply with PONG to maintain connection liveness.
+    if (msg.type === "PING") {
+      this.sendToWorker({ type: "PONG" });
+      this._resetStaleCheckTimer();
       return;
     }
 
-    // Fallback for legacy / control messages that carry no scope envelope:
-    // these are handled directly by the socket manager.
+    // Direct handling of control, execution, and scope messages
     switch (msg.type) {
-      case "PING":
-        this.sendToWorker({ type: "PONG" });
+      case "PREPARE_SCOPE":
+        this.handlePrepareScope(msg);
         break;
+
+      case MessageTypes.SCOPE_SWITCH:
+        this.handleScopeSwitch(msg);
+        break;
+
       case "PREPARE_MODEL":
       case "EXECUTE_REQUEST":
       case "CANCEL_REQUEST":
@@ -630,27 +677,19 @@ export class BridgeSocketManager {
         }
         break;
       }
-      case "PREPARE_SCOPE":
-        this.handlePrepareScope(msg);
-        break;
-      // Phase 4: New multiplexed protocol message types
-      case MessageTypes.SCOPE_SWITCH:
-        this.handleScopeSwitch(msg);
-        break;
+
       case MessageTypes.PROTOCOL_INFO:
         console.log("[BridgeSocket] Protocol info from worker:", msg);
         break;
+
       case MessageTypes.SUBSCRIBE:
       case MessageTypes.UNSUBSCRIBE:
-        // Server acknowledges or relays subscription state changes.
-        // The client manager already tracks local interest; here we
-        // optionally notify the relevant scope handler that the server
-        // has processed the intent. The ScopeSessionManager emits these
-        // locally when subscribe/unsubscribe is called, so the server
-        // ack is informational unless the handler wants to reconcile.
         this.scopeSessionManager.routeMessage(msg);
         break;
+
       default:
+        // Any remaining custom message routed through scopeSessionManager
+        this.scopeSessionManager.routeMessage(msg);
         break;
     }
   }
@@ -714,12 +753,15 @@ export class BridgeSocketManager {
     if (leaderId != null && this.coordinator.connectedPorts.has(leaderId) && this.tabsApi) {
       try {
         await this.tabsApi.update(leaderId, { url });
-        // After navigation, wait briefly for the SPA URL change to propagate,
-        // then ask the content script to re-detect the actual scope.
         console.log(`[BridgeSocket] Navigated leader tab ${leaderId} to ${url}; awaiting scope confirmation`);
-        setTimeout(() => {
-          this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
-        }, 300);
+        const pollDelays = [300, 800, 1600, 3000];
+        for (const delay of pollDelays) {
+          setTimeout(() => {
+            if (this.pendingScopes.has(requestId)) {
+              this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
+            }
+          }, delay);
+        }
         return;
       } catch (e) {
         console.warn("[BridgeSocket] Tab navigation failed:", e);
@@ -729,9 +771,14 @@ export class BridgeSocketManager {
       try {
         await this.tabsApi.create({ url, active: false });
         console.log(`[BridgeSocket] Created background tab for ${url}; awaiting scope confirmation`);
-        setTimeout(() => {
-          this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
-        }, 500);
+        const pollDelays = [500, 1200, 2500, 4000];
+        for (const delay of pollDelays) {
+          setTimeout(() => {
+            if (this.pendingScopes.has(requestId)) {
+              this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
+            }
+          }, delay);
+        }
         return;
       } catch (e) {
         console.warn("[BridgeSocket] Tab creation failed:", e);
@@ -798,9 +845,12 @@ export class BridgeSocketManager {
         try {
           await this.tabsApi.update(leaderId, { url });
           console.log(`[BridgeSocket] Navigated leader tab ${leaderId} to ${url}; awaiting scope confirmation`);
-          setTimeout(() => {
-            this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
-          }, 300);
+          const pollDelays = [300, 800, 1600, 3000];
+          for (const delay of pollDelays) {
+            setTimeout(() => {
+              this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
+            }, delay);
+          }
           return;
         } catch (e) {
           console.warn("[BridgeSocket] Tab navigation failed:", e);
@@ -810,9 +860,12 @@ export class BridgeSocketManager {
         try {
           await this.tabsApi.create({ url, active: false });
           console.log(`[BridgeSocket] Created background tab for ${url}; awaiting scope confirmation`);
-          setTimeout(() => {
-            this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
-          }, 500);
+          const pollDelays = [500, 1200, 2500, 4000];
+          for (const delay of pollDelays) {
+            setTimeout(() => {
+              this.sendToActiveTab({ type: "REQUEST_SCOPE_DETECTION" });
+            }, delay);
+          }
           return;
         } catch (e) {
           console.warn("[BridgeSocket] Tab creation failed:", e);

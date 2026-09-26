@@ -368,7 +368,10 @@ export class GeminiBridgeDO extends DurableObject {
    * Returns the socket of the most recently active connection, or null.
    */
   get activeSocket() {
-    if (this.activeConnections.size === 0) return null;
+    // Legacy/back-compat callers (and older test harnesses) assign a socket
+    // object directly; honour that as a fallback when no instanceId-tracked
+    // connection exists.
+    if (this.activeConnections.size === 0) return this._legacyActiveSocket || null;
     // Return the most recently active socket
     let mostRecent = null;
     let mostRecentTime = 0;
@@ -383,13 +386,26 @@ export class GeminiBridgeDO extends DurableObject {
 
   /**
    * Backward compatibility setter for activeSocket.
-   * In Phase 3, this is a no-op since we use activeConnections Map instead.
-   * Legacy code that sets activeSocket directly will be ignored.
+   *
+   * Phase 3 tracks connections per instanceId in `activeConnections`; the
+   * matching getter derives the live socket from that map and falls back to this
+   * value for legacy callers. Two things it must NOT do (both caused the
+   * "409 Conflict / Bridge extension offline" outage when done here):
+   *   1. register a phantom connection entry — doing so left a
+   *      "legacy-test-instance" entry that stayed healthy for 45s and rejected
+   *      every *other* instance with 409 Conflict;
+   *   2. fake `currentTokens` so /health reported CONNECTED_AND_READY without a
+   *      real SESSION_READY from the extension.
+   * Assigning null still clears the tracked connections (close handler path).
    */
   set activeSocket(socket) {
-    // No-op in Phase 3: connections are managed via activeConnections Map
-    // Setting activeSocket directly is deprecated
-    console.warn("[Bridge DO] Setting activeSocket directly is deprecated in Phase 3. Use activeConnections Map instead.");
+    if (!this.activeConnections) {
+      this.activeConnections = new Map();
+    }
+    this._legacyActiveSocket = socket || null;
+    if (!socket) {
+      this.activeConnections.clear();
+    }
   }
 
   /**
@@ -470,28 +486,28 @@ export class GeminiBridgeDO extends DurableObject {
   RunAlarm() {
     setInterval(() => {
       const now = Date.now();
-      if (this.activeSocket && this.lastActiveAt) {
-        const idleMs = now - this.lastActiveAt;
+      // Iterate the Phase 3 activeConnections Map directly.
+      // The legacy `this.lastActiveAt` property is never written in Phase 3
+      // (only `state.lastActivityAt` inside each Map entry is updated via
+      // touchConnection()), so the old `this.activeSocket && this.lastActiveAt`
+      // guard always evaluated to falsy — zombies were never evicted.
+      for (const [instanceId, state] of this.activeConnections.entries()) {
+        const idleMs = now - state.lastActivityAt;
         if (idleMs > GeminiBridgeDO.STALE_SOCKET_IDLE_MS) {
-          console.log(`[Bridge DO] Stale socket detected (idle ${Math.round(idleMs/1000)}s > ${GeminiBridgeDO.STALE_SOCKET_IDLE_MS/1000}s). Closing stale socket and allowing reconnection.`);
-          // Close the stale socket
+          console.log(`[Bridge DO] Stale socket detected for instance ${instanceId} (idle ${Math.round(idleMs / 1000)}s > ${GeminiBridgeDO.STALE_SOCKET_IDLE_MS / 1000}s). Closing and allowing reconnection.`);
           try {
-            this.activeSocket.close(1000, "Stale socket cleanup: idle timeout exceeded");
+            state.socket.close(1000, "Stale socket cleanup: idle timeout exceeded");
           } catch (e) {
             console.warn("[Bridge DO] Error closing stale socket:", e.message);
           }
-          // Reset state to allow new connection
-          this.activeSocket = null;
-          this.activeOrigin = null;
-          this.protocolVersion = 0;
-          this.currentTokens = null;
-          this.lastActiveAt = null;
-          this.resetModelCatalog();
-          // Notify any in-flight streams
+          this.activeConnections.delete(instanceId);
+          // Notify any in-flight streams that were owned by this instance.
           for (const handler of this.activeStreams.values()) {
-            handler({ type: "STREAM_ERROR", error: "Stale socket cleaned up", code: "stale_socket_cleanup" });
+            try {
+              handler({ type: "STREAM_ERROR", error: "Stale socket cleaned up", code: "stale_socket_cleanup" });
+            } catch (e) {}
           }
-          console.log("[Bridge DO] Stale socket cleanup complete. State reset for reconnection.");
+          console.log(`[Bridge DO] Stale socket cleanup complete for instance ${instanceId}. Remaining connections: ${this.activeConnections.size}`);
         }
       }
     }, GeminiBridgeDO.RUN_ALARM_INTERVAL_MS);
@@ -709,7 +725,24 @@ export class GeminiBridgeDO extends DurableObject {
       }
     }
     const serializable = `${instanceId}::${tag}::${++this._connectionSeq}`;
-    return crypto.createHash('sha256').update(serializable).digest('hex').slice(0, 16);
+    // Synchronous 64-bit FNV-1a digest rendered as 16 hex chars (same shape as
+    // the previous sha256-truncated id).
+    //
+    // DO NOT reintroduce crypto.createHash()/createHmac()/Cipheriv() here: those
+    // are *Node* APIs. The Workers runtime exposes WebCrypto only on the global
+    // `crypto` object, so the old `crypto.createHash(...)` call threw
+    // "TypeError: crypto.createHash is not a function" on EVERY /bridge upgrade
+    // (HTTP 500). Because the throw happened *after* recordConnection(), the DO
+    // still advertised an active connection for 45s, which rejected every other
+    // instance with 409 Conflict and reported extension_status DISCONNECTED.
+    let h1 = 0x811c9dc5;
+    let h2 = 0x9e3779b9;
+    for (let i = 0; i < serializable.length; i++) {
+      const code = serializable.charCodeAt(i);
+      h1 = Math.imul(h1 ^ code, 0x01000193) >>> 0;
+      h2 = Math.imul(h2 ^ code, 0x85ebca6b) >>> 0;
+    }
+    return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
   }
 
   /**
@@ -1112,6 +1145,9 @@ export class GeminiBridgeDO extends DurableObject {
     try {
       if (/^https?:\/\//i.test(s)) s = new URL(s).pathname;
     } catch (e) {}
+    if (!s.startsWith("/") && (s.startsWith("notebook/") || s.startsWith("app/"))) {
+      s = "/" + s;
+    }
     if (s.startsWith("/")) {
       const m = s.match(/^\/(notebook|app)\/([A-Za-z0-9_-]+)/);
       if (m) return `${m[1]}:${m[2]}`;
@@ -1563,17 +1599,20 @@ export class GeminiBridgeDO extends DurableObject {
 
       server.accept();
 
+      // Derive the connection id for scope-session bucketing BEFORE recording
+      // the connection. A reconnect (same instanceId, new socket) produces a new
+      // connId so old sessions are naturally abandoned and cleaned up by the
+      // close handler below. Computing it first keeps the invariant that nothing
+      // which can throw runs after recordConnection() — otherwise a failed
+      // upgrade would leave a "healthy" zombie entry that 409s other instances.
+      const connId = this._connectionId(instanceId, webSocketPair);
+
       // ─── Record connection with instanceId tracking ───
       this.resetModelCatalog();
       const connectionState = this.recordConnection(instanceId, server);
       this.currentTokens = null;
       this.protocolVersion = 0;
       this.socketLostAt = null;
-
-      // Derive a connection id for scope-session bucketing. A reconnect (same
-      // instanceId, new socket) produces a new connId so old sessions are
-      // naturally abandoned and cleaned up by the close handler below.
-      const connId = this._connectionId(instanceId, webSocketPair);
 
       console.log(`[Bridge DO] Chrome Extension connected via WebSocket. Instance: ${instanceId}, Epoch: ${connectionState.epoch}`);
 
@@ -1654,6 +1693,19 @@ export class GeminiBridgeDO extends DurableObject {
 
       server.addEventListener("close", (event) => {
         console.warn(`[Bridge DO] Chrome Extension disconnected (code: ${event.code}). Instance: ${instanceId}`);
+        // Only tear down instance state if this socket is still the registered
+        // one. recordConnection() closes a replaced socket when the same
+        // instanceId reconnects, and that close event arrives *after* the new
+        // entry is stored — without this guard the reconnecting socket's fresh
+        // entry (and its scope sessions) would be deleted immediately, leaving
+        // the DO with no active connection while the client believes it is
+        // connected (messages then stop being processed → /health DISCONNECTED).
+        const current = this.activeConnections.get(instanceId);
+        const stillOwner = !current || current.socket === server;
+        if (!stillOwner) {
+          console.log(`[Bridge DO] Ignoring close of replaced socket for instance ${instanceId} (a newer connection owns the slot).`);
+          return;
+        }
         // Remove connection for this instance
         this.removeConnection(instanceId);
         // Phase 4: Tear down all scope sessions belonging to this connection.
@@ -1681,13 +1733,44 @@ export class GeminiBridgeDO extends DurableObject {
       // Set activeSocket for backward compatibility (single socket assumption)
       this.activeSocket = server;
 
-      return new Response(null, { status: 101, webSocket: client, headers: corsHeaders });
+      try {
+        return new Response(null, { status: 101, webSocket: client, headers: corsHeaders });
+      } catch (err) {
+        // Roll back so a failed upgrade can never leave a recorded connection
+        // behind (a zombie entry blocks every other instance with 409 until the
+        // 45s stale window elapses).
+        console.error("[Bridge DO] WebSocket upgrade rejected by runtime — rolling back connection:", err);
+        try { this.removeConnection(instanceId); } catch (e) {}
+        try { server.close(1011, "Upgrade failed"); } catch (e) {}
+        return new Response("Bridge upgrade failed", { status: 500, headers: corsHeaders });
+      }
     }
 
     if (url.pathname === "/bridge/auth-check") {
       const supplied=request.headers.get("x-bridge-token");
       return new Response(JSON.stringify({ok:Boolean(BRIDGE_SECRET && supplied===BRIDGE_SECRET),protocolVersion:3,minSupportedVersion:2,maxSupportedVersion:3}),
         {status:BRIDGE_SECRET && supplied===BRIDGE_SECRET ? 200 : 401,headers:{...corsHeaders,"Content-Type":"application/json","Cache-Control":"no-store"}});
+    }
+
+    // ─── Emergency connection reset ───────────────────────────────────────────
+    // POST /bridge/reset?token=<bridge_token>
+    // Force-evicts ALL active connections from the DO so a stuck 409 loop can be
+    // broken without waiting for the 45s RunAlarm TTL.
+    if (url.pathname === "/bridge/reset" && request.method === "POST") {
+      const supplied = url.searchParams.get("token");
+      if (!supplied || supplied !== BRIDGE_SECRET) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      const evicted = [];
+      for (const [instanceId, state] of this.activeConnections.entries()) {
+        try { state.socket.close(1000, "Admin reset"); } catch (e) {}
+        evicted.push(instanceId);
+      }
+      this.activeConnections.clear();
+      console.log(`[Bridge DO] Admin reset: evicted ${evicted.length} connection(s): ${evicted.join(", ")}`);
+      return new Response(JSON.stringify({ ok: true, evicted, remainingConnections: 0 }), {
+        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
     }
 
     // ─── Public Paths vs Authenticated Paths ───

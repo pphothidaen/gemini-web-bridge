@@ -684,7 +684,10 @@ export function scopeFromPath(pathname) {
  */
 export function scopeToUrl(scope) {
   if (!scope || scope === 'app') return 'https://gemini.google.com/app';
-  const [kind, id] = String(scope).split(':');
+  let clean = String(scope).trim();
+  if (clean.startsWith('/')) clean = clean.slice(1);
+  const parts = clean.includes(':') ? clean.split(':') : clean.split('/');
+  const [kind, id] = parts;
   if ((kind === 'app' || kind === 'notebook') && id && /^[A-Za-z0-9_-]+$/.test(id)) {
     return `https://gemini.google.com/${kind}/${encodeURIComponent(id)}`;
   }

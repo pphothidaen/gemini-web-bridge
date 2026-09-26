@@ -60,18 +60,40 @@
           });
         }
         saveToStorage() {}
+        isOrphaned() { return false; }
+        onOrphaned() {}
       };
 
   // ─── CSP Violation Handling ─────────────────────────────────
-  // Gemini's own CSP may trigger manifest-src 'none' violations
-  // for its internal _/BardChatUi/manifest.json. This is a site-side
-  // constraint, not an extension issue. We capture the event to reduce
-  // console noise while leaving the page's security model intact.
+  // Gemini's own page CSP sets manifest-src 'none' and the page itself
+  // fetches its internal _/BardChatUi/manifest.json — that violation is
+  // site-side noise, not an extension issue, so ignore it silently.
+  // NOTE: SecurityPolicyViolationEvent is NOT cancelable; do NOT re-add
+  // event.preventDefault() here — it cannot suppress anything.
   window.addEventListener('securitypolicyviolation', (event) => {
-    if (event && event.violatedDirective === 'manifest-src') {
-      console.warn('[Gemini Bridge] CSP manifest-src violation (Gemini UI):', event);
-      event.preventDefault();
+    if (!event) return;
+    const directive = event.effectiveDirective || event.violatedDirective || '';
+    const source = String(event.sourceFile || '');
+    const blocked = String(event.blockedURI || '');
+    const ours = source.startsWith('chrome-extension://')
+      || blocked.startsWith('chrome-extension://')
+      || /gemini-web-bridge|pansakorn-pho/i.test(source + ' ' + blocked);
+    // Ignore known site-side manifest-src noise (Gemini UI fetches its own
+    // manifest against its own `manifest-src 'none'` policy).
+    if (!ours && (directive === 'manifest-src' || event.violatedDirective === 'manifest-src')) {
+      return;
     }
+    if (!ours) return;
+    // Only extension-attributable violations are logged, with structured
+    // fields (never the bare event object, which prints as [object ...]).
+    console.warn('[Gemini Bridge] CSP violation:', {
+      directive,
+      violatedDirective: event.violatedDirective,
+      blockedURI: event.blockedURI,
+      sourceFile: event.sourceFile,
+      lineNumber: event.lineNumber,
+      disposition: event.disposition
+    });
   });
 
   const AutoModelSelectorRef = (typeof globalThis !== "undefined" && globalThis.AutoModelSelector)
@@ -136,6 +158,7 @@
   let reconnectTimer = null;
   let authFailed = false;
   let isLeaderTab = true; // Default leader for fallback/test compatibility
+  let isRefreshing = false; // Set on page unload to suppress expected teardown noise
 
   // Preferred path: the background service worker owns the WebSocket and this
   // tab talks to it over the "gemini-bridge-socket" port. The tab-level direct
@@ -346,10 +369,17 @@
     };
 
     socket.onerror = (err) => {
+      if (isRefreshing) return; // Suppress expected error during page refresh
       console.error("[Bridge] ❌ WebSocket Error:", err);
     };
 
     socket.onclose = (event) => {
+      // Suppress expected teardown noise when the page is being refreshed or
+      // unloaded. WebSocket 1006 on page refresh is normal browser behavior.
+      if (isRefreshing) {
+        socket = null;
+        return;
+      }
       console.warn(`[Bridge] ⚠️ Disconnected (code: ${event?.code}, reason: ${event?.reason || "none"}).`);
       socket = null;
 
@@ -1367,6 +1397,16 @@
   console.log("[Bridge] 🚀 Gemini Web-Bridge Content Script Initialized (Protocol v2)");
   createOrUpdateIndicator("connecting", "Bridge: Initializing...");
 
+  // Refresh/teardown detection: suppress expected WebSocket and storage
+  // errors during page unload. Matches XCP wallet extension pattern.
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    const _setRefreshing = () => { isRefreshing = true; };
+    window.addEventListener("beforeunload", _setRefreshing);
+    window.addEventListener("pagehide", _setRefreshing);
+    // Reset on BFCache restore so reconnection proceeds normally.
+    window.addEventListener("pageshow", () => { isRefreshing = false; });
+  }
+
   // Handshake with declarative MAIN world script
   if (typeof window !== "undefined" && typeof window.postMessage === "function") {
     window.postMessage({ source: "GEMINI_CONTENT", type: "REQUEST_SESSION_STATE" }, "*");
@@ -1415,21 +1455,39 @@
   }
 
   if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.sync) {
+    // One-time reload hint when this tab's content script is orphaned
+    // (extension reloaded/updated while the tab stayed open). Persistence is
+    // impossible afterwards, so tell the user the remedy instead of staying
+    // silent. createOrUpdateIndicator dedupes identical repeats.
+    if (registry && typeof registry.onOrphaned === "function") {
+      registry.onOrphaned(() => {
+        if (typeof chrome !== "undefined" && chrome.runtime && !chrome.runtime.id) return;
+        createOrUpdateIndicator("error", "Bridge: Reload tab (extension updated — click to retry)");
+      });
+    }
     chrome.storage.sync.get(["workerUrl", "bridgeToken", "enforcementMode"]).then(settings => {
       resolvedSettings = Settings.resolveSettings(settings);
-      registry.init();
-      if (useBackgroundBridge) {
-        onBridgeReady();
-      } else if (typeof chrome !== "undefined" && Boolean(chrome.runtime?.id)) {
-        initBridgePort();
-        onBridgeReady();
-      } else {
-        if (socket) {
-          socket.close(1000, "Settings loaded");
-          socket = null;
+      registry.init().then(() => {
+        // Surface the reload hint if init() discovered a dead context.
+        if (registry && typeof registry.isOrphaned === "function" && registry.isOrphaned()) {
+          createOrUpdateIndicator("error", "Bridge: Reload tab (extension updated — click to retry)");
+          return;
         }
-        connectWebSocket();
-      }
+        if (useBackgroundBridge) {
+          onBridgeReady();
+        } else if (typeof chrome !== "undefined" && Boolean(chrome.runtime?.id)) {
+          initBridgePort();
+          onBridgeReady();
+        } else {
+          if (socket) {
+            socket.close(1000, "Settings loaded");
+            socket = null;
+          }
+          connectWebSocket();
+        }
+      }).catch(() => {
+        // init() never rejects (it catches internally), but guard anyway.
+      });
     });
 
     chrome.storage.onChanged.addListener((changes, area) => {

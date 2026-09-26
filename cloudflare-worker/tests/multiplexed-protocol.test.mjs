@@ -35,7 +35,15 @@ const doClassSrc = doSource
 const sharedContext = {
   ...modelCatalog,
   DurableObject: class {},
-  crypto: { randomUUID, subtle: null, ...globalThis.crypto },
+  // Workers-runtime-accurate crypto: WebCrypto only. Node's global crypto also
+  // exposes createHash/createHmac/Cipheriv, which do NOT exist in workerd —
+  // spreading it here previously masked a production `crypto.createHash is not
+  // a function` TypeError on every /bridge upgrade.
+  crypto: {
+    randomUUID,
+    getRandomValues: (arr) => globalThis.crypto.getRandomValues(arr),
+    subtle: globalThis.crypto.subtle,
+  },
   Request: globalThis.Request,
   Response: globalThis.Response,
   URL: globalThis.URL,

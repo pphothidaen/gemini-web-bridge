@@ -233,3 +233,180 @@ test('exportSanitizedEvidence provides structural signatures without prompts or 
   assert.equal(serialized.includes('SNlM0e'), false);
   assert.equal(serialized.includes('prompt'), false);
 });
+
+test('saveToStorage defers writes until init completes and flushes pending writes', async () => {
+  ModelAdapter._validators.clear();
+  ModelAdapter.registerSchema('test_verified_exec_schema', Object.assign((gen) => ({
+    valid: true,
+    sanitizedStructure: { schema: 'test_verified_exec_schema', modelId: gen?.modelId || 'test' }
+  }), {
+    buildReplay: () => '[]'
+  }));
+
+  let writeCalls = 0;
+  let writePayload = null;
+  const mockStorage = {
+    get: (keys, cb) => cb({}),
+    set: (obj, cb) => { writeCalls++; writePayload = obj; cb?.(); },
+    remove: (keys, cb) => cb?.()
+  };
+
+  const registry = new EvidenceRegistry(mockStorage);
+  assert.equal(registry.initialized, false);
+
+  // Register evidence BEFORE init() resolves – saveToStorage should be deferred.
+  registry.recordGenerationEvidence('gemini-3.8-flash', {
+    endpoint: 'StreamGenerate',
+    buildLabel: 'boq_test',
+    sessionEpoch: registry.currentSessionEpoch,
+    responseVerified: true,
+    requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
+  });
+
+  // No write should have been attempted yet because init() is not complete.
+  assert.equal(writeCalls, 0);
+  assert.equal(registry._hasPendingWrites, true);
+
+  // Complete init() — this should flush the deferred write.
+  await registry.init('boq_test', 'acc_123');
+
+  assert.equal(registry.initialized, true);
+  assert.equal(registry._hasPendingWrites, false);
+  assert.equal(writeCalls, 1);
+  assert.ok(writePayload, 'pending write payload should have been flushed');
+  assert.ok(writePayload.gemini_evidence_registry, 'payload should contain registry data');
+  assert.equal(writePayload.gemini_evidence_registry.records['gemini-3.8-flash'].verification, 'verified');
+});
+
+test('saveToStorage treats context-invalidation as PERMANENT (orphaned), silent, no retry', async () => {
+  ModelAdapter._validators.clear();
+  const warns = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warns.push(args); };
+  let setCalls = 0;
+  const mockStorage = {
+    get: (keys, cb) => cb({}),
+    set: (_obj, cb) => { setCalls++; cb?.(); },
+    remove: (keys, cb) => cb?.()
+  };
+  const originalChrome = typeof chrome !== 'undefined' ? chrome : undefined;
+  globalThis.chrome = { runtime: { id: 'live-id', lastError: { message: 'Extension context invalidated' } }, storage: { local: mockStorage } };
+  const registry = new EvidenceRegistry(mockStorage);
+  await registry.init();
+  registry.recordGenerationEvidence('gemini-3.8-flash', {
+    endpoint: 'StreamGenerate',
+    buildLabel: 'boq_test',
+    sessionEpoch: registry.currentSessionEpoch,
+    responseVerified: true,
+    requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
+  });
+  // record*() fires saveToStorage() without awaiting it — wait for the
+  // callback-driven orphan detection before asserting.
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(registry.isOrphaned(), true);
+  assert.equal(registry._hasPendingWrites, true);
+  assert.deepEqual(warns, [], 'orphaned save must not log');
+  const callsAfterFirst = setCalls;
+  await registry.saveToStorage();
+  assert.equal(setCalls, callsAfterFirst, 'orphaned short-circuits before storage');
+  console.warn = originalWarn;
+  if (originalChrome === undefined) { delete globalThis.chrome; }
+  else { globalThis.chrome = originalChrome; }
+});
+
+test('saveToStorage treats timeout as TRANSIENT (silent, sets pending)', async () => {
+  ModelAdapter._validators.clear();
+  const warns = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warns.push(args); };
+  const originalChrome = typeof chrome !== 'undefined' ? chrome : undefined;
+  globalThis.chrome = { runtime: { id: 'live-id' }, storage: {} };
+  const mockStorage = {
+    get: (keys, cb) => cb({}),
+    set: (_obj, _cb) => { /* never calls back: forces 1s Storage timeout */ },
+    remove: (keys, cb) => cb?.()
+  };
+  const registry = new EvidenceRegistry(mockStorage);
+  await registry.init();
+  registry.recordGenerationEvidence('gemini-3.8-flash', {
+    endpoint: 'StreamGenerate',
+    buildLabel: 'boq_test',
+    sessionEpoch: registry.currentSessionEpoch,
+    responseVerified: true,
+    requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
+  });
+  // record*() fires saveToStorage() without awaiting it; the 1s storage
+  // timeout resolves asynchronously — wait for it before asserting.
+  await new Promise((r) => setTimeout(r, 1200));
+  assert.equal(registry.isOrphaned(), false);
+  assert.equal(registry._hasPendingWrites, true);
+  assert.deepEqual(warns, [], 'transient timeout must not warn');
+  console.warn = originalWarn;
+  if (originalChrome === undefined) { delete globalThis.chrome; }
+  else { globalThis.chrome = originalChrome; }
+});
+
+test('init() with dead context restores snapshot silently and never flushes', async () => {
+  ModelAdapter._validators.clear();
+  const warns = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warns.push(args); };
+  const originalChrome = typeof chrome !== 'undefined' ? chrome : undefined;
+  let flushSetCalls = 0;
+  const mockStorage = {
+    get: (_keys, _cb) => { throw new Error('Extension context invalidated'); },
+    set: (_obj, cb) => { flushSetCalls++; cb?.(); },
+    remove: (keys, cb) => cb?.()
+  };
+  globalThis.chrome = { runtime: {}, storage: { local: mockStorage } };
+  const registry = new EvidenceRegistry(mockStorage);
+  registry.records.set('pre-existing', { modelId: 'pre-existing', verification: 'verified', mappingRevision: 'rev_1' });
+  registry._hasPendingWrites = true;
+  await registry.init('build_1', 'acc_1');
+  assert.equal(registry.isOrphaned(), true);
+  assert.ok(registry.records.has('pre-existing'), 'snapshot must survive orphaned init');
+  assert.equal(flushSetCalls, 0, 'orphaned init must never flush');
+  assert.deepEqual(warns, [], 'orphaned init must stay silent');
+  console.warn = originalWarn;
+  if (originalChrome === undefined) { delete globalThis.chrome; }
+  else { globalThis.chrome = originalChrome; }
+});
+
+test('onOrphaned hook fires exactly once when context dies', async () => {
+  ModelAdapter._validators.clear();
+  const originalChrome = typeof chrome !== 'undefined' ? chrome : undefined;
+  let lastError = null;
+  const mockStorage = {
+    get: (keys, cb) => cb({}),
+    set: (_obj, cb) => {
+      const e = lastError; lastError = null;
+      if (e) { globalThis.chrome.runtime.lastError = e; }
+      cb?.();
+    },
+    remove: (keys, cb) => cb?.()
+  };
+  globalThis.chrome = { runtime: { id: 'live-id' }, storage: { local: mockStorage } };
+  const registry = new EvidenceRegistry(mockStorage);
+  await registry.init();
+  let hookCalls = 0;
+  registry.onOrphaned(() => { hookCalls++; });
+  lastError = { message: 'Extension context invalidated' };
+  registry.recordGenerationEvidence('gemini-3.8-flash', {
+    endpoint: 'StreamGenerate',
+    buildLabel: 'boq_test',
+    sessionEpoch: registry.currentSessionEpoch,
+    responseVerified: true,
+    requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
+  });
+  // record*() fires saveToStorage() without awaiting it — wait for the
+  // callback-driven orphan detection before asserting.
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(hookCalls, 1);
+  let lateCalls = 0;
+  registry.onOrphaned(() => { lateCalls++; });
+  assert.equal(lateCalls, 1, 'late registration after orphaning fires immediately');
+  await registry.saveToStorage();
+  assert.equal(hookCalls, 1, 'hook must not re-fire');
+  if (originalChrome === undefined) { delete globalThis.chrome; }
+  else { globalThis.chrome = originalChrome; }
+});

@@ -2,6 +2,22 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.4.3] - 2026-09-26
+
+### Fixed
+- **Refresh-teardown error spam**: Page refresh no longer logs spurious `[Bridge] WebSocket Error` and `[Bridge] Disconnected (code: 1006)` warnings. Added `isRefreshing` flag via `beforeunload`/`pagehide` detection to suppress expected WebSocket teardown noise.
+- **EvidenceRegistry init race**: `saveToStorage()` now defers writes until `init()` completes via `initialized` guard, eliminating the race between async `registry.init()` and SESSION_STATE evidence recording that triggered `Context invalidated during save` on refresh.
+- **Context-invalidation classification**: `saveToStorage()` now classifies context-invalidation errors as PERMANENT (orphaned — retry can never succeed after an extension reload/update, only a tab reload helps) instead of silently skipping. Orphaned saves stay fully silent (no `Context invalidated during save` warning); transient failures (timeout/quota) set `_hasPendingWrites` and are retried on the next save cycle, also silently. `init()` restores the in-memory snapshot on orphaned load with no warning and never flushes. A one-time `onOrphaned` hook lets content.js surface a single `Bridge: Reload tab (extension updated)` pill hint via the deduping indicator.
+- **CSP manifest-src noise**: the Gemini page's own `manifest-src 'none'` policy (Google fetches its internal manifest against its own policy) no longer logs `[Gemini Bridge] CSP manifest-src violation … [object SecurityPolicyViolationEvent]`. Site-side violations are ignored silently; only extension-attributable violations are logged with structured fields. Removed the no-op `event.preventDefault()` (`SecurityPolicyViolationEvent` is not cancelable).
+- **New tests**: Added 4 test cases covering orphaned-save silence + no-retry, timeout TRANSIENT classification, orphaned-init snapshot restore, and one-time `onOrphaned` hook firing.
+
+### Added
+- Refresh/teardown detection event listeners in content.js (`beforeunload`, `pagehide`, `pageshow`).
+- `_hasPendingWrites` tracking and flush mechanism in EvidenceRegistry.
+
+### KAN-123
+- Structured cross-functional review (KAN-122) applied: Option B selected after Red Team, Blue Team, Worker Specialist, and Research perspectives.
+
 ## [4.3.7] - 2026-09-23
 
 ### Fixed

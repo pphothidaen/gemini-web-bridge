@@ -104,6 +104,83 @@
       this.currentAccountHash = null;
       this.currentSessionEpoch = `epoch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this.initialized = false;
+      this._hasPendingWrites = false;
+      // Set when the extension context is dead (extension reloaded/updated while
+      // this tab stayed open). chrome.storage can never succeed afterwards, so
+      // writes are dropped instead of retried forever; the UI asks for a reload.
+      this._orphaned = false;
+      // Optional hook fired once when the registry first detects a dead
+      // extension context. content.js sets this to surface a reload hint.
+      this._onOrphaned = null;
+    }
+
+    /**
+     * True while this script still belongs to a live extension context.
+     * After an extension reload/update an orphaned content script keeps running
+     * but `chrome.runtime.id` becomes undefined and every storage call fails.
+     * In Node/test harnesses there is no extension API at all: treat that as
+     * alive so injected storage mocks keep working.
+     */
+    isContextAlive() {
+      if (typeof chrome === "undefined") return true;
+      if (!chrome.runtime) return true;
+      return Boolean(chrome.runtime.id);
+    }
+
+    /**
+     * True once storage failed because the extension context was invalidated.
+     * Permanent: only reloading the tab can recover.
+     */
+    isOrphaned() {
+      return this._orphaned;
+    }
+
+    /**
+     * Classify a storage failure. Returns true when the error (or the dead
+     * `chrome.runtime.id`) proves the extension context is invalidated.
+     * Marks the registry orphaned so callers can surface a reload hint once.
+     * In Node/test harnesses (no chrome API) never reports orphaned.
+     */
+    _markOrphanedIfDeadContext(err) {
+      if (this._orphaned) return true;
+      let dead = false;
+      if (typeof chrome !== "undefined" && chrome.runtime && !chrome.runtime.id) {
+        dead = true;
+      } else if (
+        err &&
+        typeof err.message === "string" &&
+        /invalidated|context/i.test(err.message)
+      ) {
+        dead = true;
+      }
+      if (dead) {
+        this._orphaned = true;
+        // Fire the one-time UI hook (content.js reload hint). Never throw
+        // from classification — a broken hook must not break storage paths.
+        const hook = this._onOrphaned;
+        this._onOrphaned = null;
+        if (typeof hook === "function") {
+          try { hook(); } catch (_) { /* ignore */ }
+        }
+        return true;
+      }
+      return false;
+    }
+
+    /**
+     * Register a callback fired once when the registry first detects a dead
+     * extension context. Used by content.js to surface a reload hint.
+     */
+    onOrphaned(callback) {
+      if (this._orphaned) {
+        if (typeof callback === "function") {
+          try { callback(); } catch (_) { /* ignore */ }
+        }
+        return;
+      }
+      if (typeof callback === "function") {
+        this._onOrphaned = callback;
+      }
     }
 
     /**
@@ -166,10 +243,18 @@
           }
         }
       } catch (e) {
-        console.warn("[EvidenceRegistry] Error loading from storage:", e);
-        // On error, restore snapshot so auto-verify results survive
-        for (const [id, rec] of preAsyncSnapshot) {
-          this.records.set(id, rec);
+        if (this._markOrphanedIfDeadContext(e)) {
+          // Extension context is dead: snapshot restore only, no warning,
+          // no flush. Persistence is impossible until the tab reloads.
+          for (const [id, rec] of preAsyncSnapshot) {
+            this.records.set(id, rec);
+          }
+        } else {
+          console.warn("[EvidenceRegistry] Error loading from storage:", e);
+          // On error, restore snapshot so auto-verify results survive
+          for (const [id, rec] of preAsyncSnapshot) {
+            this.records.set(id, rec);
+          }
         }
       }
 
@@ -181,6 +266,14 @@
       }
 
       this.initialized = true;
+      // Flush any writes deferred during the async init window — but never
+      // when orphaned: storage can never succeed after context invalidation.
+      if (this._hasPendingWrites && !this._orphaned && this.isContextAlive()) {
+        this._hasPendingWrites = false;
+        this.saveToStorage();
+      } else if (this._orphaned) {
+        this._hasPendingWrites = true;
+      }
     }
 
     /**
@@ -388,6 +481,19 @@
 
     async saveToStorage() {
       if (!this.storage) return;
+      // Already orphaned: persistence is impossible until the tab reloads.
+      // Stay silent — content.js surfaces a one-time reload hint instead.
+      if (this._orphaned || !this.isContextAlive()) {
+        this._orphaned = true;
+        this._hasPendingWrites = true;
+        return;
+      }
+      // Guard: defer writes until init() completes to prevent the
+      // init/await race that triggers "Context invalidated" on refresh.
+      if (!this.initialized) {
+        this._hasPendingWrites = true;
+        return;
+      }
 
       const recordsObj = {};
       for (const [id, rec] of this.records.entries()) {
@@ -411,29 +517,50 @@
         await new Promise((resolve, reject) => {
           // Use a short timeout to avoid hanging if context is invalidated
           const timer = setTimeout(() => reject(new Error("Storage timeout")), 1000);
-          this.storage.set({ [STORAGE_KEY]: payload }, () => {
-            clearTimeout(timer);
-            const err = chrome.runtime.lastError;
-            if (err) {
-              // Extension context may be invalidated or storage unavailable
-              if (err.message && /invalidated|context/i.test(err.message)) {
-                console.warn("[EvidenceRegistry] Extension context invalidated — storage skipped.");
-                resolve(); // Don't treat as error, just skip
+          try {
+            this.storage.set({ [STORAGE_KEY]: payload }, () => {
+              clearTimeout(timer);
+              // chrome.runtime.lastError is only valid inside the callback and
+              // reading it in a dead context can throw — guard the read.
+              let lastErr = null;
+              try {
+                lastErr = typeof chrome !== "undefined" && chrome.runtime
+                  ? chrome.runtime.lastError || null
+                  : null;
+              } catch (readErr) {
+                reject(readErr);
                 return;
               }
-              reject(err);
-            } else {
-              resolve();
-            }
-          });
+              if (lastErr) {
+                reject(lastErr);
+              } else {
+                resolve();
+              }
+            });
+          } catch (syncErr) {
+            // storage.set() itself threw (dead context) — never leave the
+            // timeout dangling.
+            clearTimeout(timer);
+            reject(syncErr);
+          }
         });
+        // Save succeeded — confirm the context is still alive before clearing
+        // the deferred-writes flag (context may have died mid-save).
+        if (this.isContextAlive()) {
+          this._hasPendingWrites = false;
+        }
       } catch (e) {
-        // If context invalidated, just skip — evidence will be re-collected on next init
-        if (e && typeof e.message === "string" && /invalidated|context/i.test(e.message)) {
-          console.warn("[EvidenceRegistry] Context invalidated during save — skipping.");
+        // PERMANENT (orphaned): the extension context was invalidated —
+        // storage can never succeed again until the tab reloads. Stay silent
+        // here; content.js shows a one-time reload hint. Do NOT attempt retry.
+        if (this._markOrphanedIfDeadContext(e)) {
+          this._hasPendingWrites = true;
           return;
         }
-        console.warn("[EvidenceRegistry] Error saving to storage:", e);
+        // TRANSIENT (timeout, quota, storage busy): keep the pending flag so
+        // the next saveToStorage() retries, but stay silent — timeouts are
+        // expected on refresh/teardown and must not spam the console.
+        this._hasPendingWrites = true;
       }
     }
   }

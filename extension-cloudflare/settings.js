@@ -7,6 +7,8 @@
   "use strict";
 
   // ═══ DEFAULTS — injected at build time ═══
+  // Secrets/URLs are injected by scripts/build-extension.py at build time.
+  // NEVER hardcode real values here — this file is committed and zipped.
   const DEFAULT_BRIDGE_SECRET = "__BRIDGE_AUTH_TOKEN__";
   const DEFAULT_CLIENT_API_TOKEN = "__CLIENT_API_TOKEN__";
   const DEFAULT_WORKER_URL = "__WORKER_URL__";

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gemini Web-Bridge Cloudflare",
-  "version": "4.4.1",
+  "version": "4.4.3",
   "description": "Bridge active authenticated Gemini web session to Cloudflare Worker (Protocol v2 Verified RPC) - Fixed: scope re-detection after navigation",
   "permissions": [
     "storage",
