@@ -160,6 +160,40 @@
   let isLeaderTab = true; // Default leader for fallback/test compatibility
   let isRefreshing = false; // Set on page unload to suppress expected teardown noise
 
+  // The DO hub rejects any /bridge upgrade that carries no valid instanceId
+  // (index.js: "Unauthorized: Invalid instance ID" -> 401), so the direct-WS
+  // fallback must send one. It used to send only ?token=, which meant this path
+  // could never connect: the browser surfaced the 401 as an ErrorEvent whose
+  // console rendering is "[object Event]", and no close reason explained why.
+  //
+  // Persisted in sessionStorage so a reload keeps the same identity and the hub
+  // treats the reconnect as the same instance (replacing the old socket)
+  // instead of as a competing one (which would 409 against a healthy peer).
+  const INSTANCE_ID_STORAGE_KEY = "geminiBridgeInstanceId";
+  function getOrCreateInstanceId() {
+    try {
+      const existing = sessionStorage.getItem(INSTANCE_ID_STORAGE_KEY);
+      if (existing) return existing;
+      const generated =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+              const r = (Math.random() * 16) | 0;
+              const v = c === "x" ? r : (r & 0x3) | 0x8;
+              return v.toString(16);
+            });
+      sessionStorage.setItem(INSTANCE_ID_STORAGE_KEY, generated);
+      return generated;
+    } catch (e) {
+      // Private mode / storage disabled: an ephemeral ID still authenticates,
+      // it just cannot survive a reload.
+      return typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : "00000000-0000-4000-8000-000000000000";
+    }
+  }
+  const instanceId = getOrCreateInstanceId();
+
   // Preferred path: the background service worker owns the WebSocket and this
   // tab talks to it over the "gemini-bridge-socket" port. The tab-level direct
   // WS above is only used when the background bridge cannot be reached.
@@ -318,6 +352,10 @@
     url.pathname = "/bridge";
     url.search = "";
     url.searchParams.set("token", resolvedSettings.bridgeToken);
+    url.searchParams.set("client", "content_tab");
+    // Required by the DO hub — without it the upgrade is rejected with 401 and
+    // the browser only reports an opaque ErrorEvent. See the note on instanceId.
+    url.searchParams.set("instanceId", instanceId);
     return url.toString();
   }
 
@@ -370,7 +408,12 @@
 
     socket.onerror = (err) => {
       if (isRefreshing) return; // Suppress expected error during page refresh
-      console.error("[Bridge] ❌ WebSocket Error:", err);
+      // `err` is an ErrorEvent, and ErrorEvent has no toString, so logging it
+      // directly renders "[object Event]" — which is what this used to print and
+      // is why the cause stayed invisible. The real detail is in .error, and the
+      // actionable diagnosis (auth vs conflict vs server) arrives on onclose.
+      const detail = err?.error?.message || err?.message || "(no detail exposed by the browser)";
+      console.error(`[Bridge] ❌ WebSocket Error: ${detail} (readyState=${socket?.readyState}, url=${wsUrl.replace(/token=[^&]*/, "token=***")})`);
     };
 
     socket.onclose = (event) => {
