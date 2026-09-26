@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Pre-commit guard: rejects any commit that stages a literal production token.
+#
+# Activated via core.hooksPath=.githooks (already set in this repo). The
+# September-2026 incident committed both tokens verbatim and then re-shipped
+# them inside a repo-root .zip; this hook catches the text case at commit time,
+# before it ever reaches the branch.
+#
+# Complements (does not replace) the test suite, which additionally scans
+# inside .zip members and rejects tracked build artifacts.
+
+set -uo pipefail
+
+# Same pattern as cloudflare-worker/tests/extension-secrets.test.mjs.
+PATTERN='hermes-[a-f0-9]{16,}|gemini-bridge-[a-f0-9]{16,}'
+
+# Staged blobs, with their paths. -z keeps paths with spaces intact.
+# NOTE: read into an array field-by-field. Using $(...) here would silently
+# strip the NUL separators and collapse every path into one garbage string.
+STAGED=()
+while IFS= read -r -d '' file; do
+  STAGED+=("$file")
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if (( ${#STAGED[@]} == 0 )); then
+  exit 0
+fi
+
+OFFENDERS=()
+for file in "${STAGED[@]}"; do
+  [[ -f "$file" ]] || continue
+
+  case "${file,,}" in
+    *.zip)
+      # A committed zip is the vector that actually caused this incident, and
+      # grep cannot see inside it: the members are deflate-compressed. Inflate
+      # them with node:zlib and scan the decompressed bytes.
+      hits=$(git show ":$file" 2>/dev/null | node -e '
+        const zlib = require("node:zlib");
+        const chunks = [];
+        process.stdin.on("data", (c) => chunks.push(c));
+        process.stdin.on("end", () => {
+          const buf = Buffer.concat(chunks);
+          const RE = /hermes-[a-f0-9]{16,}|gemini-bridge-[a-f0-9]{16,}/gi;
+          const out = new Set();
+          let eocd = -1;
+          for (let i = buf.length - 22; i >= 0 && i >= buf.length - 22 - 0xffff; i--) {
+            if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+          }
+          if (eocd === -1) return;
+          const count = buf.readUInt16LE(eocd + 10);
+          let off = buf.readUInt32LE(eocd + 16);
+          for (let i = 0; i < count && buf.readUInt32LE(off) === 0x02014b50; i++) {
+            const method = buf.readUInt16LE(off + 10);
+            const compSize = buf.readUInt32LE(off + 20);
+            const nameLen = buf.readUInt16LE(off + 28);
+            const extraLen = buf.readUInt16LE(off + 30);
+            const commentLen = buf.readUInt16LE(off + 32);
+            const localOff = buf.readUInt32LE(off + 42);
+            const name = buf.toString("utf8", off + 46, off + 46 + nameLen);
+            const start = localOff + 30 + buf.readUInt16LE(localOff + 26) + buf.readUInt16LE(localOff + 28);
+            try {
+              const data = method === 0
+                ? buf.subarray(start, start + compSize)
+                : zlib.inflateRawSync(buf.subarray(start, start + compSize));
+              if (!name.startsWith("__MACOSX") && !name.endsWith("/")) {
+                for (const m of data.toString("latin1").matchAll(RE)) out.add(m[0].slice(0, 12) + "…");
+              }
+            } catch {}
+            off += 46 + nameLen + extraLen + commentLen;
+          }
+          process.stdout.write([...out].join("\n"));
+        });
+      ' 2>/dev/null)
+      if [[ -n "$hits" ]]; then
+        while IFS= read -r hit; do
+          [[ -n "$hit" ]] && OFFENDERS+=("$file [archive member]: $hit")
+        done <<< "$hits"
+      fi
+      continue
+      ;;
+  esac
+
+  # Read the staged blob, not the working-tree file: what matters is what
+  # would actually be committed. grep -q is binary-safe, so a PNG/ELF does not
+  # spew bytes into the pattern.
+  if git show ":$file" 2>/dev/null | LC_ALL=C grep -qaE "$PATTERN"; then
+    # Truncate the matched value so this report is not itself a leak.
+    match=$(git show ":$file" 2>/dev/null | LC_ALL=C grep -aoE "$PATTERN" | head -n 1 | cut -c1-12)
+    OFFENDERS+=("$file: ${match}…")
+  fi
+done
+
+if (( ${#OFFENDERS[@]} > 0 )); then
+  echo "❌ [Secret Guard] Commit rejected: literal token(s) staged."
+  echo ""
+  for o in "${OFFENDERS[@]}"; do
+    echo "   $o"
+  done
+  echo ""
+  echo "👉 Never commit a real BRIDGE_AUTH_TOKEN / CLIENT_API_TOKEN."
+  echo "   Use the build-time placeholders __BRIDGE_AUTH_TOKEN__ /"
+  echo "   __CLIENT_API_TOKEN__, substituted by scripts/build-extension.py."
+  echo "   If this is a false positive, add an entry to the allowlist in"
+  echo "   .gitleaks.toml and the matching exclusion in"
+  echo "   cloudflare-worker/tests/extension-secrets.test.mjs."
+  echo ""
+  echo "   If a real token was already committed, rotation is required —"
+  echo "   removing it from the tree does NOT invalidate it."
+  echo "   See docs/SECURITY_TOKEN_ROTATION.md."
+  exit 1
+fi
+
+echo "✅ [Secret Guard] No literal tokens in staged changes."
+exit 0
