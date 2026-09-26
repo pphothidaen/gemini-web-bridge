@@ -107,12 +107,23 @@ jobs:
 
       - name: Run Gitleaks secret detection
         uses: gitleaks/gitleaks-action@v2
-        with:
-          # Custom rules for this project's token prefixes; gitleaks' default
-          # config has no rule that matches `hermes-*` / `gemini-bridge-*`.
-          config: .gitleaks.toml
+        # NO `with:` block on purpose.
+        #
+        # This previously passed `config: .gitleaks.toml`. gitleaks-action@v2
+        # declares no `inputs` at all, so that key was rejected at runtime with
+        #   "Unexpected input(s) 'config', valid inputs are ['']"
+        # and the custom rules were silently never applied — the job reported
+        # green while scanning with the DEFAULT ruleset, which has no rule
+        # matching the `hermes-` / `gemini-bridge-` prefixes this config exists
+        # to catch. A secret gate that silently scans with the wrong ruleset is
+        # worse than no gate, because it is trusted.
+        #
+        # The supported mechanism is the GITLEAKS_CONFIG env var. (The action
+        # also auto-detects `gitleaks.toml` at the repo root, but this repo's
+        # file is `.gitleaks.toml` — dot-prefixed, so it is NOT auto-detected.)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: ${{ github.workspace }}/.gitleaks.toml
 
       - name: Report scan status
         run: echo "## 🔐 Security Scan" >> $GITHUB_STEP_SUMMARY
