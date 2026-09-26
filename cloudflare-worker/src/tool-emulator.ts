@@ -7,7 +7,15 @@ export interface ToolDefinition {
   };
 }
 
-// กำหนด Schema สำหรับ 4 tools หลักหาก Client ไม่ได้ส่ง parameters ละเอียดมา
+// Gemini-safe tool allowlist: tools whose <tool_call> blocks Gemini
+// reliably produces AND the bridge worker can parse/validate.
+// terminal & git are EXCLUDED: the bridge worker cannot execute them,
+// so Gemini either refuses or emits a malformed call → HTTP 422 "Incomplete tool call".
+export const GEMINI_SAFE_TOOLS: Set<string> = new Set([
+  "read_file",
+  "write_file",
+  "search_files",
+]);
 export const SUPPORTED_TOOLS: Record<string, ToolDefinition> = {
   terminal: {
     type: "function",
@@ -48,6 +56,20 @@ export const SUPPORTED_TOOLS: Record<string, ToolDefinition> = {
           file_path: { type: "string", description: "Absolute path to the file" }
         },
         required: ["file_path"]
+      }
+    }
+  },
+  search_files: {
+    type: "function",
+    function: {
+      name: "search_files",
+      description: "Search for files matching a glob pattern",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "Glob pattern to match files, e.g. '*.js'" }
+        },
+        required: ["pattern"]
       }
     }
   },
@@ -144,10 +166,14 @@ CRITICAL EXECUTION RULES:
 
 // Buffer each completion so malformed later calls cannot partially execute a batch.
 export function resolveToolPolicy(request: Request, body: any) {
-  const tools = extractTools(request, body);
+  let tools = extractTools(request, body);
   if (!tools.every(t => t?.type === "function" && typeof t.function?.name === "string" && t.function.name)) {
     throw new Error("tools must contain named function definitions");
   }
+  // Safety filter: only allow tools the bridge worker can actually
+  // execute via Gemini's text-based <tool_call> protocol. Advertising
+  // terminal/git to Gemini causes malformed tool calls → HTTP 422.
+  tools = tools.filter(t => GEMINI_SAFE_TOOLS.has(t.function.name));
   const choice = body.tool_choice ?? "auto";
   const forced = typeof choice === "object" && choice?.type === "function" ? choice.function?.name : undefined;
   if (!["auto", "none", "required"].includes(choice) && !forced) throw new Error("Invalid tool_choice");
