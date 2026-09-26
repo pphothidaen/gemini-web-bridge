@@ -88,24 +88,45 @@ jobs:
             exit 1
           fi
 
-          # A non-empty token is not the same as a USABLE token. The token
-          # currently in .env is a valid dp.st.* credential scoped to the
-          # `horo-consultant` project, so it sails past the empty check above
-          # and then fails two steps later with "this token does not have
-          # access to requested project 'gemini-web-bridge'" — reported by the
-          # fetch step as if BRIDGE_AUTH_TOKEN/CLIENT_API_TOKEN were missing
-          # from Doppler, when in fact they are present and readable.
+          # A non-empty token is not the same as a USABLE token, and access to
+          # the PROJECT is still not the same as access to the CONFIG.
           #
-          # Prove access to THIS project here, where the cause is still
-          # unambiguous, and name the projects the token can actually reach so
-          # the mis-scoping is obvious from the log alone.
-          if ! doppler projects --token "$DOPPLER_SERVICE_TOKEN" --json \
-               | grep -q '"id": *"gemini-web-bridge"'; then
-            echo "::error::DOPPLER_SERVICE_TOKEN cannot access the 'gemini-web-bridge' project."
+          # Two real mis-scopings have been hit here, and each one produces a
+          # confusing failure two steps later, reported as if the secrets were
+          # missing from Doppler when they are present and readable:
+          #
+          #   1. Wrong project. A valid dp.st.* scoped to `horo-consultant`
+          #      lists no gemini-web-bridge at all.
+          #   2. Right project, wrong config. A token issued for config `prd`
+          #      DOES list gemini-web-bridge, so a project-level check passes
+          #      it — then every `secrets get --config prd_worker` is denied
+          #      and the fetch step reports "BRIDGE_AUTH_TOKEN /
+          #      CLIENT_API_TOKEN are missing from ... prd_worker".
+          #
+          # So test the exact read the fetch step performs, here, where the
+          # cause is still unambiguous — and report which projects/configs the
+          # token can actually reach so the mis-scoping is readable from the
+          # log alone.
+          if ! doppler secrets get BRIDGE_AUTH_TOKEN \
+               --token "$DOPPLER_SERVICE_TOKEN" \
+               --project gemini-web-bridge --config prd_worker --plain \
+               >/dev/null 2>&1; then
+            echo "::error::DOPPLER_SERVICE_TOKEN cannot read BRIDGE_AUTH_TOKEN from gemini-web-bridge/prd_worker."
             echo ""
-            echo "The token authenticates, but it is scoped to a different project."
-            echo "Projects this token CAN currently reach:"
-            doppler projects --token "$DOPPLER_SERVICE_TOKEN" 2>/dev/null || echo "  (none)"
+            if ! doppler projects --token "$DOPPLER_SERVICE_TOKEN" --json \
+                 | grep -q '"id": *"gemini-web-bridge"'; then
+              echo "The token does not reach the 'gemini-web-bridge' project at all."
+              echo "Projects this token CAN currently reach:"
+              doppler projects --token "$DOPPLER_SERVICE_TOKEN" 2>/dev/null || echo "  (none)"
+            else
+              echo "The token reaches 'gemini-web-bridge', but not the 'prd_worker' config."
+              echo "Configs this token CAN currently read in that project:"
+              doppler configs --token "$DOPPLER_SERVICE_TOKEN" \
+                --project gemini-web-bridge 2>/dev/null || echo "  (none)"
+              echo ""
+              echo "Note: cd.yml deploys from prd_worker, which holds the app"
+              echo "secrets. The 'prd' config holds only DOPPLER_* metadata."
+            fi
             echo ""
             echo "Fix: Doppler Dashboard -> Access -> Service Tokens -> Add"
             echo "  Project: gemini-web-bridge   Config: prd_worker   Access: Read"
@@ -114,7 +135,7 @@ jobs:
             echo "Or re-run with skip_doppler=true to fall back to GitHub Secrets."
             exit 1
           fi
-          echo "✅ DOPPLER_SERVICE_TOKEN is valid and can read gemini-web-bridge"
+          echo "✅ DOPPLER_SERVICE_TOKEN can read BRIDGE_AUTH_TOKEN from gemini-web-bridge/prd_worker"
 
       - name: Fetch secrets from Doppler
         id: fetch
