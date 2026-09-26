@@ -401,6 +401,14 @@ jobs:
     env:
       JIRA_CI_TOKEN: ${{ secrets.JIRA_CI_TOKEN }}
     steps:
+      # checkout is REQUIRED: the ticket key is read from the commit subject
+      # with `git log`, and without a checkout the runner has no .git, so that
+      # call fails with "fatal: not a git repository" and takes the whole job
+      # down. Shallow is enough — only the subject of HEAD is read.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Comment on the ticket named in the commit subject
         if: ${{ env.JIRA_CI_TOKEN != '' }}
         env:
@@ -417,8 +425,14 @@ jobs:
           # ticket key is recoverable from the commit message. PR merges and
           # squash commits keep the original subject, which is why this reads
           # the subject rather than the branch name.
-          SUBJECT=$(git log -1 --pretty=%s)
-          KEY=$(printf '%s' "$SUBJECT" | grep -oE '^KAN-[0-9]+' | head -1)
+          #
+          # `|| true` because this job promises never to fail the build: the
+          # extension is already built and uploaded by this point, and a red X
+          # would misreport that. Without it, any unexpected error here — a
+          # missing .git, a transient DNS failure — fails the job and with it
+          # the whole run.
+          SUBJECT=$(git log -1 --pretty=%s 2>/dev/null || echo "")
+          KEY=$(printf '%s' "$SUBJECT" | grep -oE '^KAN-[0-9]+' | head -1 || true)
 
           if [ -z "$KEY" ]; then
             echo "::notice::No KAN-<id> in commit subject ('$SUBJECT'); nothing to sync."
@@ -457,18 +471,28 @@ jobs:
           jq -n --arg t "$BODY" \
             '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$t}]}]}}' > /tmp/adf.json
 
+          # `|| echo 000` appends to whatever curl already printed, so a curl
+          # that fails after writing its own %{http_code} yields "000000" and
+          # matches no case. Use a separate variable and normalise instead.
           HTTP=$(curl -sS -o /tmp/jira.out -w '%{http_code}' \
             -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" \
             -H "Authorization: Basic $(printf '%s:%s' "$JIRA_EMAIL" "$JIRA_CI_TOKEN" | base64)" \
             -H 'Content-Type: application/json' \
-            --data-binary @/tmp/adf.json || echo 000)
+            --data-binary @/tmp/adf.json 2>/dev/null) || HTTP=""
+          HTTP=${HTTP:-000}
 
           # Never fail the build on a Jira problem: the extension is already
           # built and uploaded, and a red X here would misreport that.
+          #
+          # Note 404 is ambiguous by design on Jira's side: it means "issue does
+          # not exist OR you cannot see it", and an invalid token gets the same
+          # answer. Confirmed against the live API. So the message lists both
+          # causes instead of asserting the first one, which is what sent me
+          # looking for a missing ticket when the real problem was a bad token.
           case "$HTTP" in
             201|200) echo "✅ Commented on $KEY" ;;
             400) echo "::warning::Jira rejected the payload (HTTP 400). Response:"; head -c 300 /tmp/jira.out; echo ;;
-            404) echo "::warning::$KEY not found in Jira. Check the project key and token scope." ;;
+            404) echo "::warning::Jira returned 404 for $KEY. Either the ticket does not exist, or the token cannot see it (Jira reports both identically — an invalid or under-scoped token also gets 404, not 401)."; head -c 200 /tmp/jira.out; echo ;;
             401|403) echo "::warning::Jira rejected the token (HTTP $HTTP). Token may be expired or lack write scope." ;;
             *)  echo "::warning::Jira comment failed (HTTP $HTTP). Response:"; head -c 400 /tmp/jira.out; echo ;;
           esac
