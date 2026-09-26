@@ -481,6 +481,9 @@ jobs:
             --data-binary @/tmp/adf.json 2>/tmp/curl.err) || HTTP=""
           HTTP=${HTTP:-000}
           echo "DIAG key=[$KEY] base=[$JIRA_BASE] http=[$HTTP] adf=$(wc -c < /tmp/adf.json 2>/dev/null || echo NA) err=[$(head -c 200 /tmp/curl.err 2>/dev/null)]"
+          echo "DIAG probe=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$JIRA_BASE/rest/api/3/myself" -u "$JIRA_EMAIL:$JIRA_CI_TOKEN" 2>&1 | head -c 200)"
+          echo "DIAG noproxy=$(curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' --max-time 20 "$JIRA_BASE/rest/api/3/myself" -u "$JIRA_EMAIL:$JIRA_CI_TOKEN" 2>&1 | head -c 200)"
+          echo "DIAG curlver=$(curl --version | head -1)"
 
           # Never fail the build on a Jira problem: the extension is already
           # built and uploaded, and a red X here would misreport that.
