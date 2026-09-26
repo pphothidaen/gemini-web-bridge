@@ -1,21 +1,50 @@
 #!/usr/bin/env bash
 # Git commit-msg hook enforcing KAN ticket format
+#
+# Deliberately validates the FIRST LINE only. `git commit -m` passes the
+# message as a single argument, so a multi-paragraph body after a valid
+# subject line is fine — but requiring the ticket in line 1 means the hook
+# never has to guess which paragraph was meant to carry it.
 
 COMMIT_MSG_FILE="$1"
 FIRST_LINE=$(head -n 1 "$COMMIT_MSG_FILE")
 
-# Allow merge commits and rebase internal commits
-if [[ "$FIRST_LINE" =~ ^Merge.* ]] || [[ "$FIRST_LINE" =~ ^fixup!.* ]] || [[ "$FIRST_LINE" =~ ^squash!.* ]]; then
+# Commits git generates on the developer's behalf, which cannot carry a
+# ticket prefix:
+#   Merge  — "Merge branch 'main' into feature/x"
+#   Revert — 'Revert "KAN-130: fix(ci): ..."'. This one matters most: the
+#            quoted subject is a KAN-prefixed message, so the commit is
+#            already traceable to its ticket. Blocking it means a governed
+#            repo cannot revert a bad commit at all — the one operation
+#            you must always be able to perform, and the one you most need
+#            to be able to perform FAST during an incident.
+#   fixup!/squash! — autosquash bookkeeping, folded into the target commit.
+if [[ "$FIRST_LINE" =~ ^Merge.* ]] \
+   || [[ "$FIRST_LINE" =~ ^Revert.* ]] \
+   || [[ "$FIRST_LINE" =~ ^fixup!.* ]] \
+   || [[ "$FIRST_LINE" =~ ^squash!.* ]]; then
   exit 0
 fi
 
-# Regex checking KAN ticket format
-PATTERN="^KAN-[0-9]+(:| ).+"
+# Ticket prefix, then a separator (':' or ' '), then a description that has
+# at least one non-whitespace character. The final part matters: plain `.+`
+# lets "KAN-130: " through, because the single trailing space satisfies it
+# and the commit lands with no description at all.
+PATTERN='^KAN-[0-9]+(:| )[[:space:]]*[^[:space:]]'
 
 if [[ ! "$FIRST_LINE" =~ $PATTERN ]]; then
-  echo "❌ [Governance Hook] Commit rejected: Missing or invalid Jira Ticket ID."
-  echo "👉 Commit message must start with 'KAN-<id>: <description>'"
-  echo "   Example: KAN-118: feat: implement governance commit hook"
+  {
+    echo "❌ [Governance Hook] Commit rejected: Missing or invalid Jira Ticket ID."
+    echo ""
+    echo "   Rejected first line: ${FIRST_LINE:-<empty>}"
+    echo ""
+    echo "👉 Commit message must start with 'KAN-<id>: <description>'"
+    echo "   Example: KAN-118: feat: implement governance commit hook"
+    echo ""
+    echo "   Rejected automatically (no ticket to carry):"
+    echo "     Merge / Revert / fixup! / squash!"
+    echo "   To override for a one-off:  git commit --no-verify"
+  } >&2
   exit 1
 fi
 
