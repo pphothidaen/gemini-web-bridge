@@ -502,7 +502,7 @@ jobs:
             400) echo "::warning::Jira rejected the payload (HTTP 400). Response:"; head -c 300 /tmp/jira.out || true; echo ;;
             404) echo "::warning::Jira returned 404 for $KEY. Either the ticket does not exist, or the token cannot see it (Jira reports both identically — an invalid or under-scoped token also gets 404, not 401)."; head -c 200 /tmp/jira.out || true; echo ;;
             401|403) echo "::warning::Jira rejected the token (HTTP $HTTP). Token may be expired or lack write scope." ;;
-            *)  echo "::warning::Jira comment failed (HTTP $HTTP). Response:"; head -c 400 /tmp/jira.out || true; echo ;;
+            *)  echo "::warning::Jira comment failed (HTTP $HTTP). curl: $(head -c 200 /tmp/curl.err 2>/dev/null | tr '\n' ' ') | response: $(head -c 300 /tmp/jira.out 2>/dev/null | tr '\n' ' ')" ;;
           esac
 
           # Explicit success. A step's exit status is the status of its LAST
