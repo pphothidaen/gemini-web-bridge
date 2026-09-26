@@ -17,7 +17,7 @@
 
 ## 🌐 English
 
-**Gemini Web Bridge (v4.3.4)** is an Enterprise-grade Edge AI Gateway and Chrome Extension that bridges live, authenticated [Google Gemini](https://gemini.google.com) web sessions into an **OpenAI-Compatible REST API** (with real SSE streaming & tool emulation) and a **Remote MCP Server**, powered by **Cloudflare Durable Objects**.
+**Gemini Web Bridge (v4.4.3)** is an Enterprise-grade Edge AI Gateway and Chrome Extension that bridges live, authenticated [Google Gemini](https://gemini.google.com) web sessions into an **OpenAI-Compatible REST API** (with real SSE streaming & tool emulation) and a **Remote MCP Server**, powered by **Cloudflare Durable Objects**.
 
 It enables autonomous AI clients and developer tools — **Hermes Agent**, **Cursor**, **Cline**, **Claude Code**, and Python/TypeScript SDKs — to harness Gemini's Deep Thinking models and execute Agentic Tool Loops directly over authenticated web sessions without artificial mocks or canned responses.
 
@@ -106,7 +106,7 @@ for chunk in response:
 
 ## 🌐 ภาษาไทย
 
-**Gemini Web Bridge (v4.3.4)** คือ Edge AI Gateway และ Chrome Extension ระดับโปรดักชัน ที่ทำหน้าที่เป็นสะพานเชื่อมต่อเซสชันเว็บจริงของ [Google Gemini](https://gemini.google.com) เข้าสู่ **OpenAI-Compatible REST API** (รองรับ Real SSE Streaming & Tool Emulation) และ **Remote MCP Server** ผ่านขุมพลัง **Cloudflare Durable Objects**
+**Gemini Web Bridge (v4.4.3)** คือ Edge AI Gateway และ Chrome Extension ระดับโปรดักชัน ที่ทำหน้าที่เป็นสะพานเชื่อมต่อเซสชันเว็บจริงของ [Google Gemini](https://gemini.google.com) เข้าสู่ **OpenAI-Compatible REST API** (รองรับ Real SSE Streaming & Tool Emulation) และ **Remote MCP Server** ผ่านขุมพลัง **Cloudflare Durable Objects**
 
 ระบบนี้ออกแบบมาเพื่อให้นักพัฒนาและ AI Agent ภายนอก เช่น **Hermes Agent**, **Cursor**, **Cline**, **Claude Code** สามารถดึงศักยภาพโมเดล Deep Thinking และรัน Agentic Tool Loops บนเบราว์เซอร์จริงได้อย่างเต็มประสิทธิภาพ โดยไม่มีการจำลองคำตอบหลอก (Zero Mocks)
 
@@ -156,7 +156,7 @@ curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/health | jq .
 
 ## 🌐 简体中文
 
-**Gemini Web Bridge (v4.3.4)** 是一个企业级 Edge AI 网关和 Chrome 扩展程序。它基于 **Cloudflare Durable Objects** 构建，将真实的、已认证的 [Google Gemini](https://gemini.google.com) 网页会话桥接为 **兼容 OpenAI 的 REST API**（支持真正的 SSE 流式传输和工具仿真）以及 **远程 MCP 服务器**。
+**Gemini Web Bridge (v4.4.3)** 是一个企业级 Edge AI 网关和 Chrome 扩展程序。它基于 **Cloudflare Durable Objects** 构建，将真实的、已认证的 [Google Gemini](https://gemini.google.com) 网页会话桥接为 **兼容 OpenAI 的 REST API**（支持真正的 SSE 流式传输和工具仿真）以及 **远程 MCP 服务器**。
 
 它支持外部 AI Agent 与开发工具（如 **Hermes Agent**、**Cursor**、**Cline**、**Claude Code**、Python/TS SDK）直接在真实网页会话上调用 Deep Thinking 深度思考模型并执行自主工具循环（Agentic Tool Loops），杜绝任何伪造或 Mock 数据。
 
@@ -204,10 +204,10 @@ Gemini Web Bridge provides a complete suite of remote MCP tools via `POST /mcp` 
 | Tool Name | Scope | Parameters | Description |
 |:---|:---:|:---|:---|
 | `set_bridge_scope` | Core | `scope` *(string)* | Switches bridge context between standard chat (`app`) and specific NotebookLM URLs (`notebook`). |
-| `sdlc_solution_architect` | SDLC | `problem_description`, `scope?` | Generates system architecture, component models, data flows, and security roadmaps. |
-| `orchestrate_sdlc_plan` | SDLC | `problem_description`, `scope?` | Creates end-to-end SDLC execution plans with test verification gates. |
-| `code_review_and_debug` | SDLC | `problem_description`, `scope?` | In-depth code auditing, OWASP security vulnerability detection, and root-cause fix synthesis. |
-| `evaluate_tech_tradeoffs` | SDLC | `problem_description`, `scope?` | Structured technology evaluation and weighted trade-off decision matrices. |
+| `sdlc_solution_architect` | SDLC | `problem_description`, `tech_stack?`, `constraints?`, `scope?` | Generates system architecture, component models, data flows, and security roadmaps. |
+| `orchestrate_sdlc_plan` | SDLC | `feature_or_goal` *(alias: `problem_description`)*, `current_stage?`, `scope?` | Creates end-to-end SDLC execution plans with test verification gates. |
+| `code_review_and_debug` | SDLC | `code_snippet` *(alias: `problem_description`)*, `error_log?`, `language?`, `scope?` | In-depth code auditing, OWASP security vulnerability detection, and root-cause fix synthesis. |
+| `evaluate_tech_tradeoffs` | SDLC | `decision_context` *(alias: `problem_description`)*, `options`, `scope?` | Structured technology evaluation and weighted trade-off decision matrices. |
 | `horo_consult` | Domain | `query`, `response_format?`, `birth_context?` | Domain intelligence tool with temporary KV PDF artifact delivery. |
 | `ping` | System | `message?` | Checks hub health, extension connectivity, active scope, and latency. |
 | `check_bridge_health` | Diagnostic | — | Detailed diagnostics on WebSocket status, consecutive errors, and GCP fallbacks. |
@@ -225,7 +225,7 @@ Gemini Web Bridge provides a complete suite of remote MCP tools via `POST /mcp` 
                                             │ HTTPS (Bearer Auth: CLIENT_API_TOKEN)
                                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.3.4)              │
+│                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.4.3)              │
 │                                                                                        │
 │   ┌────────────────────────────────────────────────────────────────────────────────┐   │
 │   │                         Edge Routing & Security Middleware                     │   │

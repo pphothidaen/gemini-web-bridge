@@ -5,6 +5,25 @@ All notable changes to the Gemini Web-Bridge project.
 ## [4.4.3] - 2026-09-26
 
 ### Fixed
+- **`decodeChunk` truncation of LMDX / `lmdx_content` answers**: the decoder took the **last** `wrb.fr` text in a buffer while the caller **replaces** its accumulator (Gemini re-sends the cumulative answer). Gemini appends a private conversation link (`https://googleusercontent.com/lmdx_content/...`) and can emit LMDX UI-component entries in their own `wrb.fr`, so a finished answer was overwritten by that trailing fragment — long SDLC output (`orchestrate_sdlc_plan`) came back link-only, truncated or empty. The decoder now keeps the longest coherent text, and `executeThroughExtension` only adopts an update that is at least as complete as what it already holds.
+- **`decodeChunk` text-slot shapes**: the positional slot (`innerData[4][0][1]`) is handled whether it is a string, an array of segments, or a structured LMDX block; previously a plain string degraded to its **first character** and structured blocks were dropped silently.
+- **`decodeChunk` state loss on malformed payloads**: a `JSON.parse` failure inside one `wrb.fr` no longer discards the rest of the line (which also carried `conversationId` / `responseId`).
+- **Private link leakage**: the trailing `googleusercontent.com/lmdx_content/...` link is stripped from answers before they reach API/MCP clients.
+- **Blank-success tool results**: a decoded-empty model answer now returns JSON-RPC error `-32000` (`Empty model response …`) and, when configured, falls back to GCP Gemini — instead of a successful result with empty `content`. A link-only answer counts as empty.
+- **SDLC tool argument contract**: the docs advertised `problem_description` for all four SDLC tools while the schemas used per-tool names, so `orchestrate_sdlc_plan` prompted `Goal: undefined`. All four tools now accept the documented alias (`orchestrate_sdlc_plan`: `feature_or_goal` | `problem_description`; `code_review_and_debug`: `code_snippet`; `evaluate_tech_tradeoffs`: `decision_context`) and return `-32602` with the missing argument name instead of calling Gemini with `undefined`. README/HANDOFF parameter tables corrected.
+- **`/health` counters were dead**: `healthState` is a derived getter that rebuilds an object per read, so every `this.healthState.consecutiveErrors++` / `lastError = …` write mutated a throwaway copy — production always reported `consecutive_errors: 0, last_error: null` and the `check_bridge_health` "degraded" threshold could never fire. All writes now go through `recordHealthError()` / `recordHealthSuccess()`.
+- **Version drift**: `/health`, MCP `serverInfo` and `ping` reported a hardcoded `4.3.4` while `package.json` said `4.3.7` and the extension manifest said `4.4.3`. All version strings now read a single `WORKER_VERSION` constant, and `package.json` / `package-lock.json` / `manifest.json` are pinned to the same release line.
+
+### Security
+- `wrangler.staging.toml` no longer ships a plain-var `BRIDGE_AUTH_TOKEN` (was the guessable `staging-token-change-me`); the worker now fails closed until the secret is set with `wrangler secret put`.
+
+### Added
+- `tests/decode-chunk.test.mjs` (9 cases: cumulative text, trailing `lmdx_content` link, string/array/structured text slots, malformed-payload state recovery, non-JSON lines).
+- `tests/sdlc-tool-args.test.mjs` (6 cases: documented alias, canonical argument, missing-argument errors, empty/link-only answers, trimmed result).
+- `tests/health-metrics.test.mjs` (2 cases: counters persist across reads and surface in `/health` + `check_bridge_health`).
+- `tests/version-consistency.test.mjs` (4 cases: `WORKER_VERSION` ↔ `package.json` ↔ `package-lock.json` ↔ extension manifest, and no hardcoded version literals left).
+
+### Fixed (Chrome extension runtime)
 - **Refresh-teardown error spam**: Page refresh no longer logs spurious `[Bridge] WebSocket Error` and `[Bridge] Disconnected (code: 1006)` warnings. Added `isRefreshing` flag via `beforeunload`/`pagehide` detection to suppress expected WebSocket teardown noise.
 - **EvidenceRegistry init race**: `saveToStorage()` now defers writes until `init()` completes via `initialized` guard, eliminating the race between async `registry.init()` and SESSION_STATE evidence recording that triggered `Context invalidated during save` on refresh.
 - **Context-invalidation classification**: `saveToStorage()` now classifies context-invalidation errors as PERMANENT (orphaned — retry can never succeed after an extension reload/update, only a tab reload helps) instead of silently skipping. Orphaned saves stay fully silent (no `Context invalidated during save` warning); transient failures (timeout/quota) set `_hasPendingWrites` and are retried on the next save cycle, also silently. `init()` restores the in-memory snapshot on orphaned load with no warning and never flushes. A one-time `onOrphaned` hook lets content.js surface a single `Bridge: Reload tab (extension updated)` pill hint via the deduping indicator.

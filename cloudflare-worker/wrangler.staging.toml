@@ -9,9 +9,15 @@ compatibility_flags = ["nodejs_compat"]
 # Staging-specific vars (non-secret)
 [vars]
 ENVIRONMENT = "staging"
-BRIDGE_AUTH_TOKEN = "staging-token-change-me"
 LOG_LEVEL = "debug"
 ENABLE_DEBUG_ENDPOINTS = "true"
+
+# BRIDGE_AUTH_TOKEN / CLIENT_API_TOKEN are NOT plain vars — a token committed in
+# wrangler.*.toml is a leaked token (this file used to ship the guessable
+# "staging-token-change-me"). Set them per environment with:
+#   npx wrangler secret put BRIDGE_AUTH_TOKEN --env staging
+#   npx wrangler secret put CLIENT_API_TOKEN  --env staging
+# Until then the worker fails closed (401) instead of accepting a default.
 
 # Durable Objects
 [durable_objects]

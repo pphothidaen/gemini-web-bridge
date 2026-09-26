@@ -1,7 +1,7 @@
 # 🧭 Master Project Handoff & Architecture Blueprint
 
 > **Gemini Web Bridge (Edge AI Gateway & Hybrid Hub)**  
-> **Current Version:** `v4.3.4` (Background-Socket Sessions & Conversation Scopes Edition)  
+> **Current Version:** `v4.4.3` (Background-Socket Sessions & Conversation Scopes Edition)  
 > **Repository:** `gemini-web-bridge` | **Production URL:** `https://gemini-web-bridge.pansakorn-pho.workers.dev`  
 > **System Status:** Production Ready & 100% Operational  
 > **Test Pass Rate:** **95 / 95 Tests (100%)** — All tests passing ✅
@@ -67,7 +67,7 @@
                                             │ HTTPS (Bearer Auth: CLIENT_API_TOKEN)
                                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.3.4)              │
+│                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.4.3)              │
 │                                                                                        │
 │   ┌────────────────────────────────────────────────────────────────────────────────┐   │
 │   │                         Edge Routing & Security Middleware                     │   │
@@ -291,14 +291,14 @@ Remote Model Context Protocol (MCP) ให้บริการที่ Endpoin
 
 | ชื่อ Tool | ประเภทการทำงาน | พารามิเตอร์ที่รองรับ (Schema) | รายละเอียดการทำงาน |
 |:---|:---:|:---|:---|
-| `ping` | System | `message` *(string, optional)* | ตรวจสอบ Latency และสถานะการทำงาน (ส่งคืน Version 4.3.4, Scope ปัจจุบัน, และสถานะ Bridge) |
+| `ping` | System | `message` *(string, optional)* | ตรวจสอบ Latency และสถานะการทำงาน (ส่งคืน Version 4.4.3, Scope ปัจจุบัน, และสถานะ Bridge) |
 | `check_bridge_health` | Diagnostic | ไม่มี (Empty arguments) | ตรวจสอบสุขภาพเชิงลึก ส่งคืนข้อมูล JSON: สถานะ WebSocket, Consecutive Errors, รายชื่อโมเดล, และ GCP Fallback |
 | `list_bridge_models` | Catalog | ไม่มี (Empty arguments) | ส่งคืนรายชื่อโมเดลที่เบราว์เซอร์สแกนพบจริง พร้อมสถานะ Extended Thinking |
 | `set_bridge_scope` | Scope | `scope` *(string, required)* | กำหนด Conversation Scope ของ Bridge เช่น `app`, `notebook`, หรือ URL เต็มของเซสชันที่ต้องการ |
-| `sdlc_solution_architect` | SDLC | `problem_description` *(string, required)*,<br/>`scope` *(string, optional)* | วิเคราะห์สถาปัตยกรรมระบบ วางแผนเทคโนโลยี ออกแบบ Data Flow ตามหลักความปลอดภัย |
-| `orchestrate_sdlc_plan` | SDLC | `problem_description` *(string, required)*,<br/>`scope` *(string, optional)* | จัดทำแผนงานพัฒนาซอฟต์แวร์ แบ่งเป็น Phase ย่อย พร้อมเกณฑ์การทดสอบ (Verification Criteria) |
-| `code_review_and_debug` | SDLC | `problem_description` *(string, required)*,<br/>`scope` *(string, optional)* | ตรวจสอบคุณภาพโค้ด ค้นหาช่องโหว่ความปลอดภัย (OWASP) และวิเคราะห์ Root Cause ของ Bug |
-| `evaluate_tech_tradeoffs` | SDLC | `problem_description` *(string, required)*,<br/>`scope` *(string, optional)* | ประเมินเปรียบเทียบข้อดี-ข้อเสีย (Pros & Cons) และคำนวณคะแนน Weighted Decision Matrix |
+| `sdlc_solution_architect` | SDLC | `problem_description` *(string, required)*,<br/>`tech_stack`, `constraints`, `scope` *(string, optional)* | วิเคราะห์สถาปัตยกรรมระบบ วางแผนเทคโนโลยี ออกแบบ Data Flow ตามหลักความปลอดภัย |
+| `orchestrate_sdlc_plan` | SDLC | `feature_or_goal` *(string, required — alias `problem_description`)*,<br/>`current_stage`, `scope` *(string, optional)* | จัดทำแผนงานพัฒนาซอฟต์แวร์ แบ่งเป็น Phase ย่อย พร้อมเกณฑ์การทดสอบ (Verification Criteria) |
+| `code_review_and_debug` | SDLC | `code_snippet` *(string, required — alias `problem_description`)*,<br/>`error_log`, `language`, `scope` *(string, optional)* | ตรวจสอบคุณภาพโค้ด ค้นหาช่องโหว่ความปลอดภัย (OWASP) และวิเคราะห์ Root Cause ของ Bug |
+| `evaluate_tech_tradeoffs` | SDLC | `decision_context` *(string, required — alias `problem_description`)*,<br/>`options`, `scope` *(string, optional)* | ประเมินเปรียบเทียบข้อดี-ข้อเสีย (Pros & Cons) และคำนวณคะแนน Weighted Decision Matrix |
 
 ---
 
@@ -328,7 +328,7 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
     "content": [
       {
         "type": "text",
-        "text": "Pong! Cloud Hub v4.3.4 is running.\n• Conversation Scope: app (default)\n• Active Browser Model: Gemini 2.0 Flash (Extended Thinking: ON)\n• Chrome Extension Bridge: CONNECTED_AND_READY\n• GCP Fallback: ENABLED (Ready)\n• Consecutive Errors: 0"
+        "text": "Pong! Cloud Hub v4.4.3 is running.\n• Conversation Scope: app (default)\n• Active Browser Model: Gemini 2.0 Flash (Extended Thinking: ON)\n• Chrome Extension Bridge: CONNECTED_AND_READY\n• GCP Fallback: ENABLED (Ready)\n• Consecutive Errors: 0"
       }
     ]
   }

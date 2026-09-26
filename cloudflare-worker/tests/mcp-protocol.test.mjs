@@ -7,6 +7,9 @@ import * as emulator from '../src/tool-emulator.ts';
 import * as pdfLib from 'pdf-lib';
 
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+// Never hardcode the version in assertions — read it from package.json so the
+// test can never drift from the shipped value.
+const WORKER_VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const context = {
   ...catalog,
   ...emulator,
@@ -160,7 +163,7 @@ test('MCP Protocol: initialize returns protocolVersion, serverInfo, and tools ca
   assert.equal(data.id, 1);
   assert.equal(data.result.protocolVersion, '2024-11-05');
   assert.equal(data.result.serverInfo.name, 'gemini-web-bridge-cloud-hub');
-  assert.equal(data.result.serverInfo.version, '4.3.4');
+  assert.equal(data.result.serverInfo.version, WORKER_VERSION);
   assert.equal(data.result.capabilities.tools.listChanged, false);
 });
 
@@ -276,7 +279,7 @@ test('MCP Protocol: tools/call executes synthetic safe ping without requiring br
   assert.equal(data.id, 3);
   assert.ok(Array.isArray(data.result.content));
   assert.equal(data.result.content[0].type, 'text');
-  assert.match(data.result.content[0].text, /Pong! Cloud Hub v4\.3\.\d+ is running/);
+  assert.match(data.result.content[0].text, new RegExp(`Pong! Cloud Hub v${WORKER_VERSION.replace(/\./g, '\\.')} is running`));
 });
 
 test('MCP Protocol: tools/call executes check_bridge_health and returns diagnostics', async () => {
@@ -657,7 +660,7 @@ test('MCP Full Client Handshake: simulates complete client lifecycle', async () 
   assert.equal(callRes.status, 200);
   const callData = await callRes.json();
   assert.equal(callData.id, 4);
-  assert.match(callData.result.content[0].text, /Pong! Cloud Hub v4\.3\.\d+ is running/);
+  assert.match(callData.result.content[0].text, new RegExp(`Pong! Cloud Hub v${WORKER_VERSION.replace(/\./g, '\\.')} is running`));
 });
 
 test('MCP Routing: /health and / continue returning Status Dashboard while unknown returns 404', async () => {

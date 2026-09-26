@@ -26,14 +26,21 @@
 
 **Decision needed:** Continue using `pansakorn-pho.workers.dev` (which is already active v4.3.4) OR migrate to `pphothidaen.workers.dev` (new subdomain)?
 
-### 2. Rotate Secrets (optional, for production hardening)
-Secrets were exposed in old repo (`taijustarrett417-lgtm`) and may have been seen by others. Recommend rotating:
+### 2. Rotate Secrets 🔴 REQUIRED (was incorrectly marked "optional")
+Secrets were exposed in the old repo (`taijustarrett417-lgtm`) **and** committed
+verbatim to this public repo's history (commits `078824b` → `4f6cced`, still
+retrievable with `git log -S`). Audit on 2026-09-26 confirmed
+`CLIENT_API_TOKEN` is **still accepted by production** (`GET /v1/models` → 200),
+so rotation is mandatory, not hardening:
 
 - `BRIDGE_AUTH_TOKEN` (Gemini Bridge secret)
 - `CLIENT_API_TOKEN` (Bearer token)
 - `CLOUDFLARE_API_TOKEN` (Cloudflare API token)
 
-**Action:** Regenerate tokens in Cloudflare dashboard + Doppler, update both, then redeploy worker.
+**Action:** Follow [`docs/SECURITY_TOKEN_ROTATION.md`](docs/SECURITY_TOKEN_ROTATION.md)
+step by step (wrangler secrets → Doppler → GitHub secrets → rebuild extension →
+verify old token returns 401). A guard now fails CI if literal tokens reappear
+(`cloudflare-worker/tests/extension-secrets.test.mjs`).
 
 ### 3. Verify Doppler Sync for Local Dev
 The local `.env` should be synced from Doppler before running locally:

@@ -1,6 +1,6 @@
 // Cloudflare Worker: Stateful Gemini Web-Bridge Edge Hub
 // Architecture: Cloudflare Durable Objects (Unified WSS + HTTP Stateful Coordinator)
-// Version: 4.3.7 (Fix EvidenceRegistry async race — preserve auto-verify records across init())
+// Version: 4.4.3 (see WORKER_VERSION below — this comment is informational only)
 
 import { normalizeModels, recommendedModel } from "./model-catalog.js";
 import { DurableObject } from "cloudflare:workers";
@@ -11,6 +11,20 @@ import {
   resolveToolPolicy,
   parseToolCompletion
 } from "./tool-emulator.ts";
+
+// ─── Single Source of Truth for the worker version ───────────────────────────
+// Every user-visible version string (/health, MCP serverInfo, ping) reads this
+// constant, so the surface can never drift the way it did before (hardcoded
+// 4.3.4 in three places while package.json said 4.3.7 and the extension
+// manifest said 4.4.3).
+//
+// KEEP IN SYNC with:
+//   • cloudflare-worker/package.json          (npm test → version-consistency)
+//   • cloudflare-worker/package-lock.json
+//   • extension-cloudflare/manifest.json
+//
+// tests/version-consistency.test.mjs fails the build if any of them drift.
+const WORKER_VERSION = "4.4.3";
 
 // Characters encodable with WinAnsi (CP1252) standard PDF fonts.
 const WINANSI_EXTRA_CHARS = new Set([
@@ -80,47 +94,122 @@ export class ProtocolDecoder {
 
   /**
    * ถอดรหัส Chunk จาก Response ของ Google RPC
+   *
+   * Robustness notes (v4.4.3):
+   *  - Google re-sends the CUMULATIVE answer on each update, so the caller
+   *    replaces (not appends) its accumulator. A single decodeChunk() call
+   *    can therefore contain SEVERAL `wrb.fr` entries, and the last one is
+   *    NOT necessarily the longest one: Gemini appends a private
+   *    conversation link (https://googleusercontent.com/lmdx_content/...)
+   *    and can emit LMDX UI-component entries in their own `wrb.fr`.
+   *    Taking the last entry (old behaviour) replaced a finished answer
+   *    with that trailing link, which is what made long SDLC tool output
+   *    (orchestrate_sdlc_plan) come back empty/link-only.
+   *  - The text slot is positional and has changed shape over time:
+   *      innerData[4][0][1]        = [ "text" ]  (array of text segments)
+   *      innerData[4][0][1]        = "text"      (plain string)
+   *      innerData[4][0][1][0]     = { lmdx_content: ... } (structured block)
+   *    All three are handled; anything else is ignored rather than
+   *    corrupting the accumulated text.
+   *  - A malformed innerData payload must not discard the rest of the
+   *    line, otherwise conversationId/responseId (state) is lost too.
+   *
+   * @returns {{ deltaText: string, stateUpdate: object }}
    */
   static decodeChunk(rawChunk) {
-    let clean = rawChunk.trim();
+    let clean = String(rawChunk || "").trim();
     if (clean.startsWith(")]}'")) {
       clean = clean.substring(4).trim();
     }
 
+    // Longest coherent text wins: cumulative resends grow monotonically, so
+    // the longest string in the buffer is the most complete answer.
     let deltaText = "";
     let stateUpdate = {};
 
     const lines = clean.split("\n");
     for (const line of lines) {
       if (!line.trim() || /^\d+$/.test(line.trim())) continue;
+      let parsed;
       try {
-        const parsed = JSON.parse(line);
-        if (Array.isArray(parsed)) {
-          for (const item of parsed) {
-            if (item[0] === "wrb.fr" && item[2]) {
-              const innerData = JSON.parse(item[2]);
-              if (innerData[4] && innerData[4][0] && innerData[4][0][1]) {
-                const textChunk = innerData[4][0][1][0];
-                if (typeof textChunk === "string") {
-                  deltaText = textChunk;
-                }
-              }
-              if (innerData[1]) {
-                stateUpdate.conversationId = innerData[1][0];
-                stateUpdate.responseId = innerData[1][1];
-              }
-              if (innerData[4] && innerData[4][0] && innerData[4][0][0]) {
-                stateUpdate.choiceId = innerData[4][0][0];
-              }
-            }
-          }
-        }
+        parsed = JSON.parse(line);
       } catch (e) {
-        // Ignore incomplete chunks
+        continue; // incomplete / not-JSON line — skip it, keep scanning
+      }
+      if (!Array.isArray(parsed)) continue;
+
+      for (const item of parsed) {
+        if (!Array.isArray(item) || item[0] !== "wrb.fr" || !item[2]) continue;
+        let innerData;
+        try {
+          innerData = JSON.parse(item[2]);
+        } catch (e) {
+          continue; // broken inner payload: state below is unreachable anyway
+        }
+        if (!Array.isArray(innerData)) continue;
+
+        // Choice slot holds the answer text; extract defensively.
+        const choice = Array.isArray(innerData[4]) && Array.isArray(innerData[4][0])
+          ? innerData[4][0]
+          : null;
+        const candidate = ProtocolDecoder._extractText(choice ? choice[1] : undefined);
+        if (candidate.length > deltaText.length) {
+          deltaText = candidate;
+        }
+
+        if (Array.isArray(innerData[1])) {
+          if (innerData[1][0]) stateUpdate.conversationId = innerData[1][0];
+          if (innerData[1][1]) stateUpdate.responseId = innerData[1][1];
+        }
+        if (choice && choice[0]) {
+          stateUpdate.choiceId = choice[0];
+        }
       }
     }
 
-    return { deltaText, stateUpdate };
+    return { deltaText: ProtocolDecoder._stripPrivateLink(deltaText), stateUpdate };
+  }
+
+  /**
+   * Pull plain text out of whatever shape Gemini put in the text slot.
+   * Returns "" when there is no usable text (e.g. pure structured blocks).
+   */
+  static _extractText(slot) {
+    if (typeof slot === "string") return slot;
+    if (!Array.isArray(slot)) return "";
+
+    const parts = [];
+    const walk = (node, depth) => {
+      if (depth > 4 || node == null) return;
+      if (typeof node === "string") {
+        if (node) parts.push(node);
+        return;
+      }
+      if (Array.isArray(node)) {
+        for (const child of node) walk(child, depth + 1);
+        return;
+      }
+      if (typeof node === "object") {
+        // LMDX / structured blocks: walk for a text-bearing field rather than
+        // dropping the segment entirely.
+        for (const key of ["text", "content", "body", "html", "lmdx_content"]) {
+          if (key in node) walk(node[key], depth + 1);
+        }
+      }
+    };
+    walk(slot, 0);
+    return parts.join("");
+  }
+
+  /**
+   * Gemini sometimes appends a private conversation link to the answer text
+   * (https://googleusercontent.com/lmdx_content/<id>). It is noise for API
+   * clients and leaks a private resource identifier, so strip it.
+   */
+  static _stripPrivateLink(text) {
+    return String(text || "")
+      .replace(/\s*https?:\/\/[^\s]*googleusercontent\.com\/lmdx_content\/[^\s]*\s*$/i, "")
+      .trim();
   }
 }
 
@@ -234,6 +323,23 @@ export class GeminiBridgeDO extends DurableObject {
     if (value.lastSuccessfulGeneration !== undefined) this._lastSuccessfulGeneration = value.lastSuccessfulGeneration;
     if (value.consecutiveErrors !== undefined) this._consecutiveErrors = value.consecutiveErrors;
     if (value.lastError !== undefined) this._lastError = value.lastError;
+  }
+
+  // ─── Health metric writers ────────────────────────────────────────────────
+  // `healthState` is a DERIVED getter: it builds a fresh object on every read,
+  // so `this.healthState.consecutiveErrors++` mutated a throwaway copy and the
+  // counters stayed pinned at 0/null forever (visible in production /health and
+  // in the `check_bridge_health` "degraded" threshold, which could never fire).
+  // Always write through these helpers, never through the getter.
+  recordHealthError(message) {
+    this._consecutiveErrors = (this._consecutiveErrors || 0) + 1;
+    this._lastError = message ?? null;
+  }
+
+  recordHealthSuccess() {
+    this._lastSuccessfulGeneration = Date.now();
+    this._consecutiveErrors = 0;
+    this._lastError = null;
   }
 
   resetModelCatalog() {
@@ -1285,17 +1391,14 @@ export class GeminiBridgeDO extends DurableObject {
 
     if (!res.ok) {
       const errText = await res.text();
-      this.healthState.consecutiveErrors++;
-      this.healthState.lastError = `GCP Error: ${res.status}`;
+      this.recordHealthError(`GCP Error: ${res.status}`);
       throw new Error(`GCP Gemini API error (${res.status}): ${errText}`);
     }
 
     const data = await res.json();
     const candidate = data.candidates?.[0];
     const text = candidate?.content?.parts?.[0]?.text || "";
-    this.healthState.lastSuccessfulGeneration = Date.now();
-    this.healthState.consecutiveErrors = 0;
-    this.healthState.lastError = null;
+    this.recordHealthSuccess();
     return text;
   }
 
@@ -1329,6 +1432,22 @@ export class GeminiBridgeDO extends DurableObject {
         idleTimer = setTimeout(() => fail(`Timeout: no response chunk from Gemini Web Extension for ${IDLE_TIMEOUT_MS / 1000}s.`), IDLE_TIMEOUT_MS);
       };
 
+      // Gemini re-sends the CUMULATIVE text on each update, so a decoded
+      // update REPLACES the accumulator instead of appending to it. Only
+      // accept the replacement when it is at least as complete as what we
+      // already hold. A shorter/divergent update means Gemini emitted a side
+      // entry (LMDX component block, the trailing
+      // googleusercontent.com/lmdx_content link, a re-render) and blindly
+      // replacing truncates long answers — this is what made
+      // orchestrate_sdlc_plan return link-only or empty text.
+      const adoptText = (candidate) => {
+        if (!candidate) return false;
+        if (candidate.length < fullText.length && !candidate.startsWith(fullText)) return false;
+        if (candidate === fullText) return false;
+        fullText = candidate;
+        return true;
+      };
+
       this.activeStreams.set(requestId, (msg) => {
         if (msg.type === "STREAM_CHUNK" && msg.chunk) {
           rpcBuffer += msg.chunk;
@@ -1337,11 +1456,10 @@ export class GeminiBridgeDO extends DurableObject {
           if (boundary >= 0) {
             const { deltaText } = ProtocolDecoder.decodeChunk(rpcBuffer.slice(0, boundary + 1));
             rpcBuffer = rpcBuffer.slice(boundary + 1);
-            if (deltaText && deltaText !== fullText) {
-              fullText = deltaText;
+            if (adoptText(deltaText)) {
               bumpIdle();
-              // Gemini re-sends the cumulative text on each update; surface it
-              // immediately so callers can stream deltas to clients.
+              // Surface the cumulative text immediately so callers can stream
+              // deltas to clients.
               try { Promise.resolve(onChunk?.(fullText)).catch(() => {}); } catch (e) {}
             }
           }
@@ -1349,19 +1467,13 @@ export class GeminiBridgeDO extends DurableObject {
           cleanup();
           this.activeStreams.delete(requestId);
           const { deltaText } = ProtocolDecoder.decodeChunk(rpcBuffer);
-          if (deltaText && deltaText !== fullText) {
-            fullText = deltaText;
-            try { Promise.resolve(onChunk?.(fullText)).catch(() => {}); } catch (e) {}
-          }
-          this.healthState.lastSuccessfulGeneration = Date.now();
-          this.healthState.consecutiveErrors = 0;
-          this.healthState.lastError = null;
+          adoptText(deltaText);
+          this.recordHealthSuccess();
           Promise.resolve().then(() => onChunk?.(fullText, fullText)).then(() => resolve(fullText), reject);
         } else if (msg.type === "STREAM_ERROR") {
           cleanup();
           this.activeStreams.delete(requestId);
-          this.healthState.consecutiveErrors++;
-          this.healthState.lastError = msg.error || "Execution error in extension";
+          this.recordHealthError(msg.error || "Execution error in extension");
           reject(Object.assign(new Error(msg.error || "Execution error in extension"), {code:msg.code || "execution_failed"}));
         }
       });
@@ -2101,10 +2213,11 @@ export class GeminiBridgeDO extends DurableObject {
           type: "object",
           properties: {
             feature_or_goal: { type: "string", description: "ฟีเจอร์หรือเป้าหมายของระบบที่ต้องการพัฒนา" },
+            problem_description: { type: "string", description: "Alias ของ feature_or_goal (รองรับ client ที่ใช้ชื่อตามเอกสาร README/HANDOFF เดิม) — ต้องระบุอย่างน้อยหนึ่งค่า" },
             current_stage: { type: "string", description: "ขั้นตอนปัจจุบัน เช่น Planning, Architecture, Testing" },
             scope: { type: "string", description: "ขอบเขตการสนทนา: \"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com — ถ้าไม่ระบุ ระบบจะใช้ค่าเริ่มต้นคือ App (https://gemini.google.com/app)" }
           },
-          required: ["feature_or_goal"]
+          required: []
         }
       },
       {
@@ -2365,7 +2478,7 @@ export class GeminiBridgeDO extends DurableObject {
                 tools: { listChanged: false },
                 logging: {}
               },
-              serverInfo: { name: "gemini-web-bridge-cloud-hub", version: "4.3.4" }
+              serverInfo: { name: "gemini-web-bridge-cloud-hub", version: WORKER_VERSION }
             }
           };
           return { response: res, protocolVersion: protoVersion };
@@ -2407,7 +2520,7 @@ export class GeminiBridgeDO extends DurableObject {
           if (toolName === "ping") {
             const extStatus = this.isExtensionReady() ? "ONLINE (Session Ready)" : "DISCONNECTED (Please open gemini.google.com in Chrome)";
             const gcpStatus = this.env.GEMINI_API_KEY ? "CONFIGURED (Hybrid Active)" : "DISABLED";
-            const pongText = `Pong! Cloud Hub v4.3.4 is running.\n• Conversation Scope: ${this.currentScope || "app (default)"}\n• Active Browser Model: ${this.activeBrowserModel || "None"} (Extended Thinking: ${this.extendedThinkingActive ? "ON" : "OFF"})\n• Chrome Extension Bridge: ${extStatus}\n• GCP Fallback: ${gcpStatus}\n• Consecutive Errors: ${this.healthState.consecutiveErrors}`;
+            const pongText = `Pong! Cloud Hub v${WORKER_VERSION} is running.\n• Conversation Scope: ${this.currentScope || "app (default)"}\n• Active Browser Model: ${this.activeBrowserModel || "None"} (Extended Thinking: ${this.extendedThinkingActive ? "ON" : "OFF"})\n• Chrome Extension Bridge: ${extStatus}\n• GCP Fallback: ${gcpStatus}\n• Consecutive Errors: ${this.healthState.consecutiveErrors}`;
             const res = {
               jsonrpc: "2.0",
               id,
@@ -2537,15 +2650,43 @@ export class GeminiBridgeDO extends DurableObject {
             return { response: res };
           }
 
+          // Argument normalization. README.md/HANDOFF.md documented
+          // `problem_description` for all four SDLC tools, while the tool
+          // schemas use per-tool names (orchestrate_sdlc_plan requires
+          // `feature_or_goal`). Clients built from the docs therefore sent an
+          // argument the worker never read and the prompt silently became
+          // "Goal: undefined". Accept the documented aliases and fail loudly
+          // when the required argument is genuinely missing.
+          const firstString = (...values) => {
+            for (const value of values) {
+              if (typeof value === "string" && value.trim()) return value;
+            }
+            return undefined;
+          };
+          const problemText = firstString(args.problem_description, args.feature_or_goal, args.goal, args.description);
+
+          const missingArg = (argName) => ({
+            response: {
+              jsonrpc: "2.0",
+              id,
+              error: { code: -32602, message: `Missing required argument '${argName}' for tool '${toolName}'.` }
+            }
+          });
+
           let prompt = "";
           if (toolName === "sdlc_solution_architect") {
-            prompt = `[Role: Senior Solution Architect]\nProblem: ${args.problem_description}\nTech Stack: ${args.tech_stack || "Modern Cloud-Native"}\nConstraints: ${args.constraints || "High Availability"}\n\nTask: Design full solution architecture, component model, data flow, and actionable implementation steps.`;
+            if (!problemText) return missingArg("problem_description");
+            prompt = `[Role: Senior Solution Architect]\nProblem: ${problemText}\nTech Stack: ${args.tech_stack || "Modern Cloud-Native"}\nConstraints: ${args.constraints || "High Availability"}\n\nTask: Design full solution architecture, component model, data flow, and actionable implementation steps.`;
           } else if (toolName === "orchestrate_sdlc_plan") {
-            prompt = `[Role: SDLC Orchestrator]\nGoal: ${args.feature_or_goal}\nCurrent Stage: ${args.current_stage || "Planning"}\n\nTask: Decompose into sequential SDLC tasks across Planning, Architecture, Implementation, QA, and CI/CD.`;
+            if (!problemText) return missingArg("feature_or_goal");
+            prompt = `[Role: SDLC Orchestrator]\nGoal: ${problemText}\nCurrent Stage: ${args.current_stage || "Planning"}\n\nTask: Decompose into sequential SDLC tasks across Planning, Architecture, Implementation, QA, and CI/CD.`;
           } else if (toolName === "code_review_and_debug") {
-            prompt = `[Role: Expert Code Reviewer & Debugger]\nLanguage: ${args.language || "Auto"}\nError Log: ${args.error_log || "None"}\nCode:\n\`\`\`\n${args.code_snippet}\n\`\`\`\n\nTask: Find root cause of the bug, check security, and provide clean code patch.`;
+            const snippet = firstString(args.code_snippet, args.problem_description);
+            if (!snippet) return missingArg("code_snippet");
+            prompt = `[Role: Expert Code Reviewer & Debugger]\nLanguage: ${args.language || "Auto"}\nError Log: ${args.error_log || "None"}\nCode:\n\`\`\`\n${snippet}\n\`\`\`\n\nTask: Find root cause of the bug, check security, and provide clean code patch.`;
           } else if (toolName === "evaluate_tech_tradeoffs") {
-            prompt = `[Role: Tech Lead]\nContext: ${args.decision_context}\nOptions: ${args.options}\n\nTask: Detailed architectural trade-off analysis across Scalability, Performance, DX, and Maintenance.`;
+            if (!firstString(args.decision_context, args.problem_description)) return missingArg("decision_context");
+            prompt = `[Role: Tech Lead]\nContext: ${firstString(args.decision_context, args.problem_description)}\nOptions: ${args.options}\n\nTask: Detailed architectural trade-off analysis across Scalability, Performance, DX, and Maintenance.`;
           } else if (toolName === "horo_consult") {
             prompt = `[Role: ซินแส AI ผู้เชี่ยวชาญโหราศาสตร์จีน (BaZi),  numerology และดาราศาสตร์ไทย ตอบโดยอ้างอิงความรู้ใน Notebook ที่ผูกไว้เป็นหลัก ตอบเป็นภาษาเดียวกับคำถาม มีโครงสร้างชัดเจน (หัวข้อ/บุลเล็ต) และระบุข้อจำกัดเชิงการพยากรณ์เมื่อข้อมูลไม่พอ]\nBirth Context: ${args.birth_context ? JSON.stringify(args.birth_context) : "not provided"}\nUser Question: ${args.query}`;
           }
@@ -2646,6 +2787,43 @@ export class GeminiBridgeDO extends DurableObject {
             try {
               const targetModel = recommendedModel(this.dynamicModels) || this.activeBrowserModel || (this.dynamicModels[0]?.id) || "gemini-3.8-flash";
               let resultText = await this.executeThroughExtension([{ role: "user", content: prompt }], null, targetModel);
+
+              // Never hand an empty/blank answer back to the MCP client. Gemini
+              // answers that are entirely LMDX components or an empty model
+              // reply decode to "" and previously surfaced as a successful but
+              // contentless tool result, which is indistinguishable from a
+              // broken bridge to the caller. The private lmdx_content link is
+              // stripped here too so this guard holds for any text source.
+              const usableText = ProtocolDecoder._stripPrivateLink(resultText);
+              if (!usableText) {
+                this.recordHealthError(`Empty model response for tool '${toolName}'`);
+                console.warn(`[Bridge DO] Empty model response for tool '${toolName}' — returning error instead of blank content.`);
+                if (this.env.GEMINI_API_KEY) {
+                  try {
+                    const gcpResult = await this.callGcpGemini([{ role: "user", content: prompt }]);
+                    return {
+                      response: {
+                        jsonrpc: "2.0",
+                        id,
+                        result: { content: [{ type: "text", text: `[Provider: GCP Gemini Fallback]\n\n${gcpResult}` }] }
+                      }
+                    };
+                  } catch (gcpErr) {
+                    console.warn(`[Bridge DO] GCP fallback after empty response failed: ${gcpErr.message}`);
+                  }
+                }
+                return {
+                  response: {
+                    jsonrpc: "2.0",
+                    id,
+                    error: {
+                      code: -32000,
+                      message: `Empty model response from Gemini Web for tool '${toolName}'. The browser session returned no decodable text; retry or re-open the Gemini tab.`
+                    }
+                  }
+                };
+              }
+              resultText = usableText;
 
               // horo_consult PDF artifact: render the full answer into a PDF and
               // expose a temporary (1h) unguessable download link.
@@ -2795,7 +2973,7 @@ export class GeminiBridgeDO extends DurableObject {
       return new Response(JSON.stringify({
         status: "ok",
         service: "gemini-web-bridge-cloud-hub",
-        version: "4.3.4",
+        version: WORKER_VERSION,
         architecture: "Cloudflare Durable Objects (Stateful Unified WSS + HTTP)",
         extension_status: isReady ? "CONNECTED_AND_READY" : "DISCONNECTED",
         current_scope: this.currentScope || "app (default)",
