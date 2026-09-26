@@ -1,0 +1,48 @@
+# Gitleaks config for gemini-web-bridge.
+#
+# The default gitleaks ruleset has no rule matching this project's token
+# prefixes, so the September-2026 leak (hermes-* / gemini-bridge-* committed
+# verbatim, then re-shipped inside a repo-root .zip) passed CI green. These
+# rules close that gap.
+#
+# Complements — does not replace — cloudflare-worker/tests/extension-secrets.test.mjs,
+# which additionally scans inside .zip members and rejects tracked build artifacts.
+
+title = "gemini-web-bridge gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "hermes-client-api-token"
+description = "Gemini bridge CLIENT_API_TOKEN (hermes- prefix)"
+regex = '''hermes-[a-f0-9]{16,}'''
+keywords = ["hermes"]
+secretGroup = 0
+entropy = 3.0
+
+[[rules]]
+id = "gemini-bridge-auth-token"
+description = "Gemini bridge BRIDGE_AUTH_TOKEN (gemini-bridge- prefix)"
+regex = '''gemini-bridge-[a-f0-9]{16,}'''
+keywords = ["gemini-bridge"]
+secretGroup = 0
+entropy = 3.0
+
+[[allowlists]]
+# Placeholders substituted at build time by scripts/build-extension.py.
+description = "Build-time placeholders are not secrets"
+regexes = [
+  '''__BRIDGE_AUTH_TOKEN__''',
+  '''__CLIENT_API_TOKEN__''',
+  '''<BRIDGE_AUTH_TOKEN>''',
+  '''<CLIENT_API_TOKEN>''',
+  '''<OLD_CLIENT_TOKEN>''',
+  '''<NEW_CLIENT_TOKEN>''',
+  '''staging-token-change-me''',
+]
+paths = [
+  '''cloudflare-worker/tests/''',
+  '''\.githooks/pre-commit$''',
+  '''\.gitleaks\.toml$''',
+]

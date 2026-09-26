@@ -65,7 +65,10 @@ jobs:
 
       - name: Run tests
         working-directory: ${{ env.WORKER_DIR }}
-        run: node --test tests/ 2>&1 | tee test-results.txt
+        # Must match package.json's "test" script. The bare-directory form
+        # (`node --test tests/`) dies with MODULE_NOT_FOUND on newer Node
+        # before running a single test, silently reporting a green build.
+        run: node --test 'tests/**/*.test.mjs' 2>&1 | tee test-results.txt
 
       - name: Test summary
         working-directory: ${{ env.WORKER_DIR }}
@@ -81,7 +84,11 @@ jobs:
     name: Security Scan (Secret Detection)
     runs-on: ubuntu-latest
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    # `always()` so the secret scan still runs when the test job is red (it
+    # currently is — see the known pre-existing failures), and no `main`-only
+    # gate so pull requests are scanned too: the September-2026 token leak
+    # reached the default branch because the only secret gate was main-only.
+    if: always()
     steps:
       - uses: actions/checkout@v4
         with:
@@ -91,6 +98,10 @@ jobs:
 
       - name: Run Gitleaks secret detection
         uses: gitleaks/gitleaks-action@v2
+        with:
+          # Custom rules for this project's token prefixes; gitleaks' default
+          # config has no rule that matches `hermes-*` / `gemini-bridge-*`.
+          config: .gitleaks.toml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

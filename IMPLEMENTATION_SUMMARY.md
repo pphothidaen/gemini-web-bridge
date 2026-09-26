@@ -31,7 +31,21 @@ Secrets were exposed in the old repo (`taijustarrett417-lgtm`) **and** committed
 verbatim to this public repo's history (commits `078824b` → `4f6cced`, still
 retrievable with `git log -S`). Audit on 2026-09-26 confirmed
 `CLIENT_API_TOKEN` is **still accepted by production** (`GET /v1/models` → 200),
-so rotation is mandatory, not hardening:
+so rotation is mandatory, not hardening.
+
+**This is not history-only.** A second audit found the exposure was *worse* than
+previously recorded, and the earlier "removed in `4f6cced`" conclusion was wrong:
+
+- `gemini-bridge-v4.3.6.zip` was committed at the **repo root** and tracked on
+  `main`/`origin/main` (re-committed in `d903ebe`, Sep 25), carrying both live
+  tokens in `settings.js` / `background.js` / `options.js` / `content.js` /
+  `options.html` — downloadable from the repo front page with no git knowledge.
+- `docs/SECURITY_TOKEN_ROTATION.md:112-113` held both tokens **in plaintext at
+  `HEAD`** (`a526180`) — greppable via GitHub code search.
+
+Both are now removed/redacted, but **neither invalidated the credential.** Only
+rotation does that, which is why this item remains 🔴 REQUIRED rather than
+closed:
 
 - `BRIDGE_AUTH_TOKEN` (Gemini Bridge secret)
 - `CLIENT_API_TOKEN` (Bearer token)
@@ -39,7 +53,9 @@ so rotation is mandatory, not hardening:
 
 **Action:** Follow [`docs/SECURITY_TOKEN_ROTATION.md`](docs/SECURITY_TOKEN_ROTATION.md)
 step by step (wrangler secrets → Doppler → GitHub secrets → rebuild extension →
-verify old token returns 401). A guard now fails CI if literal tokens reappear
+verify old token returns 401). Guards now fail CI if literal tokens reappear
+anywhere in the repo or **inside a committed `.zip`**, if a build artifact gets
+tracked, and on every commit via `.githooks/pre-commit`
 (`cloudflare-worker/tests/extension-secrets.test.mjs`).
 
 ### 3. Verify Doppler Sync for Local Dev
