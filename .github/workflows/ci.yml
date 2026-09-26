@@ -334,13 +334,101 @@ jobs:
           echo "## 📦 Extension Built & Packaged" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** ${{ steps.bump-version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Run:** #${{ github.run_number }}  •  **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           ls -lh release/ >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ⚠️ Important" >> $GITHUB_STEP_SUMMARY
-          echo "Download from: **Actions → Artifacts → gemini-bridge-extension-v${{ steps.bump-version.outputs.version }}**" >> $GITHUB_STEP_SUMMARY
+          echo "Download from: **Actions → Artifacts → gemini-bridge-extension-v${{ steps.bump-version.outputs.version }}-run${{ github.run_number }}**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**DO NOT** load unpacked from \`extension-cloudflare/\` (contains placeholders)" >> $GITHUB_STEP_SUMMARY
           echo "**DO** load from \`dist/extension/\` after running \`python3 scripts/build-extension.py\`" >> $GITHUB_STEP_SUMMARY
+
+  # ─── Job 5b: Comment build result on the Jira ticket ───────────
+  #
+  # Closes the loop between the two systems the repo already uses: the
+  # governance hook requires every commit to carry a KAN-<id>, and this
+  # posts the build outcome back to that ticket so the ticket reflects
+  # reality without anyone copying run URLs by hand.
+  #
+  # Security posture — this step holds a credential and is therefore
+  # deliberately narrow:
+  #   * main only. A pull_request from a fork would otherwise run this
+  #     with the secret available to untrusted code.
+  #   * opt-in via the secret's presence, and never fatal, so a missing or
+  #     expired token cannot turn a green build red or block a release.
+  #   * the token is passed only in the request header, never echoed, and
+  #     `set +x` guards against a trace.
+  #
+  # Setup (one-off):
+  #   gh secret set JIRA_CI_TOKEN --repo pphothidaen/gemini-web-bridge
+  jira-sync:
+    name: Jira — Comment Build Result
+    runs-on: ubuntu-latest
+    needs: [package-extension]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' &&
+      secrets.JIRA_CI_TOKEN != ''
+    steps:
+      - name: Comment on the ticket named in the commit subject
+        env:
+          JIRA_CI_TOKEN: ${{ secrets.JIRA_CI_TOKEN }}
+          VERSION: ${{ needs.package-extension.outputs.extension-version }}
+          ARTIFACT: gemini-bridge-extension-v${{ needs.package-extension.outputs.extension-version }}-run${{ github.run_number }}
+          COMMIT_SHA: ${{ github.sha }}
+          JIRA_BASE: ${{ vars.JIRA_BASE_URL || 'https://pansakorn.atlassian.net' }}
+          JIRA_EMAIL: ${{ vars.JIRA_ACCOUNT_EMAIL }}
+        run: |
+          set -uo pipefail
+          set +x
+
+          # The governance hook enforces `^KAN-<id>` on the subject, so the
+          # ticket key is recoverable from the commit message. PR merges and
+          # squash commits keep the original subject, which is why this reads
+          # the subject rather than the branch name.
+          SUBJECT=$(git log -1 --pretty=%s)
+          KEY=$(printf '%s' "$SUBJECT" | grep -oE '^KAN-[0-9]+' | head -1)
+
+          if [ -z "$KEY" ]; then
+            echo "::notice::No KAN-<id> in commit subject ('$SUBJECT'); nothing to sync."
+            exit 0
+          fi
+          if [ -z "$JIRA_EMAIL" ]; then
+            echo "::warning::vars.JIRA_ACCOUNT_EMAIL is not set; cannot authenticate to Jira."
+            echo "  Set it with: gh variable set JIRA_ACCOUNT_EMAIL --repo pphothidaen/gemini-web-bridge"
+            exit 0
+          fi
+
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          SHORT_SHA=${COMMIT_SHA:0:7}
+          BODY=$(printf 'Extension build **%s** finished.\n\n' "$VERSION"
+            printf -- '- Artifact: `%s`\n' "$ARTIFACT"
+            printf -- '- Commit: [`%s`](%s/commit/%s)\n' "$SHORT_SHA" "$GITHUB_SERVER_URL" "$COMMIT_SHA"
+            printf -- '- Run: [%s](%s)\n' "$RUN_URL" "$RUN_URL")
+
+          # Jira Cloud v3 requires ADF, not plain text. Encoded with jq rather
+          # than hand-assembled: building JSON by concatenating quoted shell
+          # fragments means every embedded double-quote has to survive two
+          # layers of unescaping (YAML block scalar, then shell), and getting
+          # that wrong produces a payload that fails to parse at the far end
+          # with no local signal. jq --arg handles quoting correctly.
+          ADF=$(printf '%s' "$BODY" | jq -Rs \
+            '{type:"doc", version:1, content:[{type:"paragraph", content:[{type:"text", text:.}]}]}')
+
+          HTTP=$(curl -sS -o /tmp/jira.out -w '%{http_code}' \
+            -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" \
+            -H "Authorization: Basic $(printf '%s:%s' "$JIRA_EMAIL" "$JIRA_CI_TOKEN" | base64)" \
+            -H 'Content-Type: application/json' \
+            -d "$ADF" || echo 000)
+
+          # Never fail the build on a Jira problem: the extension is already
+          # built and uploaded, and a red X here would misreport that.
+          case "$HTTP" in
+            201|200) echo "✅ Commented on $KEY" ;;
+            404) echo "::warning::$KEY not found in Jira. Check the project key and token scope." ;;
+            401|403) echo "::warning::Jira rejected the token (HTTP $HTTP). Token may be expired or lack write scope." ;;
+            *)  echo "::warning::Jira comment failed (HTTP $HTTP). Response:"; head -c 400 /tmp/jira.out; echo ;;
+          esac
 
   # ─── Job 6: Redteam — Token Validation ────────────────────────
   #
