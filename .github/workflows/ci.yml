@@ -445,45 +445,49 @@ jobs:
           fi
 
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          SHORT_SHA=${COMMIT_SHA:0:7}
-          BODY=$(printf 'Extension build **%s** finished.\n\n' "$VERSION"
-            printf -- '- Artifact: `%s`\n' "$ARTIFACT"
-            printf -- '- Commit: [`%s`](%s/commit/%s)\n' "$SHORT_SHA" "$GITHUB_SERVER_URL" "$COMMIT_SHA"
-            printf -- '- Run: [%s](%s)\n' "$RUN_URL" "$RUN_URL")
+
+          # The comment text is assembled by jq below, not here.
 
           # Jira Cloud v3 needs Atlassian Document Format, wrapped in a "body"
-          # envelope. Two mistakes here are silent — the API answers HTTP 400
-          # "Comment body can not be empty!" for both, which reads like an
-          # auth problem and is not:
+          # Two steps, deliberately.
           #
-          #   1. Without the `body` wrapper, Jira sees no comment body at all.
-          #      A bare ADF document is rejected.
-          #   2. `jq -Rs` (slurp) appends a trailing newline, which lands
-          #      inside the text node. `-Rsc` omits it.
+          # 1. Build the comment text with jq -nr. Interpolation happens in a
+          #    string context, so there are no nested parens to misbalance.
+          #    A single combined object literal with the concatenation inline
+          #    is a jq compile error ("unexpected INVALID_CHARACTER") — it
+          #    parses as a filter and dies before writing anything, which
+          #    surfaces as an empty file and Jira's "No content to map to
+          #    Object due to end of input".
+          # 2. Wrap that text in the ADF "body" envelope Jira Cloud v3
+          #    requires. A bare ADF document is rejected with HTTP 400
+          #    "Comment body can not be empty!", which reads like an auth
+          #    problem and is not.
           #
-          # jq handles the escaping, so the markdown in $BODY (backticks,
-          # brackets, newlines) survives intact. The program is one line
-          # because GitHub's workflow parser rejects a `run:` block line that
-          # begins with a quote character.
-          #
-          # Verified live against Jira before this shape was committed: the
-          # same payload that produced 400 bare returns 201 wrapped.
-          jq -n --arg t "$BODY" \
+          # Verified live: this exact pair returns 201 and produces the
+          # expected comment text.
+          TXT=$(jq -nr --arg v "$VERSION" --arg a "$ARTIFACT" --arg s "${COMMIT_SHA:0:7}" \
+            --arg sha "$COMMIT_SHA" --arg run "$RUN_URL" --arg srv "$GITHUB_SERVER_URL" \
+            '"Extension build **\($v)** finished.\n\n- Artifact: `\($a)`\n- Commit: [`\($s)`](\($srv)/commit/\($sha))\n- Run: [\($run)](\($run))"')
+          jq -n --arg t "$TXT" \
             '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$t}]}]}}' > /tmp/adf.json
 
           # `|| echo 000` appends to whatever curl already printed, so a curl
           # that fails after writing its own %{http_code} yields "000000" and
           # matches no case. Use a separate variable and normalise instead.
+          #
+          # --max-time and --retry matter here: GitHub-hosted runners
+          # occasionally drop an outbound connection mid-send, which surfaces
+          # as curl (43) "Failed sending HTTP POST request" while the very
+          # same host answers a GET with 200. That is a transport failure, not
+          # a Jira or credential problem, and retrying is the correct
+          # response. Without it the step reported HTTP 000 and gave up.
           HTTP=$(curl -sS -o /tmp/jira.out -w '%{http_code}' \
+            --max-time 30 --retry 3 --retry-delay 2 --retry-connrefused \
             -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" \
             -H "Authorization: Basic $(printf '%s:%s' "$JIRA_EMAIL" "$JIRA_CI_TOKEN" | base64)" \
             -H 'Content-Type: application/json' \
             --data-binary @/tmp/adf.json 2>/tmp/curl.err) || HTTP=""
           HTTP=${HTTP:-000}
-          echo "DIAG key=[$KEY] base=[$JIRA_BASE] http=[$HTTP] adf=$(wc -c < /tmp/adf.json 2>/dev/null || echo NA) err=[$(head -c 200 /tmp/curl.err 2>/dev/null)]"
-          echo "DIAG probe=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$JIRA_BASE/rest/api/3/myself" -u "$JIRA_EMAIL:$JIRA_CI_TOKEN" 2>&1 | head -c 200)"
-          echo "DIAG noproxy=$(curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' --max-time 20 "$JIRA_BASE/rest/api/3/myself" -u "$JIRA_EMAIL:$JIRA_CI_TOKEN" 2>&1 | head -c 200)"
-          echo "DIAG curlver=$(curl --version | head -1)"
 
           # Never fail the build on a Jira problem: the extension is already
           # built and uploaded, and a red X here would misreport that.
