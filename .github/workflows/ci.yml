@@ -382,12 +382,15 @@ jobs:
   #   gh secret set JIRA_CI_TOKEN --repo pphothidaen/gemini-web-bridge
   #   gh variable set JIRA_ACCOUNT_EMAIL --repo pphothidaen/gemini-web-bridge
   #
-  # The opt-in check for the secret lives on the STEP, not on the job. The
-  # `secrets` context is not available in a job-level `if:`; referencing it
-  # there makes GitHub reject the whole workflow file, and the run then
-  # reports zero jobs with only a generic "workflow file issue" banner.
-  # That is a silent failure: there is no red step to click, and nothing in
-  # the logs names the offending line.
+  # Neither a job-level nor a step-level `if:` may reference the `secrets`
+  # context — GitHub reports "Unrecognized named-value: 'secrets'" and refuses
+  # to load the file, so the run lists zero jobs and shows only a generic
+  # "workflow file issue" banner. `secrets` is usable in `env:` and nowhere in
+  # a condition.
+  #
+  # So the secret is exposed as an env var and the step tests THAT. An unset
+  # secret expands to an empty string, which is exactly the not-configured-yet
+  # case, and the step skips instead of failing.
   jira-sync:
     name: Jira — Comment Build Result
     runs-on: ubuntu-latest
@@ -395,13 +398,12 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       github.event_name != 'pull_request'
+    env:
+      JIRA_CI_TOKEN: ${{ secrets.JIRA_CI_TOKEN }}
     steps:
       - name: Comment on the ticket named in the commit subject
-        # Step-level, where `secrets` IS available. Empty secret = not
-        # configured yet, so the step is skipped rather than failed.
-        if: ${{ secrets.JIRA_CI_TOKEN != '' }}
+        if: ${{ env.JIRA_CI_TOKEN != '' }}
         env:
-          JIRA_CI_TOKEN: ${{ secrets.JIRA_CI_TOKEN }}
           VERSION: ${{ needs.package-extension.outputs.extension-version }}
           ARTIFACT: gemini-bridge-extension-v${{ needs.package-extension.outputs.extension-version }}-run${{ github.run_number }}
           COMMIT_SHA: ${{ github.sha }}
