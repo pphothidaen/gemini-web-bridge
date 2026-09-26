@@ -15,6 +15,12 @@ All notable changes to the Gemini Web-Bridge project.
 - Refresh/teardown detection event listeners in content.js (`beforeunload`, `pagehide`, `pageshow`).
 - `_hasPendingWrites` tracking and flush mechanism in EvidenceRegistry.
 
+### KAN-126
+- **horo_consult scope isolation (fixed)**: `horo_consult` intentionally defaults to the HoroConsultant knowledge Notebook (`notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0`) so BaZi answers stay grounded in that notebook. The scope switch was never undone, so a single unscoped `horo_consult` call left the session (and the extension tab) pinned to the Notebook, and every following unscoped tool call silently inherited it. Tool execution is now wrapped in `runInPreparedScope()` with a `finally` scope restore, covering the success, error, GCP-fallback and extension-disconnected paths; `switchedScope` is derived from session state so a fail-closed `applyScope` also restores. Tool arguments are per-call, not a session mutation — an explicitly passed `scope` is now also restored afterwards.
+- **Scope transparency (added)**: every successful tool result carries `bridgeScope: { used, active, restored }` so MCP clients can see which scope actually served the answer.
+- **Default scope documentation (changed)**: all tool `scope` descriptions now state the default explicitly — `https://gemini.google.com/app` for the four SDLC tools (they inherit the session scope, which defaults to App), and the HoroConsultant Notebook + restore behaviour for `horo_consult`.
+- **New tests**: 5 regression tests covering default-switch-then-restore, explicit-scope-then-restore, no-op when the requested scope equals the current one, restore on execution failure, and that unscoped SDLC tools never trigger a scope switch.
+
 ### KAN-123
 - Structured cross-functional review (KAN-122) applied: Option B selected after Red Team, Blue Team, Worker Specialist, and Research perspectives.
 

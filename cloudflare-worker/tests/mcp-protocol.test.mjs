@@ -767,6 +767,10 @@ test('horo_consult: listed in tools/list with BaZi schema (query required, respo
   assert.deepEqual(tool.inputSchema.properties.response_format.enum, ['text', 'pdf']);
   assert.equal(tool.inputSchema.properties.response_format.default, 'text');
   assert.equal(tool.inputSchema.properties.scope.type, 'string');
+  const scopeDesc = tool.inputSchema.properties.scope.description;
+  assert.match(scopeDesc, /https:\/\/gemini\.google\.com\/app/, 'scope description must document the App default');
+  assert.ok(scopeDesc.includes(HORO_DEFAULT_NOTEBOOK_SCOPE), 'scope description must document the HoroConsultant notebook default');
+  assert.ok(scopeDesc.includes('คืนค่า scope default เดิม'), 'scope description must document that the pre-call scope is restored');
 });
 
 test('horo_consult: fails fast with standard extension-disconnected error when no extension is connected', async () => {
@@ -842,6 +846,140 @@ test('horo_consult: explicit args.scope overrides the default notebook scope', a
   const data = await res.json();
   assert.ok(data.result, 'expected success, got: ' + JSON.stringify(data.error || data));
   assert.deepEqual(preparedScopes, ['app']);
+});
+
+test('horo_consult: restores the pre-call scope after using the default notebook scope (no sticky scope leak)', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.currentScope = 'app'; // session was on /app before the horo call
+  const preparedScopes = [];
+  b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
+  let scopeDuringExecution = null;
+  b.executeThroughExtension = async () => { scopeDuringExecution = b.currentScope; return 'answer'; };
+
+  const res = await postMcp(b, {
+    jsonrpc: '2.0',
+    id: 66,
+    method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q' } }
+  });
+
+  const data = await res.json();
+  assert.ok(data.result, 'expected success, got: ' + JSON.stringify(data.error || data));
+
+  // Answer was produced on the Notebook...
+  assert.equal(scopeDuringExecution, HORO_DEFAULT_NOTEBOOK_SCOPE);
+  // ...but the session was put back on /app afterwards, so the next unscoped
+  // tool call does not silently inherit the Notebook scope.
+  assert.deepEqual(preparedScopes, [HORO_DEFAULT_NOTEBOOK_SCOPE, 'app']);
+  assert.equal(b.currentScope, 'app');
+
+  // Callers can observe the scope that actually served the answer.
+  assert.deepEqual(data.result.bridgeScope, {
+    used: HORO_DEFAULT_NOTEBOOK_SCOPE,
+    active: 'app',
+    restored: true
+  });
+});
+
+test('horo_consult: explicit scope is used for the call, then the pre-call scope is restored', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.currentScope = 'app:conv-original';
+  const preparedScopes = [];
+  b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
+  let scopeDuringExecution = null;
+  b.executeThroughExtension = async () => { scopeDuringExecution = b.currentScope; return 'answer'; };
+
+  const res = await postMcp(b, {
+    jsonrpc: '2.0',
+    id: 67,
+    method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q', scope: 'notebook:nb-explicit' } }
+  });
+
+  const data = await res.json();
+  assert.ok(data.result, 'expected success, got: ' + JSON.stringify(data.error || data));
+  // The explicit scope serves this call, then the session returns to the scope
+  // it was on before — tool arguments are per-call, not a session mutation.
+  assert.equal(scopeDuringExecution, 'notebook:nb-explicit');
+  assert.deepEqual(preparedScopes, ['notebook:nb-explicit', 'app:conv-original']);
+  assert.equal(b.currentScope, 'app:conv-original');
+  assert.equal(data.result.bridgeScope.used, 'notebook:nb-explicit');
+  assert.equal(data.result.bridgeScope.restored, true);
+  assert.equal(data.result.bridgeScope.active, 'app:conv-original');
+});
+
+test('horo_consult: no restore when the requested scope equals the current scope', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.currentScope = 'app';
+  const preparedScopes = [];
+  b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
+  b.executeThroughExtension = async () => 'answer';
+
+  const res = await postMcp(b, {
+    jsonrpc: '2.0',
+    id: 73,
+    method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q', scope: 'app' } }
+  });
+
+  const data = await res.json();
+  assert.ok(data.result, 'expected success, got: ' + JSON.stringify(data.error || data));
+  // No switch happened, so there is nothing to undo: exactly one no-op
+  // applyScope call and no extra navigation.
+  assert.deepEqual(preparedScopes, []);
+  assert.equal(b.currentScope, 'app');
+  assert.deepEqual(data.result.bridgeScope, { used: 'app', active: 'app', restored: false });
+});
+
+test('horo_consult: restores the pre-call scope even when execution fails', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.currentScope = 'app';
+  const preparedScopes = [];
+  b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
+  b.executeThroughExtension = async () => { throw new Error('boom'); };
+
+  const res = await postMcp(b, {
+    jsonrpc: '2.0',
+    id: 68,
+    method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q' } }
+  });
+
+  const data = await res.json();
+  assert.ok(data.error, 'expected JSON-RPC error, got: ' + JSON.stringify(data));
+  assert.match(data.error.message, /Tool execution failed/);
+  // The failure path must not leave the session pinned to the Notebook.
+  assert.deepEqual(preparedScopes, [HORO_DEFAULT_NOTEBOOK_SCOPE, 'app']);
+  assert.equal(b.currentScope, 'app');
+});
+
+test('sdlc tools inherit the current scope and never trigger a notebook switch', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.currentScope = 'app';
+  const preparedScopes = [];
+  b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
+  let scopeDuringExecution = null;
+  b.executeThroughExtension = async () => { scopeDuringExecution = b.currentScope; return 'answer'; };
+
+  for (const [id, name, args] of [
+    [69, 'sdlc_solution_architect', { problem_description: 'p' }],
+    [70, 'orchestrate_sdlc_plan', { feature_or_goal: 'g' }],
+    [71, 'code_review_and_debug', { code_snippet: 'c' }],
+    [72, 'evaluate_tech_tradeoffs', { decision_context: 'd', options: 'o' }]
+  ]) {
+    const res = await postMcp(b, { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+    const data = await res.json();
+    assert.ok(data.result, `${name} expected success, got: ` + JSON.stringify(data.error || data));
+    assert.equal(scopeDuringExecution, 'app', `${name} must run on the current scope`);
+  }
+
+  assert.deepEqual(preparedScopes, [], 'no scope switch should be requested by unscoped SDLC tools');
+  assert.equal(b.currentScope, 'app');
 });
 
 test('horo_consult: response_format=pdf stores artifact in KV with 1h TTL and returns absolute unauthenticated pdf_url', async () => {

@@ -2089,7 +2089,7 @@ export class GeminiBridgeDO extends DurableObject {
             problem_description: { type: "string", description: "รายละเอียดปัญหาหรือโจทย์ที่ต้องการออกแบบ" },
             tech_stack: { type: "string", description: "เทคโนโลยีที่ใช้งาน เช่น Node.js, React, PostgreSQL" },
             constraints: { type: "string", description: "ข้อจำกัด เช่น งบประมาณ, Latency, หรือ Legacy System" },
-            scope: { type: "string", description: "ขอบเขตการสนทนา: \"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com" }
+            scope: { type: "string", description: "ขอบเขตการสนทนา: \"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com — ถ้าไม่ระบุ ระบบจะใช้ค่าเริ่มต้นคือ App (https://gemini.google.com/app)" }
           },
           required: ["problem_description"]
         }
@@ -2102,7 +2102,7 @@ export class GeminiBridgeDO extends DurableObject {
           properties: {
             feature_or_goal: { type: "string", description: "ฟีเจอร์หรือเป้าหมายของระบบที่ต้องการพัฒนา" },
             current_stage: { type: "string", description: "ขั้นตอนปัจจุบัน เช่น Planning, Architecture, Testing" },
-            scope: { type: "string", description: "ขอบเขตการสนทนา: \"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com" }
+            scope: { type: "string", description: "ขอบเขตการสนทนา: \"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com — ถ้าไม่ระบุ ระบบจะใช้ค่าเริ่มต้นคือ App (https://gemini.google.com/app)" }
           },
           required: ["feature_or_goal"]
         }
@@ -2116,7 +2116,7 @@ export class GeminiBridgeDO extends DurableObject {
             code_snippet: { type: "string", description: "โค้ดที่ต้องการให้ตรวจสอบ" },
             error_log: { type: "string", description: "Log หรือ Error message ที่เกิดขึ้น (ถ้ามี)" },
             language: { type: "string", description: "ภาษาของโค้ด" },
-            scope: { type: "string", description: "ขอบเขตการสนทนา: \"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com" }
+            scope: { type: "string", description: "ขอบเขตการสนทนา: \"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com — ถ้าไม่ระบุ ระบบจะใช้ค่าเริ่มต้นคือ App (https://gemini.google.com/app)" }
           },
           required: ["code_snippet"]
         }
@@ -2129,7 +2129,7 @@ export class GeminiBridgeDO extends DurableObject {
           properties: {
             decision_context: { type: "string", description: "บริบทและเป้าหมายของระบบ" },
             options: { type: "string", description: "ตัวเลือกที่ต้องการเปรียบเทียบ" },
-            scope: { type: "string", description: "ขอบเขตการสนทนา: \"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com" }
+            scope: { type: "string", description: "ขอบเขตการสนทนา: \"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com — ถ้าไม่ระบุ ระบบจะใช้ค่าเริ่มต้นคือ App (https://gemini.google.com/app)" }
           },
           required: ["decision_context", "options"]
         }
@@ -2189,7 +2189,7 @@ export class GeminiBridgeDO extends DurableObject {
               }
             },
             response_format: { type: "string", enum: ["text", "pdf"], default: "text" },
-            scope: { type: "string", description: "\"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com" }
+            scope: { type: "string", description: "\"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com — ถ้าไม่ระบุ ระบบจะใช้ค่าเริ่มต้นคือ App (https://gemini.google.com/app) ส่วน horo_consult เท่านั้นที่จะใช้ Notebook ความรู้ HoroConsultant (notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0) แล้วคืนค่า scope default เดิมหลังเรียกเสร็จ" }
           },
           required: ["query"]
         }
@@ -2555,6 +2555,30 @@ export class GeminiBridgeDO extends DurableObject {
           const effectiveScope = (toolName === "horo_consult" && !(typeof args.scope === "string" && args.scope.trim()))
             ? HORO_CONSULT_DEFAULT_SCOPE
             : args.scope;
+
+          // horo_consult pins the bridge to a Notebook scope, so remember where
+          // the session came from and put it back once the call is done.
+          // Without this, one unscoped horo_consult call silently re-scopes
+          // every following unscoped tool call onto the Notebook.
+          const scopeBeforeCall = this.currentScope;
+          let scopeUsed = scopeBeforeCall;
+          let switchedScope = false;
+
+          const restorePreCallScope = async () => {
+            // Nothing to restore to (fresh session that never had a scope) or
+            // no switch happened (caller passed an explicit scope equal to
+            // the current one, or the tool inherited the current scope).
+            if (!switchedScope || !scopeBeforeCall) return;
+            try {
+              const restored = await applyScope(scopeBeforeCall);
+              if (!restored.ok) {
+                console.warn(`[Bridge DO] Scope restore to '${scopeBeforeCall}' failed: ${restored.message}`);
+              }
+            } catch (restoreErr) {
+              console.warn(`[Bridge DO] Scope restore to '${scopeBeforeCall}' threw: ${restoreErr.message}`);
+            }
+          };
+
           if (effectiveScope) {
             let scopeOutcome;
             try {
@@ -2562,105 +2586,136 @@ export class GeminiBridgeDO extends DurableObject {
             } catch (scopeErr) {
               scopeOutcome = { ok: false, message: scopeErr.message };
             }
+            // applyScope can navigate and still report a fail-closed error, so
+            // derive "did we move?" from session state rather than from ok.
+            switchedScope = this.currentScope !== scopeBeforeCall;
+            scopeUsed = this.currentScope || scopeBeforeCall;
             if (!scopeOutcome.ok) {
               // If the bridge is disconnected, fall through to the standard
               // extension-disconnected fail-fast branch below instead of
               // masking it with a scope error.
               if (this.isExtensionReady()) {
+                await restorePreCallScope();
                 return { response: { jsonrpc: "2.0", id, error: { code: -32602, message: scopeOutcome.message } } };
               }
             }
           }
 
-          if (!this.isExtensionReady()) {
-            await this.waitForExtension();
-          }
-          if (!this.isExtensionReady()) {
-            if (this.env.GEMINI_API_KEY) {
-              try {
-                const gcpResult = await this.callGcpGemini([{ role: "user", content: prompt }]);
-                const res = {
-                  jsonrpc: "2.0",
-                  id,
-                  result: { content: [{ type: "text", text: `[Provider: GCP Gemini Fallback]\n\n${gcpResult}` }] }
-                };
-                return { response: res };
-              } catch (gcpErr) {
-                const res = {
-                  jsonrpc: "2.0",
-                  id,
-                  error: {
-                    code: -32000,
-                    message: `Extension disconnected and GCP fallback failed: ${gcpErr.message}`
-                  }
-                };
-                return { response: res };
-              }
+          // Run the tool inside the prepared scope, then always put the session
+          // back on the scope it was on before this call. Wrapping the whole
+          // execution in a single inner function guarantees the restore also
+          // happens on the early-return, GCP-fallback and error paths.
+          const runInPreparedScope = async () => {
+            if (!this.isExtensionReady()) {
+              await this.waitForExtension();
             }
-
-            const res = {
-              jsonrpc: "2.0",
-              id,
-              error: {
-                code: -32000,
-                message: "Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session."
-              }
-            };
-            return { response: res };
-          }
-
-          try {
-            const targetModel = recommendedModel(this.dynamicModels) || this.activeBrowserModel || (this.dynamicModels[0]?.id) || "gemini-3.8-flash";
-            let resultText = await this.executeThroughExtension([{ role: "user", content: prompt }], null, targetModel);
-
-            // horo_consult PDF artifact: render the full answer into a PDF and
-            // expose a temporary (1h) unguessable download link.
-            let structuredContent;
-            if (toolName === "horo_consult" && args.response_format === "pdf") {
-              try {
-                const artifactKey = crypto.randomUUID().replace(/-/g, "");
-                const pdfBytes = await this.buildAnswerPdf(resultText);
-                if (this.env.ARTIFACT_KV) {
-                  await this.env.ARTIFACT_KV.put(`artifacts/${artifactKey}`, pdfBytes, { expirationTtl: 3600 });
-                  structuredContent = { pdf_url: `${url.origin}/artifacts/${artifactKey}` };
-                } else {
-                  resultText += "\n\n[PDF artifact unavailable: ARTIFACT_KV binding is not configured on this worker]";
+            if (!this.isExtensionReady()) {
+              if (this.env.GEMINI_API_KEY) {
+                try {
+                  const gcpResult = await this.callGcpGemini([{ role: "user", content: prompt }]);
+                  const res = {
+                    jsonrpc: "2.0",
+                    id,
+                    result: { content: [{ type: "text", text: `[Provider: GCP Gemini Fallback]\n\n${gcpResult}` }] }
+                  };
+                  return { response: res };
+                } catch (gcpErr) {
+                  const res = {
+                    jsonrpc: "2.0",
+                    id,
+                    error: {
+                      code: -32000,
+                      message: `Extension disconnected and GCP fallback failed: ${gcpErr.message}`
+                    }
+                  };
+                  return { response: res };
                 }
-              } catch (pdfErr) {
-                resultText += `\n\n[PDF artifact generation failed: ${pdfErr.message}]`;
               }
+
+              const res = {
+                jsonrpc: "2.0",
+                id,
+                error: {
+                  code: -32000,
+                  message: "Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session."
+                }
+              };
+              return { response: res };
             }
 
-            const res = {
-              jsonrpc: "2.0",
-              id,
-              result: {
-                content: [{ type: "text", text: resultText }],
-                ...(structuredContent ? { structuredContent } : {})
+            try {
+              const targetModel = recommendedModel(this.dynamicModels) || this.activeBrowserModel || (this.dynamicModels[0]?.id) || "gemini-3.8-flash";
+              let resultText = await this.executeThroughExtension([{ role: "user", content: prompt }], null, targetModel);
+
+              // horo_consult PDF artifact: render the full answer into a PDF and
+              // expose a temporary (1h) unguessable download link.
+              let structuredContent;
+              if (toolName === "horo_consult" && args.response_format === "pdf") {
+                try {
+                  const artifactKey = crypto.randomUUID().replace(/-/g, "");
+                  const pdfBytes = await this.buildAnswerPdf(resultText);
+                  if (this.env.ARTIFACT_KV) {
+                    await this.env.ARTIFACT_KV.put(`artifacts/${artifactKey}`, pdfBytes, { expirationTtl: 3600 });
+                    structuredContent = { pdf_url: `${url.origin}/artifacts/${artifactKey}` };
+                  } else {
+                    resultText += "\n\n[PDF artifact unavailable: ARTIFACT_KV binding is not configured on this worker]";
+                  }
+                } catch (pdfErr) {
+                  resultText += `\n\n[PDF artifact generation failed: ${pdfErr.message}]`;
+                }
               }
-            };
-            return { response: res };
-          } catch (err) {
-            if (this.env.GEMINI_API_KEY && (err.code === "extension_disconnected" || err.code === "model_unverified" || /reconnected|disconnected|failed|timed out|unverified/i.test(err.message || ""))) {
-              try {
-                const gcpResult = await this.callGcpGemini([{ role: "user", content: prompt }]);
-                const res = {
-                  jsonrpc: "2.0",
-                  id,
-                  result: { content: [{ type: "text", text: `[Provider: GCP Gemini Fallback]\n\n${gcpResult}` }] }
-                };
-                return { response: res };
-              } catch (gcpErr) {
-                // fall through to error
+
+              const res = {
+                jsonrpc: "2.0",
+                id,
+                result: {
+                  content: [{ type: "text", text: resultText }],
+                  ...(structuredContent ? { structuredContent } : {})
+                }
+              };
+              return { response: res };
+            } catch (err) {
+              if (this.env.GEMINI_API_KEY && (err.code === "extension_disconnected" || err.code === "model_unverified" || /reconnected|disconnected|failed|timed out|unverified/i.test(err.message || ""))) {
+                try {
+                  const gcpResult = await this.callGcpGemini([{ role: "user", content: prompt }]);
+                  const res = {
+                    jsonrpc: "2.0",
+                    id,
+                    result: { content: [{ type: "text", text: `[Provider: GCP Gemini Fallback]\n\n${gcpResult}` }] }
+                  };
+                  return { response: res };
+                } catch (gcpErr) {
+                  // fall through to error
+                }
               }
+              const res = {
+                jsonrpc: "2.0",
+                id,
+                error: { code: -32000, message: `Tool execution failed: ${err.message}` }
+              };
+              return { response: res };
             }
-            const res = {
-              jsonrpc: "2.0",
-              id,
-              error: { code: -32000, message: `Tool execution failed: ${err.message}` }
-            };
-            return { response: res };
+          };
+
+          let outcome;
+          try {
+            outcome = await runInPreparedScope();
+          } finally {
+            await restorePreCallScope();
           }
+
+          // Report the scope that actually served the answer (and where the
+          // session ended up) so MCP clients can see the horo_consult
+          // Notebook default without having to read the bridge source.
+          const resultScope = outcome?.response?.result;
+          if (resultScope && Array.isArray(resultScope.content)) {
+            resultScope.bridgeScope = {
+              used: scopeUsed || null,
+              active: this.currentScope || null,
+              restored: switchedScope
+            };
+          }
+          return outcome;
         }
 
         // Unknown method returns JSON-RPC method not found (-32601)
