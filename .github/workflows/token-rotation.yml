@@ -50,7 +50,8 @@ jobs:
 
       - name: Install Doppler CLI
         run: |
-          curl -Ls https://cli.doppler.com/install.sh | sh
+          # The installer shells out to dpkg, which needs root on the runner.
+          curl -Ls https://cli.doppler.com/install.sh | sudo sh
           sudo ln -sf ~/.doppler/bin/doppler /usr/local/bin/doppler
 
       - name: Setup Doppler

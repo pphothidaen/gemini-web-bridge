@@ -51,7 +51,10 @@ jobs:
 
       - name: Install Doppler CLI
         run: |
-          curl -Ls https://cli.doppler.com/install.sh | sh
+          # The installer shells out to dpkg, which needs root on the runner.
+          # Without sudo it dies with "requested operation requires superuser
+          # privilege" and every downstream secret fetch fails.
+          curl -Ls https://cli.doppler.com/install.sh | sudo sh
           sudo ln -sf ~/.doppler/bin/doppler /usr/local/bin/doppler
 
       - name: Fetch secrets from Doppler (primary)
