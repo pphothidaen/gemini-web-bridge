@@ -170,33 +170,78 @@ jobs:
     needs: lint
     outputs:
       extension-version: ${{ steps.bump-version.outputs.version }}
+      extension-prerelease: ${{ steps.bump-version.outputs.prerelease }}
     steps:
+      # fetch-depth 0 is REQUIRED by the version step: actions/checkout
+      # defaults to a shallow single-commit clone with no tags, so
+      # `git tag -l` would come back empty and every build would silently
+      # fall back to the committed manifest — which is the collision this
+      # whole scheme exists to fix.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Determine version bump from git push
+      - name: Determine version
         id: bump-version
+        env:
+          # fetch-depth 0 above gives us every tag; without it
+          # `git describe` cannot see tags and silently falls through to the
+          # bump path, which is how this produced the same version forever.
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          # Auto-bump version on push to main/develop based on commit count
-          # If a tag exists for this commit, use that version
+          set -euo pipefail
+
+          # Chrome requires manifest "version" to be 1-4 dot-separated integers,
+          # each <= 65535, so the 4th slot is the only place a build counter can
+          # go. Keep that in mind when reading the schemes below.
+          read_manifest_version() {
+            python3 -c "import json; print(json.load(open('extension-cloudflare/manifest.json'))['version'])"
+          }
+
+          # Scheme 1 — an exact tag on this commit wins. This is the release
+          # path: `git tag v4.5.0` produces 4.5.0 and nothing else.
           if git describe --exact-match --tags 2>/dev/null; then
-            VERSION=$(git describe --tags --abbrev=0 | sed 's/v//')
+            TAG=$(git describe --tags --exact-match 2>/dev/null)
+            VERSION="${TAG#v}"
+            echo "Using exact tag: $TAG -> $VERSION"
             echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "Using tagged version: $VERSION"
-          else
-            # No tag: bump patch version for CI builds
-            CURRENT=$(python3 -c "import json; print(json.load(open('extension-cloudflare/manifest.json'))['version'])")
-            echo "Current manifest version: $CURRENT"
-            # Bump patch for CI builds (4.3.8 -> 4.3.9)
-            python3 scripts/build-extension.py --bump-version patch --skip-build
-            VERSION=$(python3 -c "import json; print(json.load(open('extension-cloudflare/manifest.json'))['version'])")
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "Bumped to: $VERSION"
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
+
+          # Scheme 2 — otherwise derive from the latest tag, which is what makes
+          # the counter monotonic across builds. Previously this read the version
+          # out of the COMMITTED manifest.json, which CI never commits back, so
+          # every run computed 4.4.3+1 and every artifact was named v4.4.4.
+          LATEST=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+          if [ -n "$LATEST" ]; then
+            BASE="${LATEST#v}"
+            echo "Latest tag: $LATEST"
+          else
+            # No tags exist yet in this repo. Fall back to the committed
+            # manifest so numbering starts from the real current version.
+            BASE=$(read_manifest_version)
+            echo "No tags found; using committed manifest version $BASE as base"
+          fi
+
+          MAJ=$(echo "$BASE" | cut -d. -f1)
+          MIN=$(echo "$BASE" | cut -d. -f2)
+          PAT=$(echo "$BASE" | cut -d. -f3)
+
+          # 4th component = CI run number. Monotonic, unique per build, and
+          # traceable back to the exact workflow run. Clamped to 65535 because
+          # Chrome rejects any version component above that.
+          BUILD=$(( RUN_NUMBER > 65535 ? 65535 : RUN_NUMBER ))
+          VERSION="$MAJ.$MIN.$PAT.$BUILD"
+
+          echo "Untagged commit -> $VERSION  (base $BASE, run #$RUN_NUMBER)"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "prerelease=true" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -275,8 +320,13 @@ jobs:
       - name: Upload extension artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gemini-bridge-extension-v${{ steps.bump-version.outputs.version }}
+          # Name carries the run number, so every build yields a distinct,
+          # retrievable artifact. The previous name was version-only and the
+          # version never changed between runs, so successive builds reused
+          # one name and overwrote each other's download slot.
+          name: gemini-bridge-extension-v${{ steps.bump-version.outputs.version }}-run${{ github.run_number }}
           path: release/gemini-bridge-v*.zip
+          if-no-files-found: error
           retention-days: 90
 
       - name: Package summary
