@@ -491,11 +491,19 @@ jobs:
           # looking for a missing ticket when the real problem was a bad token.
           case "$HTTP" in
             201|200) echo "✅ Commented on $KEY" ;;
-            400) echo "::warning::Jira rejected the payload (HTTP 400). Response:"; head -c 300 /tmp/jira.out; echo ;;
-            404) echo "::warning::Jira returned 404 for $KEY. Either the ticket does not exist, or the token cannot see it (Jira reports both identically — an invalid or under-scoped token also gets 404, not 401)."; head -c 200 /tmp/jira.out; echo ;;
+            400) echo "::warning::Jira rejected the payload (HTTP 400). Response:"; head -c 300 /tmp/jira.out || true; echo ;;
+            404) echo "::warning::Jira returned 404 for $KEY. Either the ticket does not exist, or the token cannot see it (Jira reports both identically — an invalid or under-scoped token also gets 404, not 401)."; head -c 200 /tmp/jira.out || true; echo ;;
             401|403) echo "::warning::Jira rejected the token (HTTP $HTTP). Token may be expired or lack write scope." ;;
-            *)  echo "::warning::Jira comment failed (HTTP $HTTP). Response:"; head -c 400 /tmp/jira.out; echo ;;
+            *)  echo "::warning::Jira comment failed (HTTP $HTTP). Response:"; head -c 400 /tmp/jira.out || true; echo ;;
           esac
+
+          # Explicit success. A step's exit status is the status of its LAST
+          # command, and the `case` above is the last one — so a head that
+          # found nothing to read, or a jq/printf that failed upstream, left a
+          # non-zero status here and failed the job despite the warnings
+          # above. This is the actual "never fail the build" enforcement;
+          # the `|| true` guards merely make the noise legible.
+          exit 0
 
   # ─── Job 6: Redteam — Token Validation ────────────────────────
   #
