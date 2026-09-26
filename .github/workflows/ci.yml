@@ -21,6 +21,25 @@ env:
   WORKER_DIR: 'cloudflare-worker'
 
 jobs:
+  # ─── Job 0: Workflow self-check ─────────────────────────────────
+  # Runs first and deliberately does NOT need this workflow to load. A
+  # workflow GitHub cannot parse produces a run with zero jobs, so the
+  # breakage is invisible from the UI: no failed step, no log line naming
+  # the cause. This job turns that into an ordinary red X.
+  validate-workflows:
+    name: Validate Workflow Files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check workflows for constructs GitHub rejects
+        run: python3 scripts/validate-workflows.py
+
   # ─── Job 1: Lint & Syntax Check ────────────────────────────────
   lint:
     name: Lint & Syntax
@@ -361,16 +380,26 @@ jobs:
   #
   # Setup (one-off):
   #   gh secret set JIRA_CI_TOKEN --repo pphothidaen/gemini-web-bridge
+  #   gh variable set JIRA_ACCOUNT_EMAIL --repo pphothidaen/gemini-web-bridge
+  #
+  # The opt-in check for the secret lives on the STEP, not on the job. The
+  # `secrets` context is not available in a job-level `if:`; referencing it
+  # there makes GitHub reject the whole workflow file, and the run then
+  # reports zero jobs with only a generic "workflow file issue" banner.
+  # That is a silent failure: there is no red step to click, and nothing in
+  # the logs names the offending line.
   jira-sync:
     name: Jira — Comment Build Result
     runs-on: ubuntu-latest
     needs: [package-extension]
     if: >-
       github.ref == 'refs/heads/main' &&
-      github.event_name != 'pull_request' &&
-      secrets.JIRA_CI_TOKEN != ''
+      github.event_name != 'pull_request'
     steps:
       - name: Comment on the ticket named in the commit subject
+        # Step-level, where `secrets` IS available. Empty secret = not
+        # configured yet, so the step is skipped rather than failed.
+        if: ${{ secrets.JIRA_CI_TOKEN != '' }}
         env:
           JIRA_CI_TOKEN: ${{ secrets.JIRA_CI_TOKEN }}
           VERSION: ${{ needs.package-extension.outputs.extension-version }}
@@ -411,9 +440,14 @@ jobs:
           # fragments means every embedded double-quote has to survive two
           # layers of unescaping (YAML block scalar, then shell), and getting
           # that wrong produces a payload that fails to parse at the far end
-          # with no local signal. jq --arg handles quoting correctly.
-          ADF=$(printf '%s' "$BODY" | jq -Rs \
-            '{type:"doc", version:1, content:[{type:"paragraph", content:[{type:"text", text:.}]}]}')
+          # with no local signal. jq handles quoting correctly.
+          #
+          # The jq program is a single line on purpose. GitHub's workflow
+          # parser rejects a `run:` block line that begins with a quote
+          # character, so a line-continued program (which would put the
+          # quoted filter at the start of the next line) makes the whole
+          # workflow fail to load with no jobs listed at all.
+          ADF=$(printf '%s' "$BODY" | jq -Rs '{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:.}]}]}')
 
           HTTP=$(curl -sS -o /tmp/jira.out -w '%{http_code}' \
             -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" \
