@@ -2,7 +2,20 @@ name: CD — Deploy & Secret Sync
 
 # ─── Triggers ─────────────────────────────────────────────────────
 # THE single deploy authority for this repo. ci.yml is verify-only.
-# Deploys to staging on every push to main, then production.
+#
+# There is no staging. An earlier version of this file deployed to
+# `gemini-web-bridge-staging` first, but the deployment never went
+# anywhere: `npx wrangler deploy --env staging` run from cloudflare-worker/
+# auto-discovers the REPO-ROOT wrangler.jsonc, which has no [env.staging]
+# section, so wrangler ignored the flag (with a warning) and deployed to
+# the root config's name — `gemini-web-bridge`, i.e. PRODUCTION. Every
+# push therefore deployed production twice, once via the "staging" job
+# and again via the production job, while the staging worker sat frozen
+# at v4.3.4.
+#
+# That also made the production approval gate decorative: production was
+# already overwritten by a job that has no `environment:` and therefore
+# no reviewer. Removing the staging job is what makes the gate real.
 on:
   push:
     branches: [main]
@@ -12,12 +25,6 @@ on:
       - 'scripts/build-extension.py'
   workflow_dispatch:
     inputs:
-      target:
-        description: 'Deployment target'
-        required: false
-        type: choice
-        default: 'staging'
-        options: [staging, production]
       skip_doppler:
         description: 'Skip Doppler secret fetch (use GitHub Secrets fallback)'
         required: false
@@ -34,7 +41,6 @@ concurrency:
 env:
   NODE_VERSION: '22'
   WORKER_DIR: 'cloudflare-worker'
-  STAGING_WORKER: 'gemini-web-bridge-staging'
   PROD_WORKER: 'gemini-web-bridge'
   WSS_ENDPOINT: 'wss://gemini-web-bridge.pansakorn-pho.workers.dev/bridge'
   OPENAI_ENDPOINT: 'https://gemini-web-bridge.pansakorn-pho.workers.dev/v1'
@@ -187,119 +193,23 @@ jobs:
           echo "source=doppler" >> $GITHUB_OUTPUT
           echo "✅ Verified BRIDGE_AUTH_TOKEN and CLIENT_API_TOKEN exist in gemini-web-bridge/prd_worker"
 
-  # ─── Deploy to Staging ────────────────────────────────────────────
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: fetch-secrets
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    environment:
-      name: staging
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: ${{ env.WORKER_DIR }}/package-lock.json
-
-      - name: Install worker dependencies
-        working-directory: ${{ env.WORKER_DIR }}
-        run: npm ci
-
-      - name: Install Wrangler
-        run: npm install -g wrangler@latest
-
-      # Re-read secrets from Doppler in this job rather than receiving them as
-      # job outputs (see fetch-secrets for why). skip_doppler falls back to the
-      # GitHub Secrets copies so a lapsed service token cannot block a deploy.
-      - name: Install Doppler CLI
-        if: ${{ inputs.skip_doppler != 'true' }}
-        run: |
-          curl -Ls https://cli.doppler.com/install.sh | sudo sh
-          sudo ln -sf ~/.doppler/bin/doppler /usr/local/bin/doppler
-
-      - name: Resolve worker secrets
-        id: secrets
-        env:
-          DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
-          GH_BRIDGE_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
-          GH_CLIENT_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ "${{ inputs.skip_doppler }}" = "true" ] || [ -z "$DOPPLER_SERVICE_TOKEN" ]; then
-            echo "⚠️ Using GitHub Secrets (skip_doppler or no service token)"
-            [ -n "$GH_BRIDGE_TOKEN" ] || { echo "::error::BRIDGE_AUTH_TOKEN missing from GitHub Secrets"; exit 1; }
-            [ -n "$GH_CLIENT_TOKEN" ] || { echo "::error::CLIENT_API_TOKEN missing from GitHub Secrets"; exit 1; }
-            bridge="$GH_BRIDGE_TOKEN"; client="$GH_CLIENT_TOKEN"
-          else
-            # `|| true` so a doppler failure is caught by the empty-value
-            # check below rather than aborting the step under `set -e`.
-            bridge=$(doppler secrets get BRIDGE_AUTH_TOKEN --token "$DOPPLER_SERVICE_TOKEN" \
-                       --project gemini-web-bridge --config prd_worker --plain) || true
-            client=$(doppler secrets get CLIENT_API_TOKEN --token "$DOPPLER_SERVICE_TOKEN" \
-                       --project gemini-web-bridge --config prd_worker --plain) || true
-            if [ -z "$bridge" ] || [ -z "$client" ]; then
-              echo "::error::Could not resolve worker secrets from Doppler (token invalid/expired, or the secret is unset)"
-              exit 1
-            fi
-          fi
-          # Mask before echoing so wrangler's own output can't leak them.
-          echo "::add-mask::$bridge"
-          echo "::add-mask::$client"
-          {
-            echo "bridge_token=$bridge"
-            echo "client_token=$client"
-          } >> $GITHUB_ENV
-
-      - name: Set staging worker secrets
-        working-directory: ${{ env.WORKER_DIR }}
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          BRIDGE_AUTH_TOKEN: ${{ env.bridge_token }}
-          CLIENT_API_TOKEN: ${{ env.client_token }}
-        run: |
-          echo "$BRIDGE_AUTH_TOKEN" | npx wrangler secret put BRIDGE_AUTH_TOKEN --env staging
-          echo "$CLIENT_API_TOKEN" | npx wrangler secret put CLIENT_API_TOKEN --env staging
-
-      - name: Deploy to staging
-        working-directory: ${{ env.WORKER_DIR }}
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy --env staging
-
-      - name: Verify staging deployment
-        run: |
-          sleep 5
-          HEALTH=$(curl -s --retry 3 --retry-delay 2 --max-time 30 https://gemini-web-bridge-staging.pansakorn-pho.workers.dev/health)
-          # Explicit if/else: `A && B || C` is not if-then-else, so a failure
-          # inside B would silently fall through to C.
-          if echo "$HEALTH" | grep -q '"status": *"ok"'; then
-            echo "✅ Staging health OK"
-          else
-            echo "❌ Staging health check failed"
-            echo "$HEALTH"
-            exit 1
-          fi
-
   # ─── Production Deploy ────────────────────────────────────────────
-  # The "Manual Approval Gate" is the `environment: production` below: GitHub
-  # requires a reviewer to approve before this job starts, but only if a
-  # protection rule is actually configured for that environment in
-  # Settings -> Environments. Verify that rule exists, or this deploys to
-  # production unattended despite the comment that used to claim otherwise.
+  # This is now the ONLY job that touches a worker, so this is the only
+  # place production can change — and `environment: production` below is
+  # what gates it.
+  #
+  # The gate is real only if a protection rule exists in
+  # Settings -> Environments. Verified: `production` has a
+  # `required_reviewers` rule. Without it GitHub creates the environment
+  # implicitly and starts this job unattended, which is exactly what
+  # happened while the staging job existed.
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    # `fetch-secrets` is listed explicitly so the `source` output referenced in
-    # the summary below resolves. needs: [deploy-staging] alone does not expose
-    # a sibling job's outputs to the expression evaluator.
-    needs: [fetch-secrets, deploy-staging]
-    if: github.event_name == 'push'
+    # `fetch-secrets` is listed so the `source` output referenced in the
+    # summary below resolves — job outputs are not readable from a sibling
+    # job unless it is a declared dependency.
+    needs: [fetch-secrets]
     environment:
       name: production
     steps:

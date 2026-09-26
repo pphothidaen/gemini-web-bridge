@@ -427,7 +427,7 @@ jobs:
   # ─── Deploy ──────────────────────────────────────────────────────
   # Production deployment is intentionally NOT done here. It lives in
   # cd.yml ("CD — Deploy & Secret Sync"), which owns the whole path:
-  # fetch secrets from Doppler -> deploy staging -> verify -> production.
+  # fetch secrets from Doppler -> approve -> deploy production -> verify.
   #
   # This job used to deploy as well, so every push to main ran two concurrent
   # `wrangler deploy`s against the same worker with no concurrency group — a
