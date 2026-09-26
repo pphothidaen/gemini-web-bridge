@@ -481,26 +481,22 @@ jobs:
           # same host answers a GET with 200. That is a transport failure, not
           # a Jira or credential problem, and retrying is the correct
           # response. Without it the step reported HTTP 000 and gave up.
+          # --http1.1 is required, not a preference. On the runner this same
+          # request over HTTP/2 fails with curl (43) "Failed sending HTTP POST
+          # request" (HTTP 000), while the identical request forced to HTTP/1.1
+          # in the same job returns a real status. A GET to the same host
+          # returns 200 either way, so the host, TLS and credentials are fine
+          # and the fault is specific to this connection's HTTP/2 framing.
+          #
+          # --retry is here for the same class of transient drop, and
+          # --max-time stops a hung connection from stalling the job.
           HTTP=$(curl -sS -o /tmp/jira.out -w '%{http_code}' \
-            --max-time 30 --retry 3 --retry-delay 2 --retry-connrefused \
+            --http1.1 --max-time 30 --retry 3 --retry-delay 2 --retry-connrefused \
             -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" \
             -H "Authorization: Basic $(printf '%s:%s' "$JIRA_EMAIL" "$JIRA_CI_TOKEN" | base64)" \
             -H 'Content-Type: application/json' \
             --data-binary @/tmp/adf.json 2>/tmp/curl.err) || HTTP=""
           HTTP=${HTTP:-000}
-          if [ "$HTTP" = "000" ]; then
-            echo "MATRIX file=$(wc -c < /tmp/adf.json 2>/dev/null || echo NA)"
-            for F in "--http1.1" "--http2" ""; do
-              R=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 $F \
-                -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" \
-                -H "Authorization: Basic $(printf '%s:%s' "$JIRA_EMAIL" "$JIRA_CI_TOKEN" | base64)" \
-                -H 'Content-Type: application/json' \
-                --data-binary @/tmp/adf.json 2>&1 | head -c 60)
-              echo "MATRIX flags='$F' -> $R"
-            done
-            echo "MATRIX envproxy=[${HTTPS_PROXY:-none}]"
-            echo "MATRIX getpost=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" -u "$JIRA_EMAIL:$JIRA_CI_TOKEN" -H 'Content-Type: application/json' -d '{}' 2>&1 | head -c 80)"
-          fi
 
           # Never fail the build on a Jira problem: the extension is already
           # built and uploaded, and a red X here would misreport that.
