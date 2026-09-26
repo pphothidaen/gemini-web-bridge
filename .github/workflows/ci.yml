@@ -96,7 +96,14 @@ jobs:
         # Must match package.json's "test" script. The bare-directory form
         # (`node --test tests/`) dies with MODULE_NOT_FOUND on newer Node
         # before running a single test, silently reporting a green build.
-        run: node --test 'tests/**/*.test.mjs' 2>&1 | tee test-results.txt
+        #
+        # `set -o pipefail` is REQUIRED. Piping into tee makes the step's exit
+        # status tee's, which is always 0, so a failing suite reported a green
+        # build — 9 tests were failing in CI while the job passed. GitHub runs
+        # this step under `bash -e`, which does not imply pipefail.
+        run: |
+          set -o pipefail
+          node --test 'tests/**/*.test.mjs' 2>&1 | tee test-results.txt
 
       - name: Test summary
         working-directory: ${{ env.WORKER_DIR }}

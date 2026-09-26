@@ -104,7 +104,12 @@ test('invalid token halts reconnection until settings change or manual retry', a
   };
 
   vm.runInNewContext(contentSource, sandbox);
-  await Promise.resolve();
+  // Drain the microtask queue, not just one tick. The content script's
+  // init awaits chrome.storage, then tries the background port, then opens
+  // the fallback WebSocket; that chain needs several ticks to settle.
+  // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
+  // failed with "Cannot set properties of undefined".
+  for (let i = 0; i < 10; i++) await Promise.resolve();
 
   assert.equal(sockets.length, 1);
   const initialTimerCount = timers.length;
@@ -117,7 +122,12 @@ test('invalid token halts reconnection until settings change or manual retry', a
 
   // Updating the settings in storage clears auth failure and triggers reconnect
   storageListener({ bridgeToken: { newValue: 'new-valid-token' } }, 'sync');
-  await Promise.resolve();
+  // Drain the microtask queue, not just one tick. The content script's
+  // init awaits chrome.storage, then tries the background port, then opens
+  // the fallback WebSocket; that chain needs several ticks to settle.
+  // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
+  // failed with "Cannot set properties of undefined".
+  for (let i = 0; i < 10; i++) await Promise.resolve();
 
   // A new socket should now be connected
   assert.equal(sockets.length, 2);

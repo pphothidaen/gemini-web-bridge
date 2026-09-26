@@ -152,12 +152,22 @@ test('extension: the placeholder substitution contract still exists in the build
 });
 
 test('worker config files: no secrets in wrangler toml files', () => {
-  for (const name of ['../wrangler.toml', '../wrangler.staging.toml']) {
-    const text = fs.readFileSync(new URL(name, import.meta.url), 'utf8');
+  // Discover the wrangler configs rather than hardcoding a list. The list
+  // previously included wrangler.staging.toml, which was deleted along with
+  // the abandoned staging worker, so the test died with ENOENT — it could no
+  // longer check ANY file, and CI reported green because the exit code was
+  // being swallowed by a pipe (fixed in the same change).
+  const workerDir = new URL('../', import.meta.url);
+  const configs = fs.readdirSync(workerDir)
+    .filter((f) => /^wrangler\.(toml|jsonc?)$/.test(f));
+  assert.ok(configs.includes('wrangler.toml'), 'expected wrangler.toml to be present');
+
+  for (const name of configs) {
+    const text = fs.readFileSync(new URL(name, workerDir), 'utf8');
     const lines = text
       .split('\n')
       .map((l) => l.trim())
-      .filter((l) => /^(BRIDGE_AUTH_TOKEN|CLIENT_API_TOKEN|GEMINI_API_KEY|CLOUDFLARE_API_TOKEN)\s*=/.test(l));
+      .filter((l) => /^(BRIDGE_AUTH_TOKEN|CLIENT_API_TOKEN|GEMINI_API_KEY|CLOUDFLARE_API_TOKEN)\s*[:=]/.test(l));
     assert.deepEqual(lines, [], `${name} must not assign secrets as plain vars:\n${lines.join('\n')}`);
   }
 });

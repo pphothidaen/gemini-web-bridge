@@ -136,7 +136,12 @@ function setupExtensionVm(options = {}) {
 
 test('SESSION_READY and MODELS_DISCOVERED emit protocolVersion 3 without leaking Google CSRF tokens', async () => {
   const env = setupExtensionVm();
-  await Promise.resolve();
+  // Drain the microtask queue, not just one tick. The content script's
+  // init awaits chrome.storage, then tries the background port, then opens
+  // the fallback WebSocket; that chain needs several ticks to settle.
+  // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
+  // failed with "Cannot set properties of undefined".
+  for (let i = 0; i < 10; i++) await Promise.resolve();
 
   env.handlers['window:message']({
     source: env.window,
@@ -171,7 +176,12 @@ test('SESSION_READY and MODELS_DISCOVERED emit protocolVersion 3 without leaking
 
 test('PREPARE_MODEL performs UI selector click, transitions to learning, and fails closed with model_unverified after 10s', async () => {
   const env = setupExtensionVm();
-  await Promise.resolve();
+  // Drain the microtask queue, not just one tick. The content script's
+  // init awaits chrome.storage, then tries the background port, then opens
+  // the fallback WebSocket; that chain needs several ticks to settle.
+  // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
+  // failed with "Cannot set properties of undefined".
+  for (let i = 0; i < 10; i++) await Promise.resolve();
 
   env.handlers['window:message']({
     source: env.window,
@@ -217,7 +227,12 @@ test('PREPARE_MODEL performs UI selector click, transitions to learning, and fai
 
 test('EXECUTE_REQUEST strictly rejects unverified model or revision mismatch', async () => {
   const env = setupExtensionVm();
-  await Promise.resolve();
+  // Drain the microtask queue, not just one tick. The content script's
+  // init awaits chrome.storage, then tries the background port, then opens
+  // the fallback WebSocket; that chain needs several ticks to settle.
+  // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
+  // failed with "Cannot set properties of undefined".
+  for (let i = 0; i < 10; i++) await Promise.resolve();
 
   env.handlers['window:message']({
     source: env.window,
@@ -262,7 +277,12 @@ test('EXECUTE_REQUEST constructs replay payload via ModelAdapter under synthetic
   const env = setupExtensionVm({
     onWindowPostMessage: (data) => windowPosts.push(data)
   });
-  await Promise.resolve();
+  // Drain the microtask queue, not just one tick. The content script's
+  // init awaits chrome.storage, then tries the background port, then opens
+  // the fallback WebSocket; that chain needs several ticks to settle.
+  // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
+  // failed with "Cannot set properties of undefined".
+  for (let i = 0; i < 10; i++) await Promise.resolve();
 
   env.handlers['window:message']({
     source: env.window,
@@ -321,7 +341,12 @@ test('CANCEL_REQUEST aborts in-flight execution and cancels pending prepare', as
   const env = setupExtensionVm({
     onWindowPostMessage: (data) => postedToWindow.push(data)
   });
-  await Promise.resolve();
+  // Drain the microtask queue, not just one tick. The content script's
+  // init awaits chrome.storage, then tries the background port, then opens
+  // the fallback WebSocket; that chain needs several ticks to settle.
+  // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
+  // failed with "Cannot set properties of undefined".
+  for (let i = 0; i < 10; i++) await Promise.resolve();
 
   env.handlers['window:message']({
     source: env.window,
