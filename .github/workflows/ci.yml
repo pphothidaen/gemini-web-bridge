@@ -488,6 +488,19 @@ jobs:
             -H 'Content-Type: application/json' \
             --data-binary @/tmp/adf.json 2>/tmp/curl.err) || HTTP=""
           HTTP=${HTTP:-000}
+          if [ "$HTTP" = "000" ]; then
+            echo "MATRIX file=$(wc -c < /tmp/adf.json 2>/dev/null || echo NA)"
+            for F in "--http1.1" "--http2" ""; do
+              R=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 $F \
+                -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" \
+                -H "Authorization: Basic $(printf '%s:%s' "$JIRA_EMAIL" "$JIRA_CI_TOKEN" | base64)" \
+                -H 'Content-Type: application/json' \
+                --data-binary @/tmp/adf.json 2>&1 | head -c 60)
+              echo "MATRIX flags='$F' -> $R"
+            done
+            echo "MATRIX envproxy=[${HTTPS_PROXY:-none}]"
+            echo "MATRIX getpost=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" -u "$JIRA_EMAIL:$JIRA_CI_TOKEN" -H 'Content-Type: application/json' -d '{}' 2>&1 | head -c 80)"
+          fi
 
           # Never fail the build on a Jira problem: the extension is already
           # built and uploaded, and a red X here would misreport that.
