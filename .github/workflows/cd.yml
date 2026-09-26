@@ -1,8 +1,8 @@
 name: CD — Deploy & Secret Sync
 
 # ─── Triggers ─────────────────────────────────────────────────────
-# Deploys to staging on every push to main (after CI passes), then
-# waits for manual approval before promoting to production.
+# THE single deploy authority for this repo. ci.yml is verify-only.
+# Deploys to staging on every push to main, then production.
 on:
   push:
     branches: [main]
@@ -24,6 +24,13 @@ on:
         type: boolean
         default: false
 
+# Serialize deploys. Without this, two pushes in quick succession ran two
+# `wrangler deploy`s against the same worker at once; whichever finished last
+# won, and secrets could be written by one run while the other deployed.
+concurrency:
+  group: cd-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   NODE_VERSION: '22'
   WORKER_DIR: 'cloudflare-worker'
@@ -38,8 +45,6 @@ jobs:
     name: Fetch Secrets from Doppler
     runs-on: ubuntu-latest
     outputs:
-      bridge_token: ${{ steps.fetch.outputs.bridge_token }}
-      client_token: ${{ steps.fetch.outputs.client_token }}
       source: ${{ steps.fetch.outputs.source }}
     steps:
       - uses: actions/checkout@v4
@@ -57,34 +62,80 @@ jobs:
           curl -Ls https://cli.doppler.com/install.sh | sudo sh
           sudo ln -sf ~/.doppler/bin/doppler /usr/local/bin/doppler
 
-      - name: Fetch secrets from Doppler (primary)
+      # Fail loudly and early. The previous version ran
+      #   doppler setup ... 2>/dev/null || true
+      # then `doppler secrets get`, which returned empty strings, so the job
+      # died 3 steps later with a misleading "BRIDGE_AUTH_TOKEN is empty".
+      # A missing service token is a configuration error with a known fix —
+      # say so, and say exactly where to get it.
+      - name: Preflight — require DOPPLER_SERVICE_TOKEN
+        if: ${{ inputs.skip_doppler != 'true' }}
+        env:
+          DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
+        run: |
+          if [ -z "$DOPPLER_SERVICE_TOKEN" ]; then
+            echo "::error::DOPPLER_SERVICE_TOKEN is not set on this repository."
+            echo ""
+            echo "Create a service token, then add it as a repo secret:"
+            echo "  1. Doppler Dashboard -> Access -> Service Tokens -> Add"
+            echo "  2. Name: github-actions-cd"
+            echo "  3. Project: gemini-web-bridge   Config: prd_worker"
+            echo "  4. Access: Read.  Set an expiry (90 days) — re-issue when it lapses."
+            echo "  5. gh secret set DOPPLER_SERVICE_TOKEN   (paste the dp.st.* value)"
+            echo ""
+            echo "Or re-run with skip_doppler=true to fall back to GitHub Secrets."
+            exit 1
+          fi
+
+      - name: Fetch secrets from Doppler
         id: fetch
         env:
           DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
-          GH_BRIDGE_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
-          GH_CLIENT_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
         run: |
+          set -euo pipefail
           if [ "${{ inputs.skip_doppler }}" = "true" ]; then
-            echo "bridge_token=$GH_BRIDGE_TOKEN" >> $GITHUB_OUTPUT
-            echo "client_token=$GH_CLIENT_TOKEN" >> $GITHUB_OUTPUT
+            echo "⚠️ Doppler fetch skipped (skip_doppler=true)"
             echo "source=github_secrets" >> $GITHUB_OUTPUT
-            echo "⚠️ Doppler fetch skipped — using GitHub Secrets fallback"
-          else
-            doppler setup --project gemini-web-bridge --config prd_worker --no-interactive 2>/dev/null || true
-            echo "bridge_token=$(doppler secrets get BRIDGE_AUTH_TOKEN --raw)" >> $GITHUB_OUTPUT
-            echo "client_token=$(doppler secrets get CLIENT_API_TOKEN --raw)" >> $GITHUB_OUTPUT
-            echo "source=doppler" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-      - name: Verify secrets are non-empty
-        run: |
-          if [ -z "${{ steps.fetch.outputs.bridge_token }}" ]; then
-            echo "❌ BRIDGE_AUTH_TOKEN is empty" && exit 1
+          # Pass the token explicitly via --token rather than `doppler setup`.
+          # `doppler setup` writes a config file and silently binds whatever
+          # project/config it can infer; --token is unambiguous and stateless.
+          #
+          # `|| true` is required: under `set -e` a failed command substitution
+          # aborts the step on the spot, before the empty-value check below can
+          # explain what happened. Capture the failure and report it instead.
+          bridge=$(doppler secrets get BRIDGE_AUTH_TOKEN \
+                     --token "$DOPPLER_SERVICE_TOKEN" \
+                     --project gemini-web-bridge --config prd_worker --plain) || true
+          client=$(doppler secrets get CLIENT_API_TOKEN \
+                     --token "$DOPPLER_SERVICE_TOKEN" \
+                     --project gemini-web-bridge --config prd_worker --plain) || true
+
+          # An expired or revoked service token fails here, not with a generic
+          # "empty" further down. Say which of the two it is.
+          if [ -z "$bridge" ] || [ -z "$client" ]; then
+            if ! doppler me --token "$DOPPLER_SERVICE_TOKEN" >/dev/null 2>&1; then
+              echo "::error::DOPPLER_SERVICE_TOKEN is invalid or expired. Re-issue it in Doppler Dashboard -> Access -> Service Tokens, then: gh secret set DOPPLER_SERVICE_TOKEN"
+            else
+              echo "::error::Doppler returned an empty value — check BRIDGE_AUTH_TOKEN / CLIENT_API_TOKEN exist in gemini-web-bridge/prd_worker"
+            fi
+            exit 1
           fi
-          if [ -z "${{ steps.fetch.outputs.client_token }}" ]; then
-            echo "❌ CLIENT_API_TOKEN is empty" && exit 1
-          fi
-          echo "✅ Secrets fetched from: ${{ steps.fetch.outputs.source }}"
+
+          # Only `source` is exported as a job output. The token VALUES are
+          # deliberately NOT passed downstream: job outputs are recorded in the
+          # run metadata and are readable by anyone with Actions log access.
+          # ($GITHUB_ENV would be worse still — it only applies to the current
+          # job and does not cross the job boundary at all.)
+          #
+          # Each deploy job therefore re-reads the two secrets from Doppler
+          # itself, using the masked DOPPLER_SERVICE_TOKEN. Two cheap API calls
+          # in exchange for never materialising a live credential in run
+          # metadata.
+          echo "source=doppler" >> $GITHUB_OUTPUT
+          echo "✅ Verified BRIDGE_AUTH_TOKEN and CLIENT_API_TOKEN exist in gemini-web-bridge/prd_worker"
 
   # ─── Deploy to Staging ────────────────────────────────────────────
   deploy-staging:
@@ -111,13 +162,55 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler@latest
 
+      # Re-read secrets from Doppler in this job rather than receiving them as
+      # job outputs (see fetch-secrets for why). skip_doppler falls back to the
+      # GitHub Secrets copies so a lapsed service token cannot block a deploy.
+      - name: Install Doppler CLI
+        if: ${{ inputs.skip_doppler != 'true' }}
+        run: |
+          curl -Ls https://cli.doppler.com/install.sh | sudo sh
+          sudo ln -sf ~/.doppler/bin/doppler /usr/local/bin/doppler
+
+      - name: Resolve worker secrets
+        id: secrets
+        env:
+          DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
+          GH_BRIDGE_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
+          GH_CLIENT_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.skip_doppler }}" = "true" ] || [ -z "$DOPPLER_SERVICE_TOKEN" ]; then
+            echo "⚠️ Using GitHub Secrets (skip_doppler or no service token)"
+            [ -n "$GH_BRIDGE_TOKEN" ] || { echo "::error::BRIDGE_AUTH_TOKEN missing from GitHub Secrets"; exit 1; }
+            [ -n "$GH_CLIENT_TOKEN" ] || { echo "::error::CLIENT_API_TOKEN missing from GitHub Secrets"; exit 1; }
+            bridge="$GH_BRIDGE_TOKEN"; client="$GH_CLIENT_TOKEN"
+          else
+            # `|| true` so a doppler failure is caught by the empty-value
+            # check below rather than aborting the step under `set -e`.
+            bridge=$(doppler secrets get BRIDGE_AUTH_TOKEN --token "$DOPPLER_SERVICE_TOKEN" \
+                       --project gemini-web-bridge --config prd_worker --plain) || true
+            client=$(doppler secrets get CLIENT_API_TOKEN --token "$DOPPLER_SERVICE_TOKEN" \
+                       --project gemini-web-bridge --config prd_worker --plain) || true
+            if [ -z "$bridge" ] || [ -z "$client" ]; then
+              echo "::error::Could not resolve worker secrets from Doppler (token invalid/expired, or the secret is unset)"
+              exit 1
+            fi
+          fi
+          # Mask before echoing so wrangler's own output can't leak them.
+          echo "::add-mask::$bridge"
+          echo "::add-mask::$client"
+          {
+            echo "bridge_token=$bridge"
+            echo "client_token=$client"
+          } >> $GITHUB_ENV
+
       - name: Set staging worker secrets
         working-directory: ${{ env.WORKER_DIR }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          BRIDGE_AUTH_TOKEN: ${{ needs.fetch-secrets.outputs.bridge_token }}
-          CLIENT_API_TOKEN: ${{ needs.fetch-secrets.outputs.client_token }}
+          BRIDGE_AUTH_TOKEN: ${{ env.bridge_token }}
+          CLIENT_API_TOKEN: ${{ env.client_token }}
         run: |
           echo "$BRIDGE_AUTH_TOKEN" | npx wrangler secret put BRIDGE_AUTH_TOKEN --env staging
           echo "$CLIENT_API_TOKEN" | npx wrangler secret put CLIENT_API_TOKEN --env staging
@@ -133,13 +226,29 @@ jobs:
         run: |
           sleep 5
           HEALTH=$(curl -s --retry 3 --retry-delay 2 --max-time 30 https://gemini-web-bridge-staging.pansakorn-pho.workers.dev/health)
-          echo "$HEALTH" | grep -q '"status": *"ok"' && echo "✅ Staging health OK" || (echo "❌ Staging health check failed" && echo "$HEALTH" && exit 1)
+          # Explicit if/else: `A && B || C` is not if-then-else, so a failure
+          # inside B would silently fall through to C.
+          if echo "$HEALTH" | grep -q '"status": *"ok"'; then
+            echo "✅ Staging health OK"
+          else
+            echo "❌ Staging health check failed"
+            echo "$HEALTH"
+            exit 1
+          fi
 
-  # ─── Production Deploy (Manual Approval Gate) ────────────────────
+  # ─── Production Deploy ────────────────────────────────────────────
+  # The "Manual Approval Gate" is the `environment: production` below: GitHub
+  # requires a reviewer to approve before this job starts, but only if a
+  # protection rule is actually configured for that environment in
+  # Settings -> Environments. Verify that rule exists, or this deploys to
+  # production unattended despite the comment that used to claim otherwise.
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: deploy-staging
+    # `fetch-secrets` is listed explicitly so the `source` output referenced in
+    # the summary below resolves. needs: [deploy-staging] alone does not expose
+    # a sibling job's outputs to the expression evaluator.
+    needs: [fetch-secrets, deploy-staging]
     if: github.event_name == 'push'
     environment:
       name: production
@@ -160,13 +269,50 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler@latest
 
+      - name: Install Doppler CLI
+        if: ${{ inputs.skip_doppler != 'true' }}
+        run: |
+          curl -Ls https://cli.doppler.com/install.sh | sudo sh
+          sudo ln -sf ~/.doppler/bin/doppler /usr/local/bin/doppler
+
+      - name: Resolve worker secrets
+        env:
+          DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
+          GH_BRIDGE_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
+          GH_CLIENT_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.skip_doppler }}" = "true" ] || [ -z "$DOPPLER_SERVICE_TOKEN" ]; then
+            echo "⚠️ Using GitHub Secrets (skip_doppler or no service token)"
+            [ -n "$GH_BRIDGE_TOKEN" ] || { echo "::error::BRIDGE_AUTH_TOKEN missing from GitHub Secrets"; exit 1; }
+            [ -n "$GH_CLIENT_TOKEN" ] || { echo "::error::CLIENT_API_TOKEN missing from GitHub Secrets"; exit 1; }
+            bridge="$GH_BRIDGE_TOKEN"; client="$GH_CLIENT_TOKEN"
+          else
+            # `|| true` so a doppler failure is caught by the empty-value
+            # check below rather than aborting the step under `set -e`.
+            bridge=$(doppler secrets get BRIDGE_AUTH_TOKEN --token "$DOPPLER_SERVICE_TOKEN" \
+                       --project gemini-web-bridge --config prd_worker --plain) || true
+            client=$(doppler secrets get CLIENT_API_TOKEN --token "$DOPPLER_SERVICE_TOKEN" \
+                       --project gemini-web-bridge --config prd_worker --plain) || true
+            if [ -z "$bridge" ] || [ -z "$client" ]; then
+              echo "::error::Could not resolve worker secrets from Doppler (token invalid/expired, or the secret is unset)"
+              exit 1
+            fi
+          fi
+          echo "::add-mask::$bridge"
+          echo "::add-mask::$client"
+          {
+            echo "bridge_token=$bridge"
+            echo "client_token=$client"
+          } >> $GITHUB_ENV
+
       - name: Set production worker secrets
         working-directory: ${{ env.WORKER_DIR }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          BRIDGE_AUTH_TOKEN: ${{ needs.fetch-secrets.outputs.bridge_token }}
-          CLIENT_API_TOKEN: ${{ needs.fetch-secrets.outputs.client_token }}
+          BRIDGE_AUTH_TOKEN: ${{ env.bridge_token }}
+          CLIENT_API_TOKEN: ${{ env.client_token }}
         run: |
           echo "$BRIDGE_AUTH_TOKEN" | npx wrangler secret put BRIDGE_AUTH_TOKEN
           echo "$CLIENT_API_TOKEN" | npx wrangler secret put CLIENT_API_TOKEN
@@ -179,15 +325,23 @@ jobs:
         run: npx wrangler deploy
 
       - name: Verify production deployment
+        env:
+          PROD_BASE_URL: https://gemini-web-bridge.pansakorn-pho.workers.dev
         run: |
           sleep 5
-          HEALTH=$(curl -s --retry 3 --retry-delay 2 --max-time 30 ${{ env.WSS_ENDPOINT }}/../health)
-          echo "$HEALTH" | grep -q '"status": *"ok"' && echo "✅ Production health OK" || (echo "❌ Production health check failed" && echo "$HEALTH" && exit 1)
+          HEALTH=$(curl -s --retry 3 --retry-delay 2 --max-time 30 "$PROD_BASE_URL/health")
+          if echo "$HEALTH" | grep -q '"status": *"ok"'; then
+            echo "✅ Production health OK"
+          else
+            echo "❌ Production health check failed"
+            echo "$HEALTH"
+            exit 1
+          fi
 
       - name: Deployment summary
         if: success()
         run: |
           echo "## 🚀 Production Deployed" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Worker deployed via cd.yml (Doppler: ${{ needs.fetch-secrets.outputs.source }})" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Worker deployed via cd.yml (secrets: ${{ needs.fetch-secrets.outputs.source }})" >> $GITHUB_STEP_SUMMARY
           echo "WSS: \`${{ env.WSS_ENDPOINT }}\`" >> $GITHUB_STEP_SUMMARY
           echo "OpenAI: \`${{ env.OPENAI_ENDPOINT }}\`" >> $GITHUB_STEP_SUMMARY

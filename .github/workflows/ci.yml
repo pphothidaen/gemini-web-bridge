@@ -1,4 +1,8 @@
-name: CI/CD
+name: CI
+# Verify-only. Production deployment lives in cd.yml — see the note at the
+# bottom of this file. Keeping deploy in one place is deliberate: this file
+# and cd.yml used to both run `wrangler deploy` on every push to main,
+# concurrently and unserialized.
 
 on:
   push:
@@ -6,6 +10,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+# Never let two runs of this workflow overlap on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   NODE_VERSION: '22'
@@ -98,12 +107,23 @@ jobs:
 
       - name: Run Gitleaks secret detection
         uses: gitleaks/gitleaks-action@v2
-        with:
-          # Custom rules for this project's token prefixes; gitleaks' default
-          # config has no rule that matches `hermes-*` / `gemini-bridge-*`.
-          config: .gitleaks.toml
+        # NO `with:` block on purpose.
+        #
+        # This previously passed `config: .gitleaks.toml`. gitleaks-action@v2
+        # declares no `inputs` at all, so that key was rejected at runtime with
+        #   "Unexpected input(s) 'config', valid inputs are ['']"
+        # and the custom rules were silently never applied — the job reported
+        # green while scanning with the DEFAULT ruleset, which has no rule
+        # matching the `hermes-` / `gemini-bridge-` prefixes this config exists
+        # to catch. A secret gate that silently scans with the wrong ruleset is
+        # worse than no gate, because it is trusted.
+        #
+        # The supported mechanism is the GITLEAKS_CONFIG env var. (The action
+        # also auto-detects `gitleaks.toml` at the repo root, but this repo's
+        # file is `.gitleaks.toml` — dot-prefixed, so it is NOT auto-detected.)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: ${{ github.workspace }}/.gitleaks.toml
 
       - name: Report scan status
         run: echo "## 🔐 Security Scan" >> $GITHUB_STEP_SUMMARY
@@ -273,110 +293,146 @@ jobs:
           echo "**DO** load from \`dist/extension/\` after running \`python3 scripts/build-extension.py\`" >> $GITHUB_STEP_SUMMARY
 
   # ─── Job 6: Redteam — Token Validation ────────────────────────
+  #
+  # Asserts the *credential*, not the app. Every probe below hits an endpoint
+  # whose response is decided purely by the token:
+  #
+  #   GET /v1/models         -> 200 = token valid, 401 = token rejected
+  #   GET /bridge/auth-check -> 200 = token valid, 401 = token rejected
+  #
+  # This deliberately does NOT use POST /v1/chat/completions, which is what
+  # this job used to do. That probe was doubly broken:
+  #   1. It requested `model: "gemini-3.8-flash-thinking"`, which is no longer
+  #      in the browser catalog (live catalog is gemini-3.8-flash,
+  #      gemini-3.5-flash-lite, gemini-3.1-pro). A *valid* token therefore
+  #      returns 404 model_not_available, conflating "token rejected" with
+  #      "model id retired" — the job could never observe the 200 it asserted.
+  #   2. A completion depends on a live browser extension, so a disconnected
+  #      extension (normal at any hour) reads as a credential failure.
   redteam-token-test:
     name: Redteam — Token Validation
     runs-on: ubuntu-latest
-    needs: [security-scan, deploy]
+    needs: [security-scan]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Token validation (no hardcoded secrets)
+      - name: Token validation (auth-only probes, no hardcoded secrets)
         env:
           OLD_CLIENT_TOKEN: ${{ secrets.OLD_CLIENT_API_TOKEN }}
           CURRENT_CLIENT_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
           OLD_BRIDGE_TOKEN: ${{ secrets.OLD_BRIDGE_AUTH_TOKEN }}
+          CURRENT_BRIDGE_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
+          BASE_URL: ${{ vars.PROD_BASE_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev' }}
         run: |
           echo "## 🔴 Redteam — Token Validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Test 1: Old compromised token MUST return 401
-          if [ -n "$OLD_CLIENT_TOKEN" ]; then
-            HTTP_CODE=$(curl -s --retry 3 --retry-all-errors --retry-delay 2 --max-time 120 -o /dev/null -w "%{http_code}" -X POST \
-              https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions \
-              -H "Authorization: Bearer $OLD_CLIENT_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d '{"model":"gemini-3.8-flash-thinking","messages":[{"role":"user","content":"test"}]}')
+          # probe <url> <header-line>  ->  prints "<http_code> <curl_exit>"
+          #
+          # <header-line> is a COMPLETE header, e.g. "Authorization: Bearer $TOK"
+          # or "x-bridge-token: $TOK". Do not split the header name from its
+          # value: rebuilding it as "$NAME: $VALUE" turns
+          # "Authorization: Bearer <tok>" into "Authorization: Bearer: <tok>",
+          # which authenticates as the literal token "Bearer: <tok>" and returns
+          # a 401 indistinguishable from a revoked credential.
+          #
+          # `|| true` is also load-bearing. GitHub runs steps under `bash -e`, so
+          # a bare `HTTP_CODE=$(curl ...)` aborts the step the moment curl returns
+          # non-zero — which is how this job died with exit 23 before reaching
+          # any of its own assertions. A transport failure must be *reported*
+          # and routed to the rerun branch, never kill the step implicitly.
+          probe() {
+            local code rc
+            code=$(curl -s --retry 3 --retry-all-errors --retry-delay 2 --max-time 30 \
+                     -o /dev/null -w '%{http_code}' -H "$2" "$1") && rc=0 || rc=$?
+            echo "${code:-000} $rc"
+          }
 
-            if [ "$HTTP_CODE" = "401" ]; then
-              echo "✅ Old CLIENT_API_TOKEN rejected (HTTP 401)" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "❌ SECURITY ISSUE: Old token returned HTTP $HTTP_CODE (expected 401)" >> $GITHUB_STEP_SUMMARY
-              exit 1
+          # assert_valid <label> <url> <header-line> — token must authenticate.
+          assert_valid() {
+            local label="$1" url="$2" header="$3" code rc
+            if [ -z "${header##*: }" ] || [ -z "$header" ]; then
+              echo "⚠️ $label: not configured — skipping" >> $GITHUB_STEP_SUMMARY
+              return 0
             fi
-          else
-            echo "ℹ️ OLD_CLIENT_API_TOKEN not set — skipping old token test" >> $GITHUB_STEP_SUMMARY
-          fi
+            read -r code rc <<<"$(probe "$url" "$header")"
+            if [ "$rc" != "0" ]; then
+              echo "⚠️ $label: transport failure (curl exit $rc) — rerun this job" >> $GITHUB_STEP_SUMMARY
+              return 2
+            fi
+            if [ "$code" = "200" ]; then
+              echo "✅ $label: accepted (HTTP 200)" >> $GITHUB_STEP_SUMMARY
+              return 0
+            fi
+            if [ "$code" = "401" ]; then
+              echo "❌ $label: REJECTED (401) — GitHub and the worker disagree on the credential" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ $label: expected 200, got HTTP $code" >> $GITHUB_STEP_SUMMARY
+            fi
+            return 1
+          }
 
-          # Test 2: Current token MUST return 200 or 503 (not 401)
-          HTTP_CODE=$(curl -s --retry 3 --retry-all-errors --retry-delay 2 --max-time 120 -o /dev/null -w "%{http_code}" -X POST \
-            https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions \
-            -H "Authorization: Bearer $CURRENT_CLIENT_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{"model":"gemini-3.8-flash-thinking","messages":[{"role":"user","content":"test"}]}')
+          # assert_revoked <label> <url> <header-line> — token must be rejected.
+          assert_revoked() {
+            local label="$1" url="$2" header="$3" code rc
+            if [ -z "${header##*: }" ] || [ -z "$header" ]; then
+              echo "ℹ️ $label: not configured — skipping" >> $GITHUB_STEP_SUMMARY
+              return 0
+            fi
+            read -r code rc <<<"$(probe "$url" "$header")"
+            if [ "$rc" != "0" ]; then
+              echo "⚠️ $label: transport failure (curl exit $rc) — rerun this job" >> $GITHUB_STEP_SUMMARY
+              return 2
+            fi
+            if [ "$code" = "401" ]; then
+              echo "✅ $label: rejected (HTTP 401)" >> $GITHUB_STEP_SUMMARY
+              return 0
+            fi
+            echo "❌ SECURITY ISSUE: $label still authenticates (HTTP $code, expected 401) — rotate it" >> $GITHUB_STEP_SUMMARY
+            return 1
+          }
 
-          if [ "$HTTP_CODE" = "000" ]; then
-            echo "⚠️ Transient network failure (curl could not get a response after retries) — rerun this job" >> $GITHUB_STEP_SUMMARY
+          # 0 = pass, 2 = transient (rerun), 1 = real failure
+          FAILURES=0
+          TRANSIENT=0
+          run_check() {
+            local rc=0
+            "$@" || rc=$?
+            case "$rc" in
+              0) ;;
+              2) TRANSIENT=1 ;;
+              *) FAILURES=$((FAILURES + 1)) ;;
+            esac
+          }
+
+          # Live credentials must work.
+          run_check assert_valid "Current CLIENT_API_TOKEN"  "$BASE_URL/v1/models"         "Authorization: Bearer $CURRENT_CLIENT_TOKEN"
+          run_check assert_valid "Current BRIDGE_AUTH_TOKEN" "$BASE_URL/bridge/auth-check" "x-bridge-token: $CURRENT_BRIDGE_TOKEN"
+
+          # Retired credentials must NOT work. These are the assertions that
+          # went red on 3e46a0f: both tokens were still live in production.
+          run_check assert_revoked "Old CLIENT_API_TOKEN"  "$BASE_URL/v1/models"         "Authorization: Bearer $OLD_CLIENT_TOKEN"
+          run_check assert_revoked "Old BRIDGE_AUTH_TOKEN" "$BASE_URL/bridge/auth-check" "x-bridge-token: $OLD_BRIDGE_TOKEN"
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$TRANSIENT" = "1" ]; then
+            echo "⚠️ Transient network failure — rerun this job" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
-          if [ "$HTTP_CODE" = "401" ]; then
-            echo "❌ Current token rejected (HTTP 401) — deployment broken!" >> $GITHUB_STEP_SUMMARY
+          if [ "$FAILURES" -gt 0 ]; then
+            echo "❌ $FAILURES check(s) failed" >> $GITHUB_STEP_SUMMARY
             exit 1
-          else
-            echo "✅ Current CLIENT_API_TOKEN accepted (HTTP $HTTP_CODE)" >> $GITHUB_STEP_SUMMARY
           fi
+          echo "✅ All token validation checks passed" >> $GITHUB_STEP_SUMMARY
 
-          # Test 3: Old bridge token must also be dead
-          if [ -n "$OLD_BRIDGE_TOKEN" ]; then
-            BRIDGE_CODE=$(curl -s --retry 3 --retry-all-errors --retry-delay 2 --max-time 120 -o /dev/null -w "%{http_code}" \
-              https://gemini-web-bridge.pansakorn-pho.workers.dev/bridge/auth-check \
-              -H "x-bridge-token: $OLD_BRIDGE_TOKEN")
-            if [ "$BRIDGE_CODE" = "401" ]; then
-              echo "✅ Old BRIDGE_AUTH_TOKEN rejected" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "⚠️ Old BRIDGE_AUTH_TOKEN response: HTTP $BRIDGE_CODE" >> $GITHUB_STEP_SUMMARY
-            fi
-          fi
+  # ─── Deploy ──────────────────────────────────────────────────────
+  # Production deployment is intentionally NOT done here. It lives in
+  # cd.yml ("CD — Deploy & Secret Sync"), which owns the whole path:
+  # fetch secrets from Doppler -> deploy staging -> verify -> production.
+  #
+  # This job used to deploy as well, so every push to main ran two concurrent
+  # `wrangler deploy`s against the same worker with no concurrency group — a
+  # race with no defined winner. cd.yml is now the single deploy authority.
+  #
+  # This workflow is verify-only: lint, test, security scan, deps, package,
+  # redteam token validation.
 
-  # ─── Job 4: Deploy to Production ────────────────────────────────
-  deploy:
-    name: Deploy Worker
-    runs-on: ubuntu-latest
-    needs: blueteam-deps
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install worker dependencies
-        working-directory: ${{ env.WORKER_DIR }}
-        run: npm ci
-
-      - name: Install Wrangler
-        run: npm install -g wrangler@latest
-
-      - name: Deploy to Cloudflare
-        working-directory: ${{ env.WORKER_DIR }}
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          npx wrangler deploy
-
-      - name: Verify deployment
-        run: |
-          sleep 5
-          HEALTH=$(curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/health)
-          echo "$HEALTH"
-          echo "$HEALTH" | grep -q '"status": *"ok"' || (echo "Health check failed" && exit 1)
-
-      - name: Deploy summary
-        if: success()
-        run: |
-          echo "## 🚀 Deployed to Production" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Worker deployed successfully" >> $GITHUB_STEP_SUMMARY
-          echo "- URL: https://gemini-web-bridge.pansakorn-pho.workers.dev" >> $GITHUB_STEP_SUMMARY

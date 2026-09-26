@@ -131,10 +131,11 @@ jobs:
             fi
           fi
           if [ -n "$OLD_CLIENT_TOKEN" ]; then
-            CLIENT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${{ env.PROD_URL }}/v1/chat/completions" \
-              -H "Authorization: Bearer $OLD_CLIENT_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d '{"model":"gemini-3.8-flash-thinking","messages":[{"role":"user","content":"test"}]}')
+            # Auth-only probe. POST /v1/chat/completions would also work for a
+            # 401 here (auth is checked before routing), but /v1/models is
+            # cheaper and has no dependency on the model catalogue.
+            CLIENT_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.PROD_URL }}/v1/models" \
+              -H "Authorization: Bearer $OLD_CLIENT_TOKEN")
             if [ "$CLIENT_CODE" = "401" ]; then
               echo "✅ Old CLIENT_API_TOKEN rejected (401)" >> $GITHUB_STEP_SUMMARY
             else
@@ -149,24 +150,33 @@ jobs:
           NEW_BRIDGE_AUTH_TOKEN: ${{ env.NEW_BRIDGE_AUTH_TOKEN }}
           NEW_CLIENT_API_TOKEN: ${{ env.NEW_CLIENT_API_TOKEN }}
         run: |
+          # Auth-only probes, same rationale as ci.yml's redteam job:
+          # /v1/models and /bridge/auth-check are decided purely by the token.
+          # POST /v1/chat/completions additionally depends on the model
+          # catalogue and on a live browser extension, so it cannot distinguish
+          # "token rejected" from "model retired" or "extension asleep".
           if [ -n "$NEW_BRIDGE_AUTH_TOKEN" ]; then
-            BCODE=$(curl -s "${{ env.PROD_URL }}/bridge/auth-check" -H "x-bridge-token: $NEW_BRIDGE_AUTH_TOKEN")
-            echo "$BCODE" | grep -q '"ok":true' && echo "✅ New BRIDGE_AUTH_TOKEN accepted" >> $GITHUB_STEP_SUMMARY || echo "⚠️ New BRIDGE_AUTH_TOKEN response: $BCODE" >> $GITHUB_STEP_SUMMARY
+            BCODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.PROD_URL }}/bridge/auth-check" \
+              -H "x-bridge-token: $NEW_BRIDGE_AUTH_TOKEN")
+            if [ "$BCODE" = "200" ]; then
+              echo "✅ New BRIDGE_AUTH_TOKEN accepted (HTTP 200)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ New BRIDGE_AUTH_TOKEN rejected (HTTP $BCODE)" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
           fi
           if [ -n "$NEW_CLIENT_API_TOKEN" ]; then
-            CCODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${{ env.PROD_URL }}/v1/chat/completions" \
-              -H "Authorization: Bearer $NEW_CLIENT_API_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d '{"model":"gemini-3.8-flash-thinking","messages":[{"role":"user","content":"healthy"}]}')
-            if [ "$CCODE" = "200" ] || [ "$CCODE" = "503" ]; then
-              echo "✅ New CLIENT_API_TOKEN accepted (HTTP $CCODE)" >> $GITHUB_STEP_SUMMARY
+            CCODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.PROD_URL }}/v1/models" \
+              -H "Authorization: Bearer $NEW_CLIENT_API_TOKEN")
+            if [ "$CCODE" = "200" ]; then
+              echo "✅ New CLIENT_API_TOKEN accepted (HTTP 200)" >> $GITHUB_STEP_SUMMARY
             else
               echo "❌ New CLIENT_API_TOKEN rejected (HTTP $CCODE)" >> $GITHUB_STEP_SUMMARY
               exit 1
             fi
           fi
 
-      - name: Sync OLD tokens to GitHub Secrets
+      - name: Rotation summary
         if: steps.targets.outputs.dry_run == 'false'
         run: |
           # Record what was rotated for audit trail
@@ -175,11 +185,23 @@ jobs:
           echo "Target: ${{ inputs.model_to_rotate }}" >> $GITHUB_STEP_SUMMARY
           echo "Dry run: ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> ⚠️ GitHub Secrets (NEW_BRIDGE_AUTH_TOKEN, NEW_CLIENT_API_TOKEN) and Doppler (BRIDGE_AUTH_TOKEN, CLIENT_API_TOKEN) must be manually synced in the repo settings after this run." >> $GITHUB_STEP_SUMMARY
+          echo "Doppler (gemini-web-bridge/prd_worker) and the Cloudflare Worker secrets were updated by this run." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> ⚠️ STILL REQUIRED (this workflow cannot write repo secrets):" >> $GITHUB_STEP_SUMMARY
+          echo "> 1. \`gh secret set BRIDGE_AUTH_TOKEN\` / \`gh secret set CLIENT_API_TOKEN\`" >> $GITHUB_STEP_SUMMARY
+          echo "> 2. \`gh secret set OLD_BRIDGE_AUTH_TOKEN\` / \`gh secret set OLD_CLIENT_API_TOKEN\` (previous values)" >> $GITHUB_STEP_SUMMARY
+          echo "> 3. Rebuild + repackage the extension (\`build-extension.py\` then \`zip-extension.py\`) and reinstall it — the packaged zip bakes the token in." >> $GITHUB_STEP_SUMMARY
+          echo "> 4. Re-enter the bridge token on the extension options page." >> $GITHUB_STEP_SUMMARY
 
       - name: Final health check
         if: steps.targets.outputs.dry_run == 'false'
         run: |
           sleep 5
-          HEALTH=$(curl -s --retry 2 --retry-delay 2 --max-time 30 ${{ env.PROD_URL }}/health)
-          echo "$HEALTH" | grep -q '"status": *"ok"' && echo "✅ Post-rotation health OK" >> $GITHUB_STEP_SUMMARY || (echo "❌ Post-rotation health check failed" && echo "$HEALTH" && exit 1)
+          HEALTH=$(curl -s --retry 2 --retry-delay 2 --max-time 30 "${{ env.PROD_URL }}/health")
+          if echo "$HEALTH" | grep -q '"status": *"ok"'; then
+            echo "✅ Post-rotation health OK" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Post-rotation health check failed" >> $GITHUB_STEP_SUMMARY
+            echo "$HEALTH"
+            exit 1
+          fi

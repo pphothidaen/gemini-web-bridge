@@ -1,0 +1,43 @@
+{
+  // Root wrangler config — exists for Cloudflare Workers Builds (the Git
+  // integration), which builds from the repository root by default and
+  // therefore found no config at all: both package.json and wrangler.toml
+  // live in cloudflare-worker/. With nothing to build, every one of its
+  // builds failed.
+  //
+  // It is a thin pointer at the real worker. cloudflare-worker/wrangler.toml
+  // remains the source of truth and is what `npx wrangler deploy` uses when
+  // run from that directory (as ci.yml/cd.yml do). Keep the two in sync —
+  // name, entrypoint, DO binding, KV namespace and migrations must match.
+  //
+  // If you deploy from the repo root, this file is used instead. Do not
+  // deploy from both places in the same pipeline.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gemini-web-bridge",
+  "main": "cloudflare-worker/src/index.js",
+  "compatibility_date": "2026-09-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+
+  // No [vars] here on purpose. BRIDGE_AUTH_TOKEN / CLIENT_API_TOKEN must be
+  // set with `wrangler secret put`; a token in a committed config file is a
+  // leaked token (see cloudflare-worker/wrangler.staging.toml, which used to
+  // ship a guessable "staging-token-change-me").
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "BRIDGE_DO", "class_name": "GeminiBridgeDO" }
+    ]
+  },
+
+  // Temporary PDF artifact storage for the horo_consult MCP tool (1h TTL).
+  "kv_namespaces": [
+    { "binding": "ARTIFACT_KV", "id": "9620c1ac40ab481c83f9687b7d63a5ce" }
+  ],
+
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["GeminiBridgeDO"] }
+  ],
+
+  "observability": { "enabled": true }
+}
