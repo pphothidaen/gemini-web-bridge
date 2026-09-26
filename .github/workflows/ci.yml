@@ -437,30 +437,37 @@ jobs:
             printf -- '- Commit: [`%s`](%s/commit/%s)\n' "$SHORT_SHA" "$GITHUB_SERVER_URL" "$COMMIT_SHA"
             printf -- '- Run: [%s](%s)\n' "$RUN_URL" "$RUN_URL")
 
-          # Jira Cloud v3 requires ADF, not plain text. Encoded with jq rather
-          # than hand-assembled: building JSON by concatenating quoted shell
-          # fragments means every embedded double-quote has to survive two
-          # layers of unescaping (YAML block scalar, then shell), and getting
-          # that wrong produces a payload that fails to parse at the far end
-          # with no local signal. jq handles quoting correctly.
+          # Jira Cloud v3 needs Atlassian Document Format, wrapped in a "body"
+          # envelope. Two mistakes here are silent — the API answers HTTP 400
+          # "Comment body can not be empty!" for both, which reads like an
+          # auth problem and is not:
           #
-          # The jq program is a single line on purpose. GitHub's workflow
-          # parser rejects a `run:` block line that begins with a quote
-          # character, so a line-continued program (which would put the
-          # quoted filter at the start of the next line) makes the whole
-          # workflow fail to load with no jobs listed at all.
-          ADF=$(printf '%s' "$BODY" | jq -Rs '{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:.}]}]}')
+          #   1. Without the `body` wrapper, Jira sees no comment body at all.
+          #      A bare ADF document is rejected.
+          #   2. `jq -Rs` (slurp) appends a trailing newline, which lands
+          #      inside the text node. `-Rsc` omits it.
+          #
+          # jq handles the escaping, so the markdown in $BODY (backticks,
+          # brackets, newlines) survives intact. The program is one line
+          # because GitHub's workflow parser rejects a `run:` block line that
+          # begins with a quote character.
+          #
+          # Verified live against Jira before this shape was committed: the
+          # same payload that produced 400 bare returns 201 wrapped.
+          jq -n --arg t "$BODY" \
+            '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$t}]}]}}' > /tmp/adf.json
 
           HTTP=$(curl -sS -o /tmp/jira.out -w '%{http_code}' \
             -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" \
             -H "Authorization: Basic $(printf '%s:%s' "$JIRA_EMAIL" "$JIRA_CI_TOKEN" | base64)" \
             -H 'Content-Type: application/json' \
-            -d "$ADF" || echo 000)
+            --data-binary @/tmp/adf.json || echo 000)
 
           # Never fail the build on a Jira problem: the extension is already
           # built and uploaded, and a red X here would misreport that.
           case "$HTTP" in
             201|200) echo "✅ Commented on $KEY" ;;
+            400) echo "::warning::Jira rejected the payload (HTTP 400). Response:"; head -c 300 /tmp/jira.out; echo ;;
             404) echo "::warning::$KEY not found in Jira. Check the project key and token scope." ;;
             401|403) echo "::warning::Jira rejected the token (HTTP $HTTP). Token may be expired or lack write scope." ;;
             *)  echo "::warning::Jira comment failed (HTTP $HTTP). Response:"; head -c 400 /tmp/jira.out; echo ;;
