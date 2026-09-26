@@ -1682,6 +1682,15 @@ export class GeminiBridgeDO extends DurableObject {
                 this.pendingScopeSwitch = null;
               }
             }
+            // DO NOT let this branch swallow the message. prepareScope() waits
+            // for a per-request SCOPE_READY via activeStreams, and because this
+            // is an `else if` chain the generic dispatch below was unreachable.
+            // The tab had already navigated and confirmed, yet the server still
+            // rejected with "Scope switch to '<scope>' timed out (45s)".
+            if (msg.requestId && this.activeStreams.has(msg.requestId)) {
+              const handler = this.activeStreams.get(msg.requestId);
+              if (handler) handler(msg);
+            }
           } else if (msg.requestId && this.activeStreams.has(msg.requestId)) {
             const handler = this.activeStreams.get(msg.requestId);
             if (handler) handler(msg);
