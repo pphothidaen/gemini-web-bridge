@@ -68,11 +68,12 @@ jobs:
       # died 3 steps later with a misleading "BRIDGE_AUTH_TOKEN is empty".
       # A missing service token is a configuration error with a known fix —
       # say so, and say exactly where to get it.
-      - name: Preflight — require DOPPLER_SERVICE_TOKEN
+      - name: Preflight — require a usable DOPPLER_SERVICE_TOKEN
         if: ${{ inputs.skip_doppler != 'true' }}
         env:
           DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
         run: |
+          set -euo pipefail
           if [ -z "$DOPPLER_SERVICE_TOKEN" ]; then
             echo "::error::DOPPLER_SERVICE_TOKEN is not set on this repository."
             echo ""
@@ -86,6 +87,34 @@ jobs:
             echo "Or re-run with skip_doppler=true to fall back to GitHub Secrets."
             exit 1
           fi
+
+          # A non-empty token is not the same as a USABLE token. The token
+          # currently in .env is a valid dp.st.* credential scoped to the
+          # `horo-consultant` project, so it sails past the empty check above
+          # and then fails two steps later with "this token does not have
+          # access to requested project 'gemini-web-bridge'" — reported by the
+          # fetch step as if BRIDGE_AUTH_TOKEN/CLIENT_API_TOKEN were missing
+          # from Doppler, when in fact they are present and readable.
+          #
+          # Prove access to THIS project here, where the cause is still
+          # unambiguous, and name the projects the token can actually reach so
+          # the mis-scoping is obvious from the log alone.
+          if ! doppler projects --token "$DOPPLER_SERVICE_TOKEN" --json \
+               | grep -q '"id": *"gemini-web-bridge"'; then
+            echo "::error::DOPPLER_SERVICE_TOKEN cannot access the 'gemini-web-bridge' project."
+            echo ""
+            echo "The token authenticates, but it is scoped to a different project."
+            echo "Projects this token CAN currently reach:"
+            doppler projects --token "$DOPPLER_SERVICE_TOKEN" 2>/dev/null || echo "  (none)"
+            echo ""
+            echo "Fix: Doppler Dashboard -> Access -> Service Tokens -> Add"
+            echo "  Project: gemini-web-bridge   Config: prd_worker   Access: Read"
+            echo "then: gh secret set DOPPLER_SERVICE_TOKEN"
+            echo ""
+            echo "Or re-run with skip_doppler=true to fall back to GitHub Secrets."
+            exit 1
+          fi
+          echo "✅ DOPPLER_SERVICE_TOKEN is valid and can read gemini-web-bridge"
 
       - name: Fetch secrets from Doppler
         id: fetch
