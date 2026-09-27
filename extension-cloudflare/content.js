@@ -19,9 +19,16 @@
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",
           isDefaultToken: !s.bridgeToken
         }),
+        // KAN-166: this fallback had drifted from the real implementation and
+        // still used the old `min(exp + rnd()*1000, max)` shape, where the
+        // jitter is clipped away entirely once the cap is reached. It is
+        // reachable — content.js calls Settings.computeBackoff on both of its
+        // reconnect paths, and this copy is what runs whenever settings.js has
+        // not populated globalThis.GeminiBridgeSettings.
+        // tests/backoff-consistency.test.mjs asserts all three copies agree.
         computeBackoff: (attempt, base = 1000, max = 30000, rnd = Math.random) => {
-          const exp = Math.min(base * Math.pow(2, Math.max(0, attempt)), max);
-          return Math.min(exp + Math.floor(rnd() * 1000), max);
+          const ceiling = Math.min(base * Math.pow(2, Math.max(0, attempt)), max);
+          return Math.floor(rnd() * ceiling);
         }
       };
 
