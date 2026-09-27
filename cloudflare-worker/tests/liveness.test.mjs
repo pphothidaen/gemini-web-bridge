@@ -27,7 +27,7 @@ test('recording a connection arms the alarm', () => {
   assert.ok(body, 'recordConnection() must still exist in src/index.js');
   assert.match(
     body[0],
-    /this\.scheduleAlarm\(\)/,
+    /this\.scheduleAlarm\(/,
     'recordConnection() must arm the alarm — without it a connection arriving ' +
       'after a skipped re-arm leaves the DO permanently without a keepalive'
   );

@@ -341,7 +341,7 @@ export class GeminiBridgeDO extends DurableObject {
     // which would keep the DO hot indefinitely and exhaust the free-tier CPU quota.
     // The alarm fires every 15s while there are active connections/sessions,
     // and is NOT scheduled when the DO is idle — allowing proper eviction.
-    this.scheduleAlarm();
+    this.scheduleAlarm("constructor");
   }
 
   // ─── Health state (restored for backward compatibility) ───
@@ -467,7 +467,7 @@ export class GeminiBridgeDO extends DurableObject {
     //
     // Arming here makes permanent death impossible regardless of which tick
     // failed: any connection restarts the cadence.
-    this.scheduleAlarm();
+    this.scheduleAlarm("recordConnection");
 
     return connectionState;
   }
@@ -643,8 +643,11 @@ export class GeminiBridgeDO extends DurableObject {
    * runs its own inline staleness check, so a new connection never waits
    //  on the alarm. The alarm is a memory-hygiene sweep, not a gate.
    */
-  scheduleAlarm() {
-    if (typeof this.ctx === "undefined" || this.ctx === null) return;
+  scheduleAlarm(reason = "unspecified") {
+    if (typeof this.ctx === "undefined" || this.ctx === null) {
+      vlog(`[Bridge DO] scheduleAlarm(${reason}) ABORTED — no ctx bound.`);
+      return;
+    }
     // Re-arm unconditionally. Previously this only fired when alarm === null,
     // which meant an interval change could never take effect on a DO that
     // already had a pending alarm.
@@ -656,6 +659,15 @@ export class GeminiBridgeDO extends DurableObject {
                     : GeminiBridgeDO.IDLE_ALARM_INTERVAL_MS;
     // Cloudflare stores the alarm in whole seconds; sub-second would throw.
     this.ctx.alarm = Math.max(1, Math.round(ms / 1000));
+    // KAN-168 diagnostic. This is the only way to tell an armed alarm from one
+    // that was never set, and there was previously no way to see the
+    // arm/skip-re-arm decision at all — which is why the cause of the dead
+    // keepalive could not be established from production.
+    vlog(
+      `[Bridge DO] scheduleAlarm(${reason}): armed in ${this.ctx.alarm}s ` +
+      `(mode=${busy ? "busy" : "idle"}, conns=${this.activeConnections ? this.activeConnections.size : 0}, ` +
+      `mcpSessions=${this.mcpSessions ? this.mcpSessions.size : 0})`
+    );
   }
 
   // Liveness thresholds. See src/liveness.js for the rules these feed.
@@ -771,7 +783,20 @@ export class GeminiBridgeDO extends DurableObject {
       this.activeConnections.size > 0;
 
     if (hasActiveWork) {
-      this.scheduleAlarm();
+      this.scheduleAlarm("alarm-rerarm");
+    } else {
+      // KAN-168 diagnostic. This branch is where the alarm dies permanently:
+      // the one alarm the constructor armed reaches this tick with no active
+      // work, the re-arm is skipped, and nothing ever sets it again. Previously
+      // this was a silent no-op.
+      vlog(
+        `[Bridge DO] alarm() tick: NOT re-arming — no active work ` +
+        `(conns=${this.activeConnections ? this.activeConnections.size : 0}, ` +
+        `mcpSessions=${this.mcpSessions ? this.mcpSessions.size : 0}, ` +
+        `activeSocket=${Boolean(this.activeSocket && this.activeSocket.readyState === 1)}). ` +
+        'The alarm is now unset; only a new connection, generation, or DO ' +
+        'recreation will start it again.'
+      );
     }
   }
 
@@ -1665,11 +1690,11 @@ export class GeminiBridgeDO extends DurableObject {
     // moment it finishes. The finally block guarantees the flag is cleared on
     // throw as well as on success.
     this._generationInFlight = true;
-    this.scheduleAlarm();
+    this.scheduleAlarm("generation-start");
     try { return await this.handleRequest(request); }
     finally {
       this._generationInFlight = false;
-      this.scheduleAlarm();
+      this.scheduleAlarm("generation-end");
       const next = this.pendingRequests.shift();
       if (next) next.resolve(); else this.requestBusy = false;
     }
