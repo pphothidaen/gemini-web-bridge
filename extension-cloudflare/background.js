@@ -444,7 +444,20 @@ export class BridgeSocketManager {
       if (this._state === ConnectionState.CONNECTED) return;
       if (this._state === ConnectionState.AUTH_FAILED) return;
       // Don't start a new attempt while one is in flight or scheduled.
-      if (this._state === ConnectionState.CONNECTING || this._state === ConnectionState.RECONNECTING) {
+      //
+      // KAN-163: only CONNECTING blocks a new attempt. RECONNECTING means
+      // "a backoff/conflict timer is armed, no socket in flight" — which is a
+      // waiting state, not a busy one. Blocking it here made the state
+      // terminal: both scheduleReconnect() (:667) and _onConflict() (:622)
+      // set RECONNECTING, and the timers they arm call connect(), which
+      // returned at this guard before ever reaching _doConnectInternal().
+      // The SW could not leave RECONNECTING by any path and stayed
+      // disconnected forever, which is what production showed after the
+      // KAN-162 reload: "[BridgeSocket] Cannot send: WebSocket not open.
+      // SESSION_READY" with zero /bridge requests reaching the worker for
+      // 15+ minutes. The armed timer is cleared in _doConnectInternal(),
+      // so letting a new attempt through cannot stack two sockets.
+      if (this._state === ConnectionState.CONNECTING) {
         return;
       }
       await this._doConnectInternal();
@@ -458,7 +471,15 @@ export class BridgeSocketManager {
    */
   async _doConnectInternal() {
     this._state = ConnectionState.CONNECTING;
-    this.reconnectTimer = null; // cancel any pending backoff timer
+    // KAN-163: actually clear the armed backoff/conflict timer, not just drop
+    // the reference. Letting RECONNECTING through the connect() guard means a
+    // timer can be pending when we get here; nulling the field alone left that
+    // timer live, and it would fire later and start a second attempt against a
+    // socket that is already connecting.
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
 
     if (!this.WebSocketImpl) {
       console.error("[BridgeSocket] WebSocket API unavailable; cannot connect.");
