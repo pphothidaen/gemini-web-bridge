@@ -27,5 +27,7 @@ id = "9620c1ac40ab481c83f9687b7d63a5ce"
 tag = "v1"
 new_sqlite_classes = ["GeminiBridgeDO"]
 
+# See wrangler.jsonc for why this is off: Workers Logs is charged against the
+# same CPU budget as the DO, and nothing in this repo reads it.
 [observability]
-enabled = true
+enabled = false

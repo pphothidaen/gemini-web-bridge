@@ -39,5 +39,12 @@
     { "tag": "v1", "new_sqlite_classes": ["GeminiBridgeDO"] }
   ],
 
-  "observability": { "enabled": true }
+  // Observability is OFF deliberately. Workers Logs captures and retains an
+  // entry per invocation, charged against the same CPU budget that the DO
+  // draws from; the September outage was "Exceeded allowed duration in
+  // Durable Objects free tier". Nothing in this repo reads those logs:
+  // `wrangler tail` gives the same events on demand, and the DO has no
+  // metrics API on the free plan to scrape. Re-enable per-account if a paid
+  // plan makes the retention worth its cost. See docs/TUNING.md.
+  "observability": { "enabled": false }
 }

@@ -26,6 +26,32 @@ import {
 // tests/version-consistency.test.mjs fails the build if any of them drift.
 const WORKER_VERSION = "4.4.3";
 
+// ─── Verbose logging gate ────────────────────────────────────────
+// console.log is not free in Workers: each call formats its arguments,
+// serialises them, and enqueues a log entry, all charged to the same CPU
+// budget that produced "Exceeded allowed duration in Durable Objects free
+// tier". The per-request and per-frame sites below fire on traffic the
+// DO cannot avoid, so they are the ones worth gating.
+//
+// Errors and warnings are deliberately NOT gated. They are rare, and
+// they are the signal that matters when something is actually wrong —
+// a gate that silenced them would trade a real diagnostic for a
+// millisecond.
+//
+// Set BRIDGE_VERBOSE=1 to restore full logging when debugging:
+//   wrangler deploy --var BRIDGE_VERBOSE:1
+//   (or add "vars": { "BRIDGE_VERBOSE": "1" } to wrangler.toml locally)
+const VERBOSE = (typeof BRIDGE_VERBOSE !== "undefined" && BRIDGE_VERBOSE === "1")
+  || (typeof process !== "undefined" && process.env && process.env.BRIDGE_VERBOSE === "1");
+
+/**
+ * Log only when verbose mode is on. No-op otherwise, and the arguments
+ * are not evaluated when it returns early.
+ */
+function vlog(...args) {
+  if (VERBOSE) console.log(...args);
+}
+
 // Characters encodable with WinAnsi (CP1252) standard PDF fonts.
 const WINANSI_EXTRA_CHARS = new Set([
   0x20AC, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030,
@@ -380,7 +406,7 @@ export class GeminiBridgeDO extends DurableObject {
     // If there's an existing connection for this instance ID, close it
     // (same instance always allows reconnect — replaces old connection)
     if (existing) {
-      console.log(`[Bridge DO] Instance ${instanceId} reconnecting — replacing existing connection.`);
+      vlog(`[Bridge DO] Instance ${instanceId} reconnecting — replacing existing connection.`);
       try { existing.socket.close(1000, "Replaced by reconnect"); } catch (e) {}
       this.activeConnections.delete(instanceId);
     }
@@ -390,7 +416,7 @@ export class GeminiBridgeDO extends DurableObject {
     for (const [otherId, state] of this.activeConnections.entries()) {
       const idleTime = now - state.lastActivityAt;
       if (idleTime > this.STALE_CONNECTION_TIMEOUT_MS) {
-        console.log(`[Bridge DO] Evicting stale connection for instance ${otherId} (idle ${Math.round(idleTime/1000)}s > 45s).`);
+        vlog(`[Bridge DO] Evicting stale connection for instance ${otherId} (idle ${Math.round(idleTime/1000)}s > 45s).`);
         try { state.socket.close(1000, "Stale connection evicted"); } catch (e) {}
         this.activeConnections.delete(otherId);
       }
@@ -409,7 +435,7 @@ export class GeminiBridgeDO extends DurableObject {
     };
 
     this.activeConnections.set(instanceId, connectionState);
-    console.log(`[Bridge DO] Recorded connection for instance ${instanceId}, epoch ${this.epochCounter}, total connections: ${this.activeConnections.size}`);
+    vlog(`[Bridge DO] Recorded connection for instance ${instanceId}, epoch ${this.epochCounter}, total connections: ${this.activeConnections.size}`);
 
     return connectionState;
   }
@@ -449,7 +475,7 @@ export class GeminiBridgeDO extends DurableObject {
     const wasPresent = this.activeConnections.has(instanceId);
     this.activeConnections.delete(instanceId);
     if (wasPresent) {
-      console.log(`[Bridge DO] Removed connection for instance ${instanceId}. Remaining: ${this.activeConnections.size}`);
+      vlog(`[Bridge DO] Removed connection for instance ${instanceId}. Remaining: ${this.activeConnections.size}`);
     }
     return wasPresent;
   }
@@ -574,6 +600,13 @@ export class GeminiBridgeDO extends DurableObject {
    * 1,440/day for the overwhelmingly common case of a connected but unused
    * bridge. The stale threshold is unchanged, so eviction still happens
    * within STALE_SOCKET_IDLE_MS; only the granularity of detection coarsens.
+   *
+   * The trade-off, stated plainly: with a 120s alarm and a 45s stale
+   * threshold, a dead socket is now reaped after 120-165s rather than
+   * 45-60s. Nothing user-visible depends on that latency — a dead socket
+   * produces no traffic either way, and the 409 guard on the upgrade path
+   * runs its own inline staleness check, so a new connection never waits
+   //  on the alarm. The alarm is a memory-hygiene sweep, not a gate.
    */
   scheduleAlarm() {
     if (typeof this.ctx === "undefined" || this.ctx === null) return;
@@ -598,7 +631,7 @@ export class GeminiBridgeDO extends DurableObject {
   // hit Guard 2 and receive 409.
   static STALE_SOCKET_IDLE_MS = 45000; // 45 seconds
   static RUN_ALARM_INTERVAL_MS = 15000; // 15s while work is in flight
-  static IDLE_ALARM_INTERVAL_MS = 60000; // 60s when only holding a connection
+  static IDLE_ALARM_INTERVAL_MS = 120000; // 120s when only holding a connection
 
   /**
    * RunAlarm: periodic staleness check for active WebSocket connections.
@@ -638,7 +671,7 @@ export class GeminiBridgeDO extends DurableObject {
     for (const [instanceId, state] of this.activeConnections.entries()) {
       const idleMs = now - state.lastActivityAt;
       if (idleMs > GeminiBridgeDO.STALE_SOCKET_IDLE_MS) {
-        console.log(`[Bridge DO] Stale socket detected for instance ${instanceId} (idle ${Math.round(idleMs / 1000)}s > ${GeminiBridgeDO.STALE_SOCKET_IDLE_MS / 1000}s). Closing and allowing reconnection.`);
+        vlog(`[Bridge DO] Stale socket detected for instance ${instanceId} (idle ${Math.round(idleMs / 1000)}s > ${GeminiBridgeDO.STALE_SOCKET_IDLE_MS / 1000}s). Closing and allowing reconnection.`);
         try {
           state.socket.close(1000, "Stale socket cleanup: idle timeout exceeded");
         } catch (e) {
@@ -651,7 +684,7 @@ export class GeminiBridgeDO extends DurableObject {
             handler({ type: "STREAM_ERROR", error: "Stale socket cleaned up", code: "stale_socket_cleanup" });
           } catch (e) {}
         }
-        console.log(`[Bridge DO] Stale socket cleanup complete for instance ${instanceId}. Remaining connections: ${this.activeConnections.size}`);
+        vlog(`[Bridge DO] Stale socket cleanup complete for instance ${instanceId}. Remaining connections: ${this.activeConnections.size}`);
       }
     }
 
@@ -686,7 +719,7 @@ export class GeminiBridgeDO extends DurableObject {
    */
   async handleScopeSwitchFromExtension(msg) {
     const { requestId, scope: targetScope } = msg;
-    console.log(`[Bridge DO] Received SCOPE_SWITCH from extension: ${this.currentScope} -> ${targetScope} (req: ${requestId})`);
+    vlog(`[Bridge DO] Received SCOPE_SWITCH from extension: ${this.currentScope} -> ${targetScope} (req: ${requestId})`);
     
     // Validate the target scope
     const validatedScope = this.resolveScopeInput(targetScope);
@@ -705,7 +738,7 @@ export class GeminiBridgeDO extends DurableObject {
     
     // If already at the target scope, confirm immediately
     if (this.currentScope === validatedScope) {
-      console.log(`[Bridge DO] Already at scope ${validatedScope}, confirming`);
+      vlog(`[Bridge DO] Already at scope ${validatedScope}, confirming`);
       if (this.activeSocket && this.activeSocket.readyState === 1) {
         this.activeSocket.send(JSON.stringify({
           type: "SCOPE_READY",
@@ -733,7 +766,7 @@ export class GeminiBridgeDO extends DurableObject {
           scope: validatedScope,
           timestamp: Date.now()
         }));
-        console.log(`[Bridge DO] Forwarded SCOPE_SWITCH to extension for scope: ${validatedScope}`);
+        vlog(`[Bridge DO] Forwarded SCOPE_SWITCH to extension for scope: ${validatedScope}`);
       } catch (e) {
         console.error("[Bridge DO] Failed to send SCOPE_SWITCH to extension:", e);
       }
@@ -770,7 +803,7 @@ export class GeminiBridgeDO extends DurableObject {
       return { scope: validatedScope, confirmed: true };
     }
     
-    console.log(`[Bridge DO] Requesting scope switch: ${this.currentScope} -> ${validatedScope}`);
+    vlog(`[Bridge DO] Requesting scope switch: ${this.currentScope} -> ${validatedScope}`);
     
     // Set up timeout for scope switch
     const scopeSwitchPromise = new Promise((resolve, reject) => {
@@ -904,7 +937,7 @@ export class GeminiBridgeDO extends DurableObject {
    */
   registerScopeHandler(pattern, handler) {
     this.scopeHandlers.set(pattern, handler);
-    console.log(`[ScopeRouter] Registered handler for pattern "${pattern}"`);
+    vlog(`[ScopeRouter] Registered handler for pattern "${pattern}"`);
   }
 
   /**
@@ -964,7 +997,7 @@ export class GeminiBridgeDO extends DurableObject {
       };
       byConn.set(canonical, session);
       this.connectionOwner.set(canonical, connId);
-      console.log(`[ScopeRouter] Subscribed conn=${connId} scope=${canonical} session=${id}`);
+      vlog(`[ScopeRouter] Subscribed conn=${connId} scope=${canonical} session=${id}`);
     } else {
       if (opts.params) session.params = opts.params;
       if (opts.sessionId && !session.sessionId) session.sessionId = opts.sessionId;
@@ -995,7 +1028,7 @@ export class GeminiBridgeDO extends DurableObject {
       this.scopeSessions.delete(connId);
     }
 
-    console.log(`[ScopeRouter] Unsubscribed conn=${connId} scope=${canonical} session=${session.sessionId}`);
+    vlog(`[ScopeRouter] Unsubscribed conn=${connId} scope=${canonical} session=${session.sessionId}`);
     if (typeof session.onUnsubscribe === 'function') {
       try { session.onUnsubscribe(session); } catch (e) {
         console.error(`[ScopeRouter] onUnsubscribe hook threw for ${canonical}:`, e);
@@ -1034,7 +1067,7 @@ export class GeminiBridgeDO extends DurableObject {
       removed++;
     }
     this.scopeSessions.delete(connId);
-    console.log(`[ScopeRouter] Removed ${removed} scope session(s) for conn=${connId}`);
+    vlog(`[ScopeRouter] Removed ${removed} scope session(s) for conn=${connId}`);
     return removed;
   }
 
@@ -1094,7 +1127,7 @@ export class GeminiBridgeDO extends DurableObject {
         pruned++;
       }
     }
-    if (pruned > 0) console.log(`[ScopeRouter] Pruned ${pruned} stale scope activity entries`);
+    if (pruned > 0) vlog(`[ScopeRouter] Pruned ${pruned} stale scope activity entries`);
     return pruned;
   }
 
@@ -1721,7 +1754,7 @@ export class GeminiBridgeDO extends DurableObject {
 
       // Same instanceId always allows reconnect (replaces old connection)
       if (existingConnection) {
-        console.log(`[Bridge DO] Instance ${instanceId} reconnecting — replacing existing connection (epoch ${existingConnection.epoch}).`);
+        vlog(`[Bridge DO] Instance ${instanceId} reconnecting — replacing existing connection (epoch ${existingConnection.epoch}).`);
         // Close old connection for this instance
         try { existingConnection.socket.close(1000, "Replaced by reconnect"); } catch (e) {}
         this.activeConnections.delete(instanceId);
@@ -1735,7 +1768,7 @@ export class GeminiBridgeDO extends DurableObject {
         if (otherId === instanceId) continue;
         const idleTime = Date.now() - state.lastActivityAt;
         if (idleTime > this.STALE_CONNECTION_TIMEOUT_MS) {
-          console.log(`[Bridge DO] Evicting stale connection for instance ${otherId} (idle ${Math.round(idleTime/1000)}s > 45s) to allow new instance ${instanceId}.`);
+          vlog(`[Bridge DO] Evicting stale connection for instance ${otherId} (idle ${Math.round(idleTime/1000)}s > 45s) to allow new instance ${instanceId}.`);
           try { state.socket.close(1000, "Stale connection evicted"); } catch (e) {}
           this.activeConnections.delete(otherId);
           staleConnectionEvicted = true;
@@ -1781,7 +1814,7 @@ export class GeminiBridgeDO extends DurableObject {
       this.protocolVersion = 0;
       this.socketLostAt = null;
 
-      console.log(`[Bridge DO] Chrome Extension connected via WebSocket. Instance: ${instanceId}, Epoch: ${connectionState.epoch}`);
+      vlog(`[Bridge DO] Chrome Extension connected via WebSocket. Instance: ${instanceId}, Epoch: ${connectionState.epoch}`);
 
       // Update server message handler to track activity per instance
       server.addEventListener("message", (event) => {
@@ -1824,11 +1857,11 @@ export class GeminiBridgeDO extends DurableObject {
               this.currentScope = null;
             }
             this.replaceModelCatalog(msg);
-            console.log(`[Bridge DO] Synced from Web: Model=${this.activeBrowserModel}, Thinking=${this.extendedThinkingActive}, DiscoveredCount=${this.dynamicModels ? this.dynamicModels.length : 0}`);
+            vlog(`[Bridge DO] Synced from Web: Model=${this.activeBrowserModel}, Thinking=${this.extendedThinkingActive}, DiscoveredCount=${this.dynamicModels ? this.dynamicModels.length : 0}`);
           } else if (msg.type === "MODEL_UPDATED") {
             if (msg.activeModel) this.activeBrowserModel = msg.activeModel;
             if (msg.extendedThinking !== undefined) this.extendedThinkingActive = msg.extendedThinking;
-            console.log(`[Bridge DO] Model Updated from UI: Model=${this.activeBrowserModel}, Thinking=${this.extendedThinkingActive}`);
+            vlog(`[Bridge DO] Model Updated from UI: Model=${this.activeBrowserModel}, Thinking=${this.extendedThinkingActive}`);
           } else if (msg.type === "PONG") {
             // Heartbeat pong received - already recorded via touchConnection
           } else if (msg.type === "SCOPE_SWITCH") {
@@ -1842,7 +1875,7 @@ export class GeminiBridgeDO extends DurableObject {
             // Phase 4: Extension confirmed scope switch is complete
             if (msg.scope) {
               this.currentScope = msg.scope;
-              console.log(`[Bridge DO] Scope confirmed: ${msg.scope} (requestId: ${msg.requestId || 'N/A'})`);
+              vlog(`[Bridge DO] Scope confirmed: ${msg.scope} (requestId: ${msg.requestId || 'N/A'})`);
               // Resolve any pending scope switch
               if (this.pendingScopeSwitch && this.pendingScopeSwitch.requestId === msg.requestId) {
                 clearTimeout(this.pendingScopeSwitch.timer);
@@ -1879,7 +1912,7 @@ export class GeminiBridgeDO extends DurableObject {
         const current = this.activeConnections.get(instanceId);
         const stillOwner = !current || current.socket === server;
         if (!stillOwner) {
-          console.log(`[Bridge DO] Ignoring close of replaced socket for instance ${instanceId} (a newer connection owns the slot).`);
+          vlog(`[Bridge DO] Ignoring close of replaced socket for instance ${instanceId} (a newer connection owns the slot).`);
           return;
         }
         // Remove connection for this instance
@@ -1943,7 +1976,7 @@ export class GeminiBridgeDO extends DurableObject {
         evicted.push(instanceId);
       }
       this.activeConnections.clear();
-      console.log(`[Bridge DO] Admin reset: evicted ${evicted.length} connection(s): ${evicted.join(", ")}`);
+      vlog(`[Bridge DO] Admin reset: evicted ${evicted.length} connection(s): ${evicted.join(", ")}`);
       return new Response(JSON.stringify({ ok: true, evicted, remainingConnections: 0 }), {
         status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
