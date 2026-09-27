@@ -150,6 +150,57 @@ function computeBackoff(attempt, base = 1000, max = 30000, rnd = Math.random) {
  */
 export const CLIENT_STALE_SOCKET_IDLE_MS = 180000;
 
+/**
+ * Mirror of the DO's stale-connection window
+ * (this.STALE_CONNECTION_TIMEOUT_MS in cloudflare-worker/src/index.js, which is
+ * what isEvictable() and the 409 guard on the upgrade path actually read).
+ *
+ * This CANNOT be a shared import. The extension is not bundled: scripts/
+ * build-extension.py copies extension-cloudflare/ verbatim into dist/extension/
+ * and scripts/zip-extension.py packages that directory, so background.js can
+ * only import files that live inside extension-cloudflare/. The worker is built
+ * by wrangler from cloudflare-worker/src/. There is no common root both builds
+ * can reach, so the value is duplicated deliberately and pinned by a test —
+ * tests/liveness.test.mjs parses the worker source and fails if the two ever
+ * disagree. Treat this constant and the worker one as a single logical
+ * constant with a build-system-imposed seam.
+ */
+export const DO_STALE_CONNECTION_TIMEOUT_MS = 180000;
+
+/**
+ * How long the PONG grace lets an unanswered keepalive linger before the DO
+ * counts it as missed (PONG_GRACE_MS in cloudflare-worker/src/liveness.js).
+ */
+export const DO_PONG_GRACE_MS = 30000;
+
+/**
+ * KAN-162: how long to wait after a 409 before retrying with a fresh identity.
+ *
+ * Was a hardcoded 50_000, justified by a comment claiming the DO had a
+ * "45-second stale-connection window (+5s grace)". That was already true only
+ * of a raw-idle heuristic the server no longer uses, and since KAN-161 the DO
+ * will not evict a prior instance until it has been idle for
+ * DO_STALE_CONNECTION_TIMEOUT_MS (180s) AND has failed to answer a keepalive
+ * PING for longer than DO_PONG_GRACE_MS (30s) — see isEvictable() in
+ * cloudflare-worker/src/liveness.js, called from the 409 guard at
+ * cloudflare-worker/src/index.js.
+ *
+ * A retry at 50s therefore lands while the previous connection is still
+ * healthy-looking to the DO, so the guard re-rejects with another 409. That
+ * repeats once per retry for roughly the whole 180s window: the 409 path was
+ * self-defeating, and the stale comment actively misdescribed the server.
+ *
+ * The wait is derived, not typed, so it cannot fall behind the server again:
+ *   180s stale threshold + 30s PONG grace + 30s margin.
+ * The margin absorbs the phase of the 120s idle alarm: the PING that proves
+ * the old connection dead is only sent on an alarm tick, so without it a retry
+ * could still land inside the PONG grace of a very recent PING. Retrying too
+ * LATE is harmless (one wasted cycle, then the same path succeeds); retrying
+ * too early is the bug this fixes.
+ */
+export const CONFLICT_RETRY_DELAY_MS =
+  DO_STALE_CONNECTION_TIMEOUT_MS + DO_PONG_GRACE_MS + DO_PONG_GRACE_MS;
+
 export class CentralTabCoordinator {
   constructor(storageSession = null) {
     this.sessionStorage = storageSession || (typeof chrome !== "undefined" && chrome.storage?.session ? chrome.storage.session : null);
@@ -543,11 +594,18 @@ export class BridgeSocketManager {
   }
 
   /**
-   * Called on 409 Conflict. Clears the stale instanceId, waits for the DO's
-   * 45-second stale-connection window to elapse (we wait 50s to be safe), then
-   * generates a fresh instanceId and retries. Without this retry the SW would
-   * stay DISCONNECTED forever because `_onConflict` was the only path out of the
-   * 409 branch that did NOT call scheduleReconnect().
+   * Called on 409 Conflict. Clears the stale instanceId, waits for the DO to
+   * have actually released the previous instance's slot, then generates a fresh
+   * instanceId and retries. Without this retry the SW would stay DISCONNECTED
+   * forever because `_onConflict` was the only path out of the 409 branch that
+   * did NOT call scheduleReconnect().
+   *
+   * KAN-162: the wait used to be a hardcoded 50s justified by a "45-second
+   * stale-connection window" that the DO no longer has. The DO now evicts only
+   * after DO_STALE_CONNECTION_TIMEOUT_MS (180s) of idle AND a keepalive PING
+   * left unanswered for DO_PONG_GRACE_MS (30s), so retrying at 50s re-hit a
+   * still-healthy prior connection and earned another 409, over and over, for
+   * the whole 180s window. See CONFLICT_RETRY_DELAY_MS.
    */
   _onConflict() {
     this.reconnectAttempts = 0;
@@ -556,10 +614,9 @@ export class BridgeSocketManager {
     if (sessionStorage) {
       try { sessionStorage.remove([INSTANCE_ID_STORAGE_KEY]); } catch (e) {}
     }
-    // Schedule a reconnect attempt after the DO's 45s stale window (+5s grace).
-    // The state stays DISCONNECTED so checkStaleSocket() / alarms can also
-    // trigger the attempt independently.
-    const CONFLICT_RETRY_DELAY_MS = 50_000;
+    // Wait out the DO's real eviction conditions (stale threshold + PONG grace
+    // + margin), not a guessed 50s. The state stays RECONNECTING so
+    // scheduleReconnect() does not stack a shorter backoff on top of this.
     console.log(`[BridgeSocket] 409 Conflict: will retry with fresh identity in ${CONFLICT_RETRY_DELAY_MS / 1000}s.`);
     if (!this.reconnectTimer) {
       this._state = ConnectionState.RECONNECTING;
