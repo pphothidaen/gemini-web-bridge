@@ -276,7 +276,14 @@ export class GeminiBridgeDO extends DurableObject {
     // that persists across SW restarts and is sent as query param in WS URL.
     this.activeConnections = new Map(); // Map<instanceId, ConnectionState>
     this.epochCounter = 0;              // Monotonically increasing session epoch
-    this.STALE_CONNECTION_TIMEOUT_MS = 45000; // 45s idle threshold for stale connections
+    // 180s, matching STALE_AFTER_MS in src/liveness.js. This must stay ABOVE
+    // IDLE_ALARM_INTERVAL_MS (120s) plus a margin: the keepalive only PINGs once
+    // per alarm tick, so a healthy idle connection is always past a 45s
+    // threshold when the sweep runs, and the raw-idle fallback then swept live
+    // sockets. The alarm is a memory-hygiene sweep, not a gate — the 409 guard on
+    // the upgrade path runs its own inline check, so reaping a genuinely dead
+    // socket at 180-300s instead of 45-60s is not user-visible.
+    this.STALE_CONNECTION_TIMEOUT_MS = 180000; // 180s idle threshold for stale connections
 
     this.resetModelCatalog();
 
@@ -610,8 +617,8 @@ export class GeminiBridgeDO extends DurableObject {
    * bridge. The stale threshold is unchanged, so eviction still happens
    * within STALE_SOCKET_IDLE_MS; only the granularity of detection coarsens.
    *
-   * The trade-off, stated plainly: with a 120s alarm and a 45s stale
-   * threshold, a dead socket is now reaped after 120-165s rather than
+   * The trade-off, stated plainly: with a 120s alarm and a 180s stale
+   * threshold, a dead socket is now reaped after 180-300s rather than
    * 45-60s. Nothing user-visible depends on that latency — a dead socket
    * produces no traffic either way, and the 409 guard on the upgrade path
    * runs its own inline staleness check, so a new connection never waits
@@ -632,13 +639,17 @@ export class GeminiBridgeDO extends DurableObject {
     this.ctx.alarm = Math.max(1, Math.round(ms / 1000));
   }
 
-  // TTL-based Stale Socket Cleanup (Phase 2)
-  // Configuration: if a socket is idle > 45s, it's considered stale and will be
-  // closed. The alarm() method detects and cleans up stale sockets.
-  // This prevents server-side sockets from lingering after client SW termination
-  // without a close frame, which would otherwise cause reconnection attempts to
-  // hit Guard 2 and receive 409.
-  static STALE_SOCKET_IDLE_MS = 45000; // 45 seconds
+  // Liveness thresholds. See src/liveness.js for the rules these feed.
+  //
+  // KAN-161: STALE_SOCKET_IDLE_MS was 45000 while IDLE_ALARM_INTERVAL_MS was
+  // 120000 — the keepalive only PINGs once per alarm tick, so a healthy idle
+  // connection is always past 45s by the time the sweep runs and the raw-idle
+  // fallback could not tell "quiet but answering" from "dead". That is what made
+  // the lease flap. The invariant is now STALE_SOCKET_IDLE_MS > IDLE_ALARM_INTERVAL_MS
+  // with margin, and the eviction code reads the LIVE value from
+  // STALE_AFTER_MS (liveness.js) / this.STALE_CONNECTION_TIMEOUT_MS rather than
+  // from this static, so the two can no longer drift apart silently again.
+  static STALE_SOCKET_IDLE_MS = 180000; // 180s — must exceed the alarm interval
   static RUN_ALARM_INTERVAL_MS = 15000; // 15s while work is in flight
   static IDLE_ALARM_INTERVAL_MS = 120000; // 120s when only holding a connection
   // Minimum gap between SSE keepalive writes to a single MCP session. The
@@ -1809,7 +1820,7 @@ export class GeminiBridgeDO extends DurableObject {
       // Check for unresponsive connections from OTHER instance IDs.
       // A connection from a different instanceId is only allowed in if the
       // existing one failed to answer our keepalive — a connection that answers
-      // the PING is healthy even when it has been quiet past the 45s threshold.
+      // the PING is healthy even when it has been quiet past the stale threshold.
       // See src/liveness.js for why raw idle time was the wrong criterion.
       let staleConnectionEvicted = false;
       const now = Date.now();
@@ -1993,7 +2004,7 @@ export class GeminiBridgeDO extends DurableObject {
       } catch (err) {
         // Roll back so a failed upgrade can never leave a recorded connection
         // behind (a zombie entry blocks every other instance with 409 until the
-        // 45s stale window elapses).
+        // stale window elapses).
         console.error("[Bridge DO] WebSocket upgrade rejected by runtime — rolling back connection:", err);
         try { this.removeConnection(instanceId); } catch (e) {}
         try { server.close(1011, "Upgrade failed"); } catch (e) {}
@@ -2010,7 +2021,7 @@ export class GeminiBridgeDO extends DurableObject {
     // ─── Emergency connection reset ───────────────────────────────────────────
     // POST /bridge/reset?token=<bridge_token>
     // Force-evicts ALL active connections from the DO so a stuck 409 loop can be
-    // broken without waiting for the 45s RunAlarm TTL.
+    // broken without waiting for the stale-connection TTL.
     if (url.pathname === "/bridge/reset" && request.method === "POST") {
       const supplied = url.searchParams.get("token");
       if (!supplied || supplied !== BRIDGE_SECRET) {

@@ -14,8 +14,18 @@
 // it been quiet". Both predicates are pure so they can be unit tested without
 // the workers runtime.
 
-/** Idle time after which a connection is suspect — but only if it also missed a keepalive. */
-export const STALE_AFTER_MS = 45000;
+/**
+ * Idle time after which a connection is suspect — but only if it also missed a
+ * keepalive.
+ *
+ * 180s, not 45s, and the margin over IDLE_ALARM_INTERVAL_MS (120s) is the whole
+ * point: the keepalive only PINGs once per alarm tick, so a healthy connection
+ * is ALWAYS idle past any threshold below ~120s when the sweep runs. At 45s the
+ * raw-idle fallback could not distinguish "quiet but answering" from "dead", and
+ * on a DO that has just accepted a connection the never-probed branch could
+ * evict a socket that was merely younger than one alarm cycle.
+ */
+export const STALE_AFTER_MS = 180000;
 
 /**
  * How long a connection may take to answer a PING before it counts as missed.

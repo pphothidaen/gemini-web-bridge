@@ -47,19 +47,43 @@ chosen from actual state:
 Constants live in `cloudflare-worker/src/index.js`:
 
 ```js
-static STALE_SOCKET_IDLE_MS      = 45000;   // evict a dead socket after this
+static STALE_SOCKET_IDLE_MS      = 180000;   // evict a dead socket after this
 static RUN_ALARM_INTERVAL_MS     = 15000;   // fast cadence, work in flight
 static IDLE_ALARM_INTERVAL_MS    = 120000;  // slow cadence, idle
 ```
 
-**The trade-off, stated plainly.** A 120 s alarm against a 45 s stale
-threshold means a dead socket is reaped after 120–165 s rather than
-45–60 s. Nothing user-visible depends on that latency:
+### The invariant: stale threshold > alarm interval
+
+`STALE_SOCKET_IDLE_MS` **must stay above `IDLE_ALARM_INTERVAL_MS` plus a
+margin.** The keepalive only PINGs once per alarm tick, so a healthy but
+idle connection is *always* past a threshold below ~120 s by the time the
+sweep runs. A 45 s threshold against a 120 s alarm is not a conservative
+setting — it is a contradiction: raw idle time cannot distinguish "quiet
+but answering" from "dead", so live sockets were swept and the lease
+flapped roughly every two minutes. This bit production on 2026-09-27
+(`KAN-161`).
+
+The margin is 60 s (180 − 120), which is what lets the raw-idle fallback
+stay meaningful for connections the keepalive never got to probe.
+
+**The trade-off, stated plainly.** With a 120 s alarm and a 180 s stale
+threshold a dead socket is reaped after 180–300 s rather than 45–60 s.
+Nothing user-visible depends on that latency:
 
 - A dead socket produces no traffic either way.
 - The 409 conflict guard on the upgrade path runs its own inline
   staleness check, so a reconnecting extension never waits on the alarm.
 - The alarm is a memory-hygiene sweep, not a gate.
+
+The alternative — PINGing every 15–30 s so a healthy connection could
+answer inside a 45 s window — was rejected. It multiplies idle wakeups by
+4–8× (720/day → 2,880–5,760/day) to buy latency that the point above
+shows is not user-visible, and the DO is the exact component that
+exhausted the free tier in the September outage. The threshold is the
+cheaper side of that trade.
+
+`tests/liveness.test.mjs` asserts this ordering directly, so a future
+edit that inverts it fails CI instead of production.
 
 ### Do not remove the PING
 
@@ -204,4 +228,5 @@ Optimisation buys headroom. The plan removes the cliff.
 | `af5ec4f` | Adaptive interval: 15 s busy, 60 s idle. Also fixed `scheduleAlarm` so it re-arms instead of no-op'ing when an alarm is already pending. |
 | `e502a0e` | Idle interval 60 s → 120 s; 23 hot log sites gated behind `vlog()`; observability off. |
 | `27d37f6` | 6-hourly production health probe, failing loudly and filing an issue. |
+| `KAN-161` | Stale threshold 45 s → 180 s, restoring the invariant that it exceeds the 120 s idle alarm. Fixed the ~2-minute lease flap. Alarm cadence unchanged, so wakeups/day are unchanged. |
 | this change | MCP SSE keepalive throttled per session to one write per 30 s. |

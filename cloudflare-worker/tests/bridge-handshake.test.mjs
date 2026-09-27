@@ -219,10 +219,10 @@ test('5. Same instanceId reconnect replaces the old socket (never 409)', async (
   assert.equal(b.activeConnections.get(INSTANCE_A).epoch, 2);
 });
 
-test('6. Stale entry (idle > 45s) is evicted so a new instance can take over', async () => {
+test('6. Stale entry (idle past the threshold) is evicted so a new instance can take over', async () => {
   const b = createBridge();
   await b.fetch(wsRequest(INSTANCE_A));
-  b.activeConnections.get(INSTANCE_A).lastActivityAt = Date.now() - 46_000;
+  b.activeConnections.get(INSTANCE_A).lastActivityAt = Date.now() - (liveness.STALE_AFTER_MS + 5_000);
 
   const res = await b.fetch(wsRequest(INSTANCE_B));
 

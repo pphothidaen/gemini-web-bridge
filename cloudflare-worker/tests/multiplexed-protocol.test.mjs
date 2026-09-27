@@ -701,7 +701,12 @@ test('Reconnect: getActiveConnection returns the reconnected socket', () => {
 // TEST SUITE 5: TTL cleanup of stale scope sessions
 // ═══════════════════════════════════════════════════════════════
 
-test('TTL: isConnectionStale returns true when idle > 45s', () => {
+// A connection older than the stale threshold is "stale" for these tests. Derived
+// from the shipped constant (KAN-161 raised it to 180s) rather than hardcoded, so
+// the suite cannot drift away from the value the DO actually enforces.
+const STALE_AFTER = liveness.STALE_AFTER_MS;
+
+test('TTL: isConnectionStale returns true when idle past the stale threshold', () => {
   const b = createBridge();
   const instanceId = randomUUID();
 
@@ -709,20 +714,37 @@ test('TTL: isConnectionStale returns true when idle > 45s', () => {
   b.recordConnection(instanceId, mockSocket());
 
   // Directly set a stale timestamp (recordConnection resets lastActivityAt to now)
-  b.activeConnections.get(instanceId).lastActivityAt = Date.now() - 50000;
+  b.activeConnections.get(instanceId).lastActivityAt = Date.now() - (STALE_AFTER + 5_000);
 
   assert.equal(b.isConnectionStale(instanceId), true);
 });
 
-test('TTL: isConnectionStale returns false when idle < 45s', () => {
+test('TTL: isConnectionStale returns false when recently active', () => {
   const b = createBridge();
   const instanceId = randomUUID();
 
   b.recordConnection(instanceId, mockSocket());
-  // Set a fresh timestamp (< 45s idle)
-  b.activeConnections.get(instanceId).lastActivityAt = Date.now() - 30000;
+  // Fresh traffic, well inside the threshold
+  b.activeConnections.get(instanceId).lastActivityAt = Date.now() - 30_000;
 
   assert.equal(b.isConnectionStale(instanceId), false);
+});
+
+test('TTL: a healthy idle connection is NOT stale just because the alarm is coarse', () => {
+  // KAN-161: the idle alarm only PINGs every 120s, so a live connection is
+  // routinely idle for longer than the old 45s threshold. Idle time alone must
+  // never condemn a socket that is answering its keepalive.
+  const b = createBridge();
+  const instanceId = randomUUID();
+
+  b.recordConnection(instanceId, mockSocket());
+  const state = b.activeConnections.get(instanceId);
+  state.lastActivityAt = Date.now() - (STALE_AFTER + 60_000);
+  // Answered the most recent PING, and the socket is still OPEN.
+  state.lastPingAt = Date.now() - 1_000;
+  state.lastPongAt = Date.now() - 900;
+
+  assert.equal(b.isConnectionStale(instanceId), false, 'a responsive socket must not be swept as stale');
 });
 
 test('TTL: isConnectionStale returns false for unknown instance', () => {
@@ -752,7 +774,7 @@ test('TTL: recordConnection evicts stale connections from other instances', () =
   // Create stale connection
   b.recordConnection(staleId, mockSocket());
   // Set stale timestamp directly (recordConnection resets to now)
-  b.activeConnections.get(staleId).lastActivityAt = Date.now() - 50000;
+  b.activeConnections.get(staleId).lastActivityAt = Date.now() - (STALE_AFTER + 5_000);
 
   assert.equal(b.activeConnections.has(staleId), true);
 
@@ -770,8 +792,8 @@ test('TTL: activeConnections size reflects only non-stale entries after eviction
   const staleId = randomUUID();
   b.activeConnections.set(staleId, {
     socket: { readyState: 1, send: () => {}, close: () => {} },
-    connectedAt: Date.now() - 60000,
-    lastActivityAt: Date.now() - 60000,
+    connectedAt: Date.now() - (STALE_AFTER + 60_000),
+    lastActivityAt: Date.now() - (STALE_AFTER + 60_000),
     epoch: 1,
     tokens: null,
     scope: null,
@@ -833,7 +855,7 @@ test('InstanceID: different instanceId + stale existing → stale evicted', () =
   // Create stale connection
   b.recordConnection(staleId, mockSocket());
   // Set stale timestamp directly (recordConnection resets to now)
-  b.activeConnections.get(staleId).lastActivityAt = Date.now() - 50000;
+  b.activeConnections.get(staleId).lastActivityAt = Date.now() - (STALE_AFTER + 5_000);
 
   // Fresh connection → should evict stale
   b.recordConnection(freshId, mockSocket());

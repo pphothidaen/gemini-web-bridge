@@ -23,12 +23,32 @@ test('a connection that answered the keepalive is never swept, however long it h
 test('a connection that ignores the keepalive is swept once the grace window passes', () => {
   const state = {
     socket: OPEN,
-    lastActivityAt: NOW - 120_000,
+    // Idle past the stale threshold AND past the keepalive grace: both conditions
+    // are required before eviction, so a dead connection is only reaped once it
+    // has also been quiet for longer than one alarm cycle.
+    lastActivityAt: NOW - (STALE_AFTER_MS + 1),
     lastPingAt: NOW - 45_000,
     lastPongAt: NOW - 200_000
   };
   assert.equal(isKeepaliveMissed(state, NOW), true);
   assert.equal(isEvictable(state, NOW), true, 'an unresponsive connection must still be reaped');
+});
+
+test('a connection that answers the keepalive survives even when very long idle', () => {
+  // The KAN-161 regression: the idle alarm only PINGs every 120s, so a healthy
+  // connection is always past the stale threshold when the sweep runs. It must
+  // not be swept for that reason alone.
+  const state = {
+    socket: OPEN,
+    lastActivityAt: NOW - (STALE_AFTER_MS + 60_000),
+    lastPingAt: NOW - 45_000,
+    lastPongAt: NOW - 44_000
+  };
+  assert.equal(
+    isEvictable(state, NOW),
+    false,
+    'a responsive connection must never be evicted on raw idle time alone'
+  );
 });
 
 test('a socket that is no longer OPEN counts as dead whatever the timestamps say', () => {
@@ -82,5 +102,32 @@ test('the grace window fits inside the idle alarm cadence', () => {
   assert.ok(
     PONG_GRACE_MS < Number(idleAlarm[1]),
     'the PONG grace must be shorter than the idle alarm interval, otherwise a missed keepalive is undetectable'
+  );
+});
+
+test('the stale threshold sits ABOVE the idle alarm interval (the KAN-161 invariant)', () => {
+  // This is the bug that made the production lease flap. The keepalive only PINGs
+  // once per alarm tick, so a healthy idle connection is always past the stale
+  // threshold when the sweep runs. If the threshold is below the alarm interval,
+  // raw-idle time can never distinguish "quiet but answering" from "dead".
+  const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  const idleAlarm = /IDLE_ALARM_INTERVAL_MS\s*=\s*(\d+)/.exec(source);
+  const staleStatic = /STALE_SOCKET_IDLE_MS\s*=\s*(\d+)/.exec(source);
+  const staleInstance = /this\.STALE_CONNECTION_TIMEOUT_MS\s*=\s*(\d+)/.exec(source);
+
+  assert.ok(idleAlarm && staleStatic && staleInstance, 'all three thresholds must still exist');
+  const idle = Number(idleAlarm[1]);
+  assert.ok(
+    Number(staleStatic[1]) > idle,
+    `STALE_SOCKET_IDLE_MS (${staleStatic[1]}) must exceed IDLE_ALARM_INTERVAL_MS (${idle})`
+  );
+  assert.ok(
+    Number(staleInstance[1]) > idle,
+    `STALE_CONNECTION_TIMEOUT_MS (${staleInstance[1]}) must exceed IDLE_ALARM_INTERVAL_MS (${idle}) — this is the value the eviction code actually reads`
+  );
+  assert.equal(
+    Number(staleInstance[1]),
+    STALE_AFTER_MS,
+    'the DO threshold and src/liveness.js STALE_AFTER_MS must not drift apart'
   );
 });
