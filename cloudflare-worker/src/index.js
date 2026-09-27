@@ -659,6 +659,26 @@ export class GeminiBridgeDO extends DurableObject {
                     : GeminiBridgeDO.IDLE_ALARM_INTERVAL_MS;
     // Cloudflare stores the alarm in whole seconds; sub-second would throw.
     this.ctx.alarm = Math.max(1, Math.round(ms / 1000));
+    // KAN-168 diagnostic (TEMPORARY). Reads ctx.alarm straight back after the
+    // assignment, which separates the two possible failures: the assignment not
+    // taking effect at all, versus it taking effect and the runtime never
+    // delivering the callback. On 2026-09-27 the arm log fired repeatedly and
+    // alarm() still never ran, so "the code set it" was never actually
+    // established — only "the code reached the assignment".
+    //
+    // console.warn rather than vlog so this needs no BRIDGE_VERBOSE, and
+    // once-per-instance so leaving it costs one line per DO creation.
+    if (!this._alarmReadbackLogged) {
+      this._alarmReadbackLogged = true;
+      console.warn(
+        `[Bridge DO] ALARM READBACK (once per instance): ` +
+        `set ctx.alarm=${this.ctx.alarm}s (mode=${busy ? "busy" : "idle"}); ` +
+        `read back ctx.alarm=${JSON.stringify(this.ctx.alarm)} ` +
+        `type=${typeof this.ctx.alarm}. ` +
+        'If the read-back is null/undefined the assignment is not taking effect; ' +
+        'if it holds a timestamp the runtime is not delivering the callback.'
+      );
+    }
     // KAN-168 diagnostic. This is the only way to tell an armed alarm from one
     // that was never set, and there was previously no way to see the
     // arm/skip-re-arm decision at all — which is why the cause of the dead
