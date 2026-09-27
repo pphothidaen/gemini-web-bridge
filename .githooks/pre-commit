@@ -30,7 +30,13 @@ OFFENDERS=()
 for file in "${STAGED[@]}"; do
   [[ -f "$file" ]] || continue
 
-  case "${file,,}" in
+  # Lowercase the path portably. ${var,,} is bash 4+; macOS ships bash 3.2 as
+  # /bin/bash, so the previous form threw "bad substitution" and the whole zip
+  # scan below was silently skipped — the exact case that caused the original
+  # incident. tr keeps this working on bash 3.2.
+  lower="$(printf '%s' "$file" | tr '[:upper:]' '[:lower:]')"
+
+  case "$lower" in
     *.zip)
       # A committed zip is the vector that actually caused this incident, and
       # grep cannot see inside it: the members are deflate-compressed. Inflate
