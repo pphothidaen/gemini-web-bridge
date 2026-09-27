@@ -36,6 +36,7 @@ DEFAULT_FILES = [
     ".github/workflows/ci.yml",
     ".github/workflows/cd.yml",
     ".github/workflows/token-rotation.yml",
+    ".github/workflows/keepalive-probe.yml",
 ]
 
 # Contexts that may not appear inside an `if:` condition.

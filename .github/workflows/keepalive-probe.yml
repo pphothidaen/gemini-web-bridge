@@ -1,0 +1,105 @@
+name: Production Health Probe
+
+# Why this exists
+# ---------------
+# The September outage was not a deploy regression. The Durable Object
+# exhausted its free-tier WCET budget and every endpoint began returning
+# Cloudflare error 1101 ("Exceeded allowed duration in Durable Objects free
+# tier"). Nothing in the repo noticed: CI only touches production on a
+# push, so an idle DO could burn its whole daily budget between commits
+# and go unnoticed until a user reported it.
+#
+# The free plan exposes no CPU metric to scrape, so the signal has to be
+# the response itself. A 1101 surfaces as a 5xx from /health within one
+# probe interval, far earlier than a user report.
+#
+# It fails LOUDLY on purpose. A probe that merely recorded the status
+# would be missed in a busy Actions tab, and a silent probe is the same
+# as no probe.
+
+on:
+  schedule:
+    # Every 6 hours. The DO budget resets daily, so a 6h cadence catches an
+    # exhausted budget with at least three more chances to react before
+    # the next reset.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: prod-health-probe
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    name: Probe production /health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Classify the response
+        id: classify
+        env:
+          PROD_URL: ${{ vars.PROD_BASE_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev' }}
+        run: python3 scripts/probe-production.py
+
+      - name: Report
+        if: always()
+        env:
+          CODE: ${{ steps.classify.outputs.code }}
+          DETAIL: ${{ steps.classify.outputs.detail }}
+          PROD_URL: ${{ vars.PROD_BASE_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev' }}
+        run: |
+          set -uo pipefail
+          if [ "$CODE" = "200" ]; then
+            echo "OK  $DETAIL"
+            exit 0
+          fi
+          echo "::error::Production is not serving: $DETAIL"
+          exit 1
+
+      - name: File or update an issue
+        if: always() && steps.classify.outputs.code != '200'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ steps.classify.outputs.code }}
+          DETAIL: ${{ steps.classify.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          TITLE="PRODUCTION DOWN: HTTP $CODE from /health"
+          BODY_FILE=$(mktemp)
+          {
+            echo "Automated probe failed."
+            echo
+            echo "- Probe run: $RUN_URL"
+            echo "- Checked at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- Endpoint: ${{ vars.PROD_BASE_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev' }}/health"
+            echo
+            echo '```'
+            head -c 800 "${{ steps.classify.outputs.body_file }}"
+            echo '```'
+            echo
+            echo "$DETAIL"
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || echo '')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$BODY_FILE" && echo "commented on #$EXISTING"
+          else
+            gh issue create --title "$TITLE" --body-file "$BODY_FILE" && echo "filed a new issue"
+          fi
+
+      - name: Advisory — extension presence
+        if: always()
+        env:
+          BODY_FILE: ${{ steps.classify.outputs.body_file }}
+        run: |
+          set -uo pipefail
+          # Advisory only. No connected extension is a normal overnight and
+          # weekend state; failing on it would train everyone to ignore this
+          # workflow. Recorded because "DO up but idle" and "DO unreachable"
+          # look identical from outside without it.
+          [ -f "$BODY_FILE" ] || exit 0
+          python3 scripts/probe-production.py --advisory "$BODY_FILE" || true
