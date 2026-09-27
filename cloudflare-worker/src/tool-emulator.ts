@@ -177,8 +177,34 @@ export function resolveToolPolicy(request: Request, body: any) {
   const choice = body.tool_choice ?? "auto";
   const forced = typeof choice === "object" && choice?.type === "function" ? choice.function?.name : undefined;
   if (!["auto", "none", "required"].includes(choice) && !forced) throw new Error("Invalid tool_choice");
-  if (forced && !tools.some(t => t.function.name === forced)) throw new Error("Unknown forced tool");
-  if (choice === "required" && !tools.length) throw new Error("tool_choice required needs tools");
+  // --- Gemini-side tool_choice guard (4.3.2 regression fix) ---
+  // Gemini may insist on tool_choice:"required" or a forced tool that the worker
+  // cannot execute (terminal/git).  These get silently filtered by the safety check
+  // above, leaving no tools → the worker would then be forced to emit a tool_call it
+  // cannot honour, which Gemini rejects with HTTP 422 "Incomplete tool call".
+  // The fix: detect this situation here and return a policy that signals "no tools
+  // available for this tool_choice" so the caller (index.js) returns HTTP 400.
+  //
+  // (a) Forced tool that was filtered out (e.g. client forced "terminal" but the
+  //     worker only advertises terminal+read_file; terminal gets filtered).
+  if (forced && !tools.some(t => t.function.name === forced)) {
+    return {
+      tools: [],
+      required: true,
+      choice,
+      forced,
+      error: `tool_choice forced tool cannot be satisfied: ${forced} (not in worker-safe tool set)`,
+    };
+  }
+  // (b) tool_choice:"required" but all advertised tools were filtered out.
+  if (choice === "required" && !tools.length) {
+    return {
+      tools: [],
+      required: true,
+      choice,
+      error: "tool_choice required needs tools (all advertised tools filtered out by worker-safe set)",
+    };
+  }
   return { tools: choice === "none" ? [] : forced ? tools.filter(t => t.function.name === forced) : tools,
     required: choice === "required" || Boolean(forced), parallel: body.parallel_tool_calls !== false };
 }

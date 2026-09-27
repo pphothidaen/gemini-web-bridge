@@ -216,6 +216,7 @@ export class ProtocolDecoder {
 export class GeminiBridgeDO extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
+    this.ctx = ctx;   // DO alarm API requires this reference
     this.env = env;
     this.activeSocket = null;
     this.currentTokens = null;
@@ -295,10 +296,12 @@ export class GeminiBridgeDO extends DurableObject {
       return this.scopeHandlers.get('notebook')(envelope, session, connId);
     });
 
-    // ─── Keepalive Ping Loop
-    this.initKeepalive();
-    // TTL-based Stale Socket Cleanup: periodic alarm to detect and close stale sockets
-    this.RunAlarm();
+    // ─── DO Alarm: Keepalive + Stale Socket Cleanup ───
+    // Uses the native DurableObject alarm API instead of setInterval,
+    // which would keep the DO hot indefinitely and exhaust the free-tier CPU quota.
+    // The alarm fires every 15s while there are active connections/sessions,
+    // and is NOT scheduled when the DO is idle — allowing proper eviction.
+    this.scheduleAlarm();
   }
 
   // ─── Health state (restored for backward compatibility) ───
@@ -552,32 +555,21 @@ export class GeminiBridgeDO extends DurableObject {
     if (changed) this.catalogRevision = crypto.randomUUID();
   }
 
-  initKeepalive() {
-    setInterval(() => {
-      if (this.activeSocket && this.activeSocket.readyState === 1) { // 1 = OPEN
-        try {
-          this.activeSocket.send(JSON.stringify({ type: "PING" }));
-        } catch (e) {
-          console.warn("[Bridge DO] PING send error:", e.message);
-        }
-      }
-      if (this.mcpSessions && this.mcpSessions.size > 0) {
-        for (const [sessionId, session] of this.mcpSessions.entries()) {
-          try {
-            session.writer.write(session.encoder.encode(": keepalive\n\n")).catch(() => {
-              this.mcpSessions.delete(sessionId);
-            });
-          } catch (e) {
-            this.mcpSessions.delete(sessionId);
-          }
-        }
-      }
-    }, 15000);
+  /**
+   * Schedule a DO alarm for keepalive + stale connection cleanup.
+   * Uses the native alarm API instead of setInterval to avoid keeping the
+   * DO hot indefinitely (which exhausts free-tier CPU quota).
+   * See: https://developers.cloudflare.com/durable-objects/learn/alarms/
+   */
+  scheduleAlarm() {
+    if (typeof this.ctx !== "undefined" && this.ctx !== null && this.ctx.alarm === null) {
+      this.ctx.alarm = GeminiBridgeDO.RUN_ALARM_INTERVAL_MS / 1000; // 15 seconds
+    }
   }
 
-  // ─── TTL-based Stale Socket Cleanup (Phase 2) ───
+  // TTL-based Stale Socket Cleanup (Phase 2)
   // Configuration: if a socket is idle > 45s, it's considered stale and will be
-  // closed. RunAlarm() runs every 15s to detect and clean up stale sockets.
+  // closed. The alarm() method runs every 15s to detect and clean up stale sockets.
   // This prevents server-side sockets from lingering after client SW termination
   // without a close frame, which would otherwise cause reconnection attempts to
   // hit Guard 2 and receive 409.
@@ -586,37 +578,63 @@ export class GeminiBridgeDO extends DurableObject {
 
   /**
    * RunAlarm: periodic staleness check for active WebSocket connections.
-   * Runs every 15s via setInterval. If the active socket has been idle
-   * (no messages, pings, or other activity) for > 45s, close it as stale.
+   * Previously ran every 15s via setInterval (which kept the DO hot indefinitely
+   * and exhausted the free-tier CPU quota). Now fires via the native DO alarm API.
+   * If the active socket has been idle (no messages, pings, or other activity)
+   * for > 45s, close it as stale.
    */
-  RunAlarm() {
-    setInterval(() => {
-      const now = Date.now();
-      // Iterate the Phase 3 activeConnections Map directly.
-      // The legacy `this.lastActiveAt` property is never written in Phase 3
-      // (only `state.lastActivityAt` inside each Map entry is updated via
-      // touchConnection()), so the old `this.activeSocket && this.lastActiveAt`
-      // guard always evaluated to falsy — zombies were never evicted.
-      for (const [instanceId, state] of this.activeConnections.entries()) {
-        const idleMs = now - state.lastActivityAt;
-        if (idleMs > GeminiBridgeDO.STALE_SOCKET_IDLE_MS) {
-          console.log(`[Bridge DO] Stale socket detected for instance ${instanceId} (idle ${Math.round(idleMs / 1000)}s > ${GeminiBridgeDO.STALE_SOCKET_IDLE_MS / 1000}s). Closing and allowing reconnection.`);
-          try {
-            state.socket.close(1000, "Stale socket cleanup: idle timeout exceeded");
-          } catch (e) {
-            console.warn("[Bridge DO] Error closing stale socket:", e.message);
-          }
-          this.activeConnections.delete(instanceId);
-          // Notify any in-flight streams that were owned by this instance.
-          for (const handler of this.activeStreams.values()) {
-            try {
-              handler({ type: "STREAM_ERROR", error: "Stale socket cleaned up", code: "stale_socket_cleanup" });
-            } catch (e) {}
-          }
-          console.log(`[Bridge DO] Stale socket cleanup complete for instance ${instanceId}. Remaining connections: ${this.activeConnections.size}`);
+  async alarm() {
+    // ─── 1. Keepalive PING (from former initKeepalive) ───
+    if (this.activeSocket && this.activeSocket.readyState === 1) { // 1 = OPEN
+      try {
+        this.activeSocket.send(JSON.stringify({ type: "PING" }));
+      } catch (e) {
+        console.warn("[Bridge DO] PING send error:", e.message);
+      }
+    }
+    if (this.mcpSessions && this.mcpSessions.size > 0) {
+      for (const [sessionId, session] of this.mcpSessions.entries()) {
+        try {
+          session.writer.write(session.encoder.encode(": keepalive\n\n")).catch(() => {
+            this.mcpSessions.delete(sessionId);
+          });
+        } catch (e) {
+          this.mcpSessions.delete(sessionId);
         }
       }
-    }, GeminiBridgeDO.RUN_ALARM_INTERVAL_MS);
+    }
+
+    // ─── 2. Stale connection cleanup (Phase 3 activeConnections) ───
+    const now = Date.now();
+    for (const [instanceId, state] of this.activeConnections.entries()) {
+      const idleMs = now - state.lastActivityAt;
+      if (idleMs > GeminiBridgeDO.STALE_SOCKET_IDLE_MS) {
+        console.log(`[Bridge DO] Stale socket detected for instance ${instanceId} (idle ${Math.round(idleMs / 1000)}s > ${GeminiBridgeDO.STALE_SOCKET_IDLE_MS / 1000}s). Closing and allowing reconnection.`);
+        try {
+          state.socket.close(1000, "Stale socket cleanup: idle timeout exceeded");
+        } catch (e) {
+          console.warn("[Bridge DO] Error closing stale socket:", e.message);
+        }
+        this.activeConnections.delete(instanceId);
+        // Notify any in-flight streams that were owned by this instance.
+        for (const handler of this.activeStreams.values()) {
+          try {
+            handler({ type: "STREAM_ERROR", error: "Stale socket cleaned up", code: "stale_socket_cleanup" });
+          } catch (e) {}
+        }
+        console.log(`[Bridge DO] Stale socket cleanup complete for instance ${instanceId}. Remaining connections: ${this.activeConnections.size}`);
+      }
+    }
+
+    // ─── 3. Reschedule alarm only if there is still active work ───
+    const hasActiveWork =
+      (this.activeSocket && this.activeSocket.readyState === 1) ||
+      (this.mcpSessions && this.mcpSessions.size > 0) ||
+      this.activeConnections.size > 0;
+
+    if (hasActiveWork) {
+      this.scheduleAlarm();
+    }
   }
 
   /**
@@ -2055,6 +2073,10 @@ export class GeminiBridgeDO extends DurableObject {
           throw new Error("messages must be a non-empty array of chat messages");
         }
         policy = resolveToolPolicy(request, body);
+        if (policy?.error) {
+          return new Response(JSON.stringify({ error: { message: policy.error, type: "invalid_request_error" } }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
       } catch (err) {
         return new Response(JSON.stringify({ error: { message: err.message, type: "invalid_request_error" } }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });

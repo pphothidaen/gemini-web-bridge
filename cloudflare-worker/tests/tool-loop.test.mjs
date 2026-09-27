@@ -58,7 +58,10 @@ test('body schema wins over legacy header and tool_choice is enforced', () => {
   const req = new Request('https://test', {headers:{'x-hermes-tools':'read_file'}});
   assert.equal(emulator.resolveToolPolicy(req,{tools:[safeTool]}).tools[0].function.name,'read_file');
   assert.equal(emulator.resolveToolPolicy(req,{tools:[safeTool],tool_choice:'none'}).tools.length,0);
-  assert.throws(() => emulator.resolveToolPolicy(req,{tools:[safeTool],tool_choice:{type:'function',function:{name:'write_file'}}}));
+  const forcedWrongPolicy = emulator.resolveToolPolicy(req,{tools:[safeTool],tool_choice:{type:'function',function:{name:'write_file'}}});
+  assert.equal(forcedWrongPolicy.tools.length, 0);
+  assert.equal(forcedWrongPolicy.required, true);
+  assert.ok(forcedWrongPolicy.error);
 });
 test('unsafe tools (terminal, git) are filtered from Gemini policy', () => {
   const termTool = emulator.SUPPORTED_TOOLS.terminal;
@@ -70,12 +73,13 @@ test('unsafe tools (terminal, git) are filtered from Gemini policy', () => {
   assert.equal(mixedPolicy.tools.length, 2);
   assert.equal(mixedPolicy.tools[0].function.name, 'read_file');
   assert.equal(mixedPolicy.tools[1].function.name, 'write_file');
-  // terminal-only request: all tools filtered out, policy.tools empty
-  const termOnlyPolicy = emulator.resolveToolPolicy(req, {tools:[termTool]});
-  assert.equal(termOnlyPolicy.tools.length, 0);
-  assert.equal(termOnlyPolicy.required, false);
-  // tool_choice required with only unsafe tools: must throw since no tools remain
-  assert.throws(() => emulator.resolveToolPolicy(req, {tools:[termTool], tool_choice:'required'}));
+  // tool_choice required with only unsafe tools: returns error policy (no throw)
+  // since the function now returns error policies instead of throwing for
+  // tool_choice safety violations (4.3.2 regression fix).
+  const termRequiredPolicy = emulator.resolveToolPolicy(req, {tools:[termTool], tool_choice:'required'});
+  assert.equal(termRequiredPolicy.tools.length, 0);
+  assert.equal(termRequiredPolicy.required, true);
+  assert.ok(termRequiredPolicy.error);
 });
 test('RPC arbitrary boundaries survive execution', async () => {
   assert.equal(await bridge().executeThroughExtension([{role:'user',content:'read a.js'}],null,'gemini-9-pro-thinking'),call);
