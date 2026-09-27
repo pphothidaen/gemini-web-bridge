@@ -17,8 +17,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const WORKER_URL = process.env.WORKER_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev';
-const CF_TOKEN = process.env.CF_TOKEN || '';
-const PROTOCOL_VERSION = 2;
+const CLIENT_API_TOKEN = process.env.CLIENT_API_TOKEN || process.env.CF_TOKEN || '';
+const BRIDGE_AUTH_TOKEN = process.env.BRIDGE_AUTH_TOKEN || '';
+const PROTOCOL_VERSION = 3;
 
 // Every test in this file hits the LIVE worker, and all but /health and the
 // unauthenticated-rejection checks need a valid token. CI does not pass
@@ -34,12 +35,12 @@ const PROTOCOL_VERSION = 2;
 // reports as skipped with a reason, so the summary reflects what actually
 // ran. Set CF_TOKEN (and WORKER_URL to point at the target) to exercise it —
 // the redteam-token-test job already proves both tokens against production.
-const skip = CF_TOKEN ? false : 'CF_TOKEN not set — live-server tests not exercised';
+const skip = (CLIENT_API_TOKEN || BRIDGE_AUTH_TOKEN) ? false : 'No tokens set — live-server tests not exercised';
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function bearerHeader() {
-  return CF_TOKEN ? { 'Authorization': `Bearer ${CF_TOKEN}` } : {};
+  return CLIENT_API_TOKEN ? { 'Authorization': `Bearer ${CLIENT_API_TOKEN}` } : {};
 }
 
 async function fetchJSON(path, options = {}) {
@@ -71,8 +72,11 @@ test('GET / returns dashboard HTML', { skip }, async () => {
 });
 
 test('GET /bridge/auth-check returns ok with valid token', { skip }, async () => {
-  const { status, body } = await fetchJSON('/bridge/auth-check');
-  assert.equal(status, 200);
+  const res = await fetch(`${WORKER_URL}/bridge/auth-check`, {
+    headers: { 'x-bridge-token': BRIDGE_AUTH_TOKEN }
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
   assert.equal(body.ok, true);
   assert.equal(body.protocolVersion, PROTOCOL_VERSION);
 });
@@ -99,7 +103,7 @@ test('GET /v1/models returns model catalog', { skip }, async () => {
 
 test('WebSocket upgrade succeeds with valid subprotocol', { skip }, async () => {
   const wsUrl = WORKER_URL.replace('https://', 'wss://');
-  const token = CF_TOKEN ? `?token=${encodeURIComponent(CF_TOKEN)}` : '';
+  const token = BRIDGE_AUTH_TOKEN ? `?token=${encodeURIComponent(BRIDGE_AUTH_TOKEN)}` : (CLIENT_API_TOKEN ? `?token=${encodeURIComponent(CLIENT_API_TOKEN)}` : '');
   const url = `${wsUrl}/bridge${token}`;
 
   // Use native WebSocket if available (Node 22+), otherwise skip
