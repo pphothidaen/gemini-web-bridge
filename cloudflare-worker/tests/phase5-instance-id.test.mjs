@@ -39,7 +39,14 @@ function connectBridge(instanceId) {
   });
   const url = `${wsUrl}/bridge?${params.toString()}`;
 
-  const ws = new WebSocket(url, ['gemini-bridge-v3']);
+  // No subprotocol is requested, and that is load-bearing. The worker builds
+  // its 101 from a bare WebSocketPair and never echoes
+  // Sec-WebSocket-Protocol (0 occurrences in src/index.js). Per RFC 6455 a
+  // client that offered subprotocols but receives none must fail the
+  // handshake, so requesting one kills every connection here with 1006
+  // before a single assertion runs. Verified by A/B: the same URL returns
+  // 101 with no subprotocol, and 1006 with either v2 or v3.
+  const ws = new WebSocket(url);
 
   const promise = new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -86,7 +93,14 @@ function connectBridgeWithStatus(instanceId) {
   const url = `${wsUrl}/bridge?${params.toString()}`;
 
   return new Promise((resolve) => {
-    const ws = new WebSocket(url, ['gemini-bridge-v3']);
+    // No subprotocol is requested, and that is load-bearing. The worker builds
+  // its 101 from a bare WebSocketPair and never echoes
+  // Sec-WebSocket-Protocol (0 occurrences in src/index.js). Per RFC 6455 a
+  // client that offered subprotocols but receives none must fail the
+  // handshake, so requesting one kills every connection here with 1006
+  // before a single assertion runs. Verified by A/B: the same URL returns
+  // 101 with no subprotocol, and 1006 with either v2 or v3.
+  const ws = new WebSocket(url);
     let resolved = false;
 
     const timeout = setTimeout(() => {
@@ -304,7 +318,14 @@ test('TS-012: 409 Decision Matrix — 5 rows verified', { skip }, async () => {
     const url = `${wsUrl}/bridge?${params.toString()}`;
 
     const result = await new Promise((resolve) => {
-      const ws = new WebSocket(url, ['gemini-bridge-v3']);
+      // No subprotocol is requested, and that is load-bearing. The worker builds
+  // its 101 from a bare WebSocketPair and never echoes
+  // Sec-WebSocket-Protocol (0 occurrences in src/index.js). Per RFC 6455 a
+  // client that offered subprotocols but receives none must fail the
+  // handshake, so requesting one kills every connection here with 1006
+  // before a single assertion runs. Verified by A/B: the same URL returns
+  // 101 with no subprotocol, and 1006 with either v2 or v3.
+  const ws = new WebSocket(url);
       const timeout = setTimeout(() => {
         ws.close();
         resolve({ code: 'timeout', status: 'timeout' });

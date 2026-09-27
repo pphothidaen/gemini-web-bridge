@@ -101,6 +101,19 @@ jobs:
         # status tee's, which is always 0, so a failing suite reported a green
         # build — 9 tests were failing in CI while the job passed. GitHub runs
         # this step under `bash -e`, which does not imply pipefail.
+        #
+        # The live-server tokens are supplied so integration.test.mjs actually
+        # runs instead of skipping. CLIENT_API_TOKEN is the one those tests
+        # authenticate with — CF_TOKEN is a different credential and the
+        # worker rejects it on /v1/models with 401.
+        #
+        # BRIDGE_LIVE_EXTENSION is deliberately NOT set: three of those tests
+        # need a browser extension connected to the DO, which is never true in
+        # CI, and they are gated on that flag so they skip with a reason
+        # rather than failing on infrastructure state.
+        env:
+          CLIENT_API_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
+          BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
         run: |
           set -o pipefail
           node --test 'tests/**/*.test.mjs' 2>&1 | tee test-results.txt
