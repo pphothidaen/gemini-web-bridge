@@ -53,12 +53,17 @@
   }
 
   /**
-   * Computes exponential backoff delay with randomized jitter, capped at maxDelay.
+   * Computes reconnect backoff with full jitter, capped at maxDelay.
+   *
+   * KAN-165: this used to be `min(exponential + floor(rnd() * 1000), maxDelay)`.
+   * Adding jitter on top and then clipping by the cap meant every attempt once
+   * the cap was reached returned exactly maxDelay — the randomness disappeared
+   * precisely when clients were parked in a long outage and synchronised
+   * retries matter most. Sampling the whole window keeps the spread alive.
    */
   function computeBackoff(attempt, baseDelay = INITIAL_BACKOFF_DELAY, maxDelay = MAX_BACKOFF_DELAY, randomFn = Math.random) {
-    const exponential = Math.min(baseDelay * Math.pow(2, Math.max(0, attempt)), maxDelay);
-    const jitter = Math.floor(randomFn() * 1000);
-    return Math.min(exponential + jitter, maxDelay);
+    const ceiling = Math.min(baseDelay * Math.pow(2, Math.max(0, attempt)), maxDelay);
+    return Math.floor(randomFn() * ceiling);
   }
 
   const Settings = {

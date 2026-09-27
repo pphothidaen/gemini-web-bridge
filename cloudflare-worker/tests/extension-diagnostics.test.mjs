@@ -6,7 +6,17 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const Settings = require('../../extension-cloudflare/settings.js');
+import { CONFLICT_RETRY_DELAY_MS, CONFLICT_RETRY_JITTER_MS } from '../../extension-cloudflare/background.js';
+
 const contentSource = fs.readFileSync(new URL('../../extension-cloudflare/content.js', import.meta.url), 'utf8');
+const workerSource = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+
+/** The live value the DO evicts on, not a copy. */
+function workerStaleTimeout() {
+  const m = /this\.STALE_CONNECTION_TIMEOUT_MS\s*=\s*(\d+)/.exec(workerSource);
+  assert.ok(m, 'this.STALE_CONNECTION_TIMEOUT_MS must still exist in src/index.js');
+  return Number(m[1]);
+}
 
 test('shared settings resolver handles defaults, empty tokens, and enforcement modes', () => {
   // Empty / undefined settings
@@ -30,22 +40,44 @@ test('shared settings resolver handles defaults, empty tokens, and enforcement m
   assert.equal(customRes.enforcementMode, 'permissive');
 });
 
-test('exponential backoff with jitter doubles and caps at 30 seconds', () => {
-  // Deterministic randomFn that returns 0.5 (500ms jitter)
-  const mockRandom = () => 0.5;
+test('backoff uses full jitter, so the spread survives the cap', () => {
+  // KAN-165. The old shape was min(exponential + floor(rnd()*1000), max): the
+  // jitter was added on top and then clipped, so every attempt at or past the
+  // cap returned exactly maxDelay and the randomness vanished. These two cases
+  // are the whole point — they are what the old implementation got wrong.
 
-  const delay0 = Settings.computeBackoff(0, 1000, 30000, mockRandom);
-  assert.equal(delay0, 1500); // 1000 + 500
+  // At the cap, a low random value must still produce a delay well under max.
+  const lowRandom = () => 0.1;
+  const capped = Settings.computeBackoff(9, 1000, 30000, lowRandom);
+  assert.equal(capped, 3000, 'a capped attempt must still be randomised, not pinned to max');
 
-  const delay1 = Settings.computeBackoff(1, 1000, 30000, mockRandom);
-  assert.equal(delay1, 2500); // 2000 + 500
+  // And the spread must widen with the delay rather than stay a flat 999ms.
+  const at1 = Settings.computeBackoff(1, 1000, 30000, () => 0.999);
+  const at4 = Settings.computeBackoff(4, 1000, 30000, () => 0.999);
+  assert.equal(at1, 1998);
+  assert.equal(at4, 15984);
+  assert.ok(at4 > at1 * 5, 'spread must grow with the delay, not stay fixed');
+});
 
-  const delay2 = Settings.computeBackoff(2, 1000, 30000, mockRandom);
-  assert.equal(delay2, 4500); // 4000 + 500
+test('backoff never exceeds the cap and never returns a negative delay', () => {
+  for (const rnd of [() => 0, () => 0.5, () => 0.999999]) {
+    for (let attempt = 0; attempt <= 12; attempt++) {
+      const d = Settings.computeBackoff(attempt, 1000, 30000, rnd);
+      assert.ok(d >= 0, `attempt ${attempt} produced a negative delay`);
+      assert.ok(d <= 30000, `attempt ${attempt} exceeded the cap: ${d}`);
+    }
+  }
+});
 
-  // High attempt must cap at 30,000ms max
-  const delay10 = Settings.computeBackoff(10, 1000, 30000, mockRandom);
-  assert.equal(delay10, 30000);
+test('the 409 conflict retry is jittered rather than a flat timer', () => {
+  // CONFLICT_RETRY_DELAY_MS is a fixed 4 minutes, so an unjittered retry made
+  // every client that lost the same slot come back in lockstep. The jitter is
+  // additive, so it must never pull the retry earlier than the delay itself.
+  assert.ok(CONFLICT_RETRY_JITTER_MS > 0, 'the 409 retry must carry some jitter');
+  assert.ok(
+    CONFLICT_RETRY_DELAY_MS >= workerStaleTimeout(),
+    'jitter is additive, so the base delay must still outlast the DO stale threshold'
+  );
 });
 
 test('invalid token halts reconnection until settings change or manual retry', async () => {
