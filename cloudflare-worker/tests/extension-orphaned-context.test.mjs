@@ -12,14 +12,17 @@ const source = fs.readFileSync(new URL('../../extension-cloudflare/content.js', 
  *   {} (no id)                      -> orphaned context (extension reloaded)
  *   { id, connect() throws }        -> live context whose background port fails
  */
-function setupVm({ runtime } = {}) {
+function setupVm({ runtime, extraGlobals = {} } = {}) {
   const sockets = [];
   const timers = [];
   const pills = [];
 
   const node = () => {
+    const listeners = {};
     const el = { innerText: '', textContent: '', style: {}, classList: { contains: () => false },
-      getAttribute: () => null, querySelector: () => null, addEventListener() {}, remove() {},
+      getAttribute: () => null, querySelector: () => null, remove() {},
+      listeners,
+      addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
       _html: '' };
     el.innerHTML = '';
     Object.defineProperty(el, 'innerHTML', {
@@ -64,10 +67,23 @@ function setupVm({ runtime } = {}) {
     WebSocket: WebSocketMock,
     setTimeout: (fn) => { timers.push(fn); return timers.length; },
     clearTimeout() {},
+    ...extraGlobals,
     chrome
   });
 
-  return { sockets, timers, pills };
+  return {
+    sockets,
+    timers,
+    pills,
+    // The status pill is the only element the content script attaches a click
+    // handler to; find it the same way the page would and fire that handler.
+    clickPill() {
+      const pill = pills.find(p => p.listeners && p.listeners.click && p.listeners.click.length);
+      if (!pill) return false;
+      pill.listeners.click.forEach(fn => fn());
+      return true;
+    }
+  };
 }
 
 // Drain the microtask queue, not just one tick: init awaits chrome.storage
@@ -106,6 +122,26 @@ test('a live extension keeps the direct WebSocket disabled and retries the backg
     'direct WebSocket stays disabled while the extension context is alive');
   assert.ok(timers.length > 0,
     'a broken background port is retried rather than replaced by a direct WebSocket');
+});
+
+test('clicking the reload hint on an orphaned tab reloads the page instead of retrying', async () => {
+  let reloads = 0;
+  const env = setupVm({
+    runtime: {
+      getURL: p => p,
+      connect: () => { throw new Error('Extension context invalidated'); }
+    },
+    extraGlobals: {
+      location: { pathname: '/app', reload: () => { reloads++; } }
+    }
+  });
+  await settle();
+
+  assert.equal(reloads, 0, 'nothing reloads on its own');
+  assert.equal(env.clickPill(), true, 'the status pill must be clickable');
+
+  assert.equal(reloads, 1, 'a page reload is the only cure for an orphaned context');
+  assert.equal(env.sockets.length, 0, 'and clicking it must still never open a WebSocket');
 });
 
 test('without an extension context the direct WebSocket fallback still works', async () => {

@@ -286,6 +286,17 @@
       });
 
       indicatorEl.addEventListener("click", () => {
+        // An orphaned content script can never reconnect — its context is gone,
+        // so ensureBridgeConnected() would only bounce into the refusal guard.
+        // Reloading the page is the one cure, so make the pill do that.
+        if (typeof chrome !== "undefined" && chrome.runtime && !chrome.runtime.id) {
+          console.log("[Bridge] 🔄 Orphaned context — reloading the tab to recover");
+          if (typeof location !== "undefined" && typeof location.reload === "function") {
+            location.reload();
+          }
+          return;
+        }
+
         if (!isLeaderTab && coordinatorPort) {
           console.log("[Bridge] 🔄 User clicked standby indicator: claiming leadership via background coordinator");
           coordinatorPort.postMessage({ type: "CLAIM_LEADERSHIP" });
