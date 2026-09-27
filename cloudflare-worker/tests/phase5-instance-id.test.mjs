@@ -54,6 +54,27 @@ async function detectBusyLease() {
   }
 }
 
+/**
+ * Wait until the single-instance connection lease is actually free.
+ *
+ * A `close()` from a test socket is fire-and-forget: the Durable Object keeps
+ * that instance registered until it observes the close (or the 45s stale
+ * reaper fires). A fixed sleep is therefore unreliable — it flaked between
+ * TS-005, TS-007 and TS-012 depending on which one happened to start while a
+ * previous socket was still registered. Poll the real state instead.
+ */
+async function waitForFreeLease(timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    leaseTaken = false;
+    leaseDetail = '';
+    await detectBusyLease();
+    if (!leaseTaken) return true;
+    if (Date.now() > deadline) return false;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────
 
 /**
@@ -138,10 +159,10 @@ async function probeUpgradeStatus(instanceId) {
   return { status: res.status, body: await res.text() };
 }
 
-function connectBridgeWithStatus(instanceId) {
+function connectBridgeWithStatus(instanceId, tokenOverride) {
   const wsUrl = WORKER_URL.replace('https://', 'wss://');
   const params = new URLSearchParams({
-    token: BRIDGE_AUTH_TOKEN,
+    token: tokenOverride ?? BRIDGE_AUTH_TOKEN,
     instanceId,
   });
   const url = `${wsUrl}/bridge?${params.toString()}`;
@@ -298,12 +319,8 @@ test('TS-005: Same instanceId reconnect is accepted (not 409)', { skip }, async 
 
   // Cleanup
   if (result2.ws) result2.ws.close(1000, 'Test complete');
-  // These tests share one single-instance lease. `close()` is fire-and-forget:
-  // the DO keeps the connection "healthy" until the stale reaper runs (45s), so
-  // the next test's first connect would get a legitimate 409 from a socket this
-  // test still owns. Wait for the close to actually be observed before
-  // returning, otherwise TS-007 fails for a reason that is not its own.
-  await new Promise((r) => setTimeout(r, 1500));
+  // Release the shared lease before the next test starts.
+  await waitForFreeLease();
 
   console.log('  ✅ TS-005: Same-instance reconnect accepted (101), not 409');
 });
@@ -341,7 +358,7 @@ test('TS-007: Different instanceId + healthy old connection → 409', { skip }, 
   // Cleanup — B never became a socket, only A needs closing.
   resultA.ws.close(1000, 'Test complete');
   // Release the shared lease before the next test starts (see TS-005 note).
-  await new Promise((r) => setTimeout(r, 1500));
+  await waitForFreeLease();
 
   console.log('  ✅ TS-007: Different instance + healthy old → 409 Conflict (genuine conflict correctly rejected)');
 });
@@ -446,57 +463,31 @@ test('TS-012: 409 Decision Matrix — 5 rows verified', { skip }, async (t) => {
     sendSessionReady(rA.ws, { instanceId: idA });
     await new Promise(r => setTimeout(r, 300));
 
-    // Connect B (different instance, old is healthy) → should get 409
-    const rB = await connectBridgeWithStatus(idB);
-    const rejected = rB.code === 409;
-    results.push({ row: 4, scenario: 'diff_id, healthy', expected: '409', actual: rB.code === 409 ? '409' : `HTTP ${rB.code}`, pass: rejected });
-    assert.ok(rejected, `Row 4: different instanceId, healthy old → should be 409, got ${rB.code}`);
+    // Connect B (different instance, old is healthy) → should get 409.
+    // Probed over HTTP: a WebSocket client cannot observe a 409 handshake
+    // response, it only ever sees close 1006 (see probeUpgradeStatus).
+    const rB = await probeUpgradeStatus(idB);
+    const rejected = rB.status === 409;
+    results.push({ row: 4, scenario: 'diff_id, healthy', expected: '409', actual: rB.status === 409 ? '409' : `HTTP ${rB.status}`, pass: rejected });
+    assert.ok(rejected, `Row 4: different instanceId, healthy old → should be 409, got ${rB.status} (${rB.body.slice(0, 60)})`);
 
     // Verify A is still alive
     assert.equal(rA.ws.readyState, 1, 'Row 4: original connection A should still be OPEN');
 
     rA.ws.close(1000, 'Test complete');
-    if (rB.ws) rB.ws.close(1000, 'Test complete');
     await new Promise(r => setTimeout(r, 200));
   }
 
   // ── Row 5: different_token → 401 ──
   {
-    const wsUrl = WORKER_URL.replace('https://', 'wss://');
-    const params = new URLSearchParams({
-      token: 'invalid-token-' + uuidv4(),
-      instanceId: uuidv4(),
-    });
-    const url = `${wsUrl}/bridge?${params.toString()}`;
-
-    const result = await new Promise((resolve) => {
-      // No subprotocol is requested, and that is load-bearing. The worker builds
-  // its 101 from a bare WebSocketPair and never echoes
-  // Sec-WebSocket-Protocol (0 occurrences in src/index.js). Per RFC 6455 a
-  // client that offered subprotocols but receives none must fail the
-  // handshake, so requesting one kills every connection here with 1006
-  // before a single assertion runs. Verified by A/B: the same URL returns
-  // 101 with no subprotocol, and 1006 with either v2 or v3.
-  const ws = new WebSocket(url);
-      const timeout = setTimeout(() => {
-        ws.close();
-        resolve({ code: 'timeout', status: 'timeout' });
-      }, 5000);
-
-      ws.onopen = () => {
-        clearTimeout(timeout);
-        resolve({ code: 101, status: 'connected' });
-      };
-      ws.onerror = () => {};
-      ws.onclose = (event) => {
-        clearTimeout(timeout);
-        resolve({ code: event.code, status: 'rejected' });
-      };
-    });
-
-    const rejected = result.code === 401;
-    results.push({ row: 5, scenario: 'diff_token', expected: '401', actual: result.code === 401 ? '401' : `HTTP ${result.code}`, pass: rejected });
-    assert.ok(rejected, `Row 5: different token → should be 401, got ${result.code}`);
+    // Probed over HTTP for the same reason as row 4: a WebSocket client sees
+    // only close 1006 for a rejected handshake, never the 401 status.
+    const url = `${WORKER_URL}/bridge?token=${encodeURIComponent('invalid-token-' + uuidv4())}&instanceId=${uuidv4()}`;
+    const res = await fetch(url);
+    const body = await res.text();
+    const rejected = res.status === 401;
+    results.push({ row: 5, scenario: 'diff_token', expected: '401', actual: res.status === 401 ? '401' : `HTTP ${res.status}`, pass: rejected });
+    assert.ok(rejected, `Row 5: different token → should be 401, got ${res.status} (${body.slice(0, 60)})`);
   }
 
   // ── Print matrix summary ──
