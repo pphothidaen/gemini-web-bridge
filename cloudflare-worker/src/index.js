@@ -450,6 +450,25 @@ export class GeminiBridgeDO extends DurableObject {
     this.activeConnections.set(instanceId, connectionState);
     vlog(`[Bridge DO] Recorded connection for instance ${instanceId}, epoch ${this.epochCounter}, total connections: ${this.activeConnections.size}`);
 
+    // KAN-168: arm the alarm on every arriving connection.
+    //
+    // scheduleAlarm() is otherwise called from the constructor, from inside
+    // alarm() itself, and around generation — never from here. That left a
+    // permanent-death path: the constructor arms the alarm once, and if that
+    // first tick finds no active work the re-arm at the end of alarm() is
+    // skipped. A client connecting afterwards re-armed nothing, so the DO
+    // silently stopped PINGing, stopped sweeping dead sockets, and stopped
+    // writing MCP keepalives until the next deploy or eviction.
+    //
+    // Measured on production 2026-09-27: zero keepalives over a 231s SSE
+    // stream that was demonstrably live, a connection 209s past the 180s
+    // stale threshold and not reaped, `idle` climbing monotonically with no
+    // reset, and zero alarm invocations in 23 minutes of `wrangler tail`.
+    //
+    // Arming here makes permanent death impossible regardless of which tick
+    // failed: any connection restarts the cadence.
+    this.scheduleAlarm();
+
     return connectionState;
   }
 

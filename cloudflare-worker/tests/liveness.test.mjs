@@ -7,6 +7,32 @@ import { CLIENT_STALE_SOCKET_IDLE_MS } from '../../extension-cloudflare/backgrou
 const NOW = 1_800_000_000_000;
 const OPEN = { readyState: 1 }; // 1 = WebSocket.OPEN
 
+const workerSrc = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+
+test('recording a connection arms the alarm', () => {
+  // KAN-168. The alarm was only armed from the constructor, from inside
+  // alarm() itself, and around generation — never when a client connected.
+  // So if the one alarm the constructor armed fired while nothing was
+  // connected, the re-arm was skipped and the alarm was dead for good: no
+  // keepalive PING, no stale sweep, no MCP keepalive, until the next deploy.
+  //
+  // Production measured exactly that (2026-09-27): zero MCP keepalives across
+  // a 231s stream that was demonstrably live, a connection 209s past the 180s
+  // stale threshold and never reaped, `idle` climbing monotonically, and zero
+  // alarm invocations in 23 minutes of `wrangler tail`.
+  //
+  // This asserts the arm happens inside recordConnection(), not merely that
+  // scheduleAlarm() exists somewhere in the file.
+  const body = /recordConnection\(instanceId, socket\)\s*\{[\s\S]*?\n  \}/.exec(workerSrc);
+  assert.ok(body, 'recordConnection() must still exist in src/index.js');
+  assert.match(
+    body[0],
+    /this\.scheduleAlarm\(\)/,
+    'recordConnection() must arm the alarm — without it a connection arriving ' +
+      'after a skipped re-arm leaves the DO permanently without a keepalive'
+  );
+});
+
 test('the client stale threshold exceeds the DO keepalive interval', () => {
   // The invariant both sides now depend on. The client tears its own socket
   // down after CLIENT_STALE_SOCKET_IDLE_MS of silence, and the server only
