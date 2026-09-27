@@ -27,7 +27,10 @@ on:
 
 concurrency:
   group: prod-health-probe
-  cancel-in-progress: false
+  # A stuck probe must not block the next one. With false, a hung run holds
+  # the group and every later probe queues behind it — the monitoring
+  # silently stops while looking healthy in the Actions tab.
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -38,6 +41,15 @@ jobs:
     name: Probe production /health
     runs-on: ubuntu-latest
     steps:
+      # Required. The classifier is scripts/probe-production.py, and without
+      # this the runner has an empty workdir: the step failed with
+      # "can't open file .../scripts/probe-production.py: [Errno 2]" and
+      # CODE came back empty, so the report below reported
+      # "Production is not serving: " — a real outage and a broken probe
+      # were indistinguishable.
+      - name: Check out classifier
+        uses: actions/checkout@v4
+
       - name: Classify the response
         id: classify
         env:
@@ -56,7 +68,14 @@ jobs:
             echo "OK  $DETAIL"
             exit 0
           fi
-          echo "::error::Production is not serving: $DETAIL"
+          # An empty CODE means the classifier never ran or crashed, not that
+          # production is down. Say which, so a broken probe is never
+          # misread as an outage.
+          if [ -z "$CODE" ]; then
+            echo "::error::Probe itself failed - the classifier produced no result. Check the 'Classify the response' step above before treating this as a production outage."
+            exit 1
+          fi
+          echo "::error::Production is not serving: HTTP $CODE - $DETAIL"
           exit 1
 
       - name: File or update an issue
