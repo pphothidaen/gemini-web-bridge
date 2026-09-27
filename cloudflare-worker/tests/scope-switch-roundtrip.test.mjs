@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { randomUUID } from 'node:crypto';
 import * as modelCatalog from '../src/model-catalog.js';
+import * as liveness from '../src/liveness.js';
 
 // -- Load DO source and strip Cloudflare imports ----------------
 const doSource = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
@@ -87,6 +88,7 @@ class MockResponse {
 function loadDO() {
   const context = {
     ...modelCatalog,
+    ...liveness,
     DurableObject: class {},
     crypto: workerdCrypto,
     Response: MockResponse,

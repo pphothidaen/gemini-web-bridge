@@ -3,6 +3,7 @@
 // Version: 4.4.3 (see WORKER_VERSION below — this comment is informational only)
 
 import { normalizeModels, recommendedModel } from "./model-catalog.js";
+import { PONG_GRACE_MS, isKeepaliveMissed, isEvictable } from "./liveness.js";
 import { DurableObject } from "cloudflare:workers";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { 
@@ -411,12 +412,13 @@ export class GeminiBridgeDO extends DurableObject {
       this.activeConnections.delete(instanceId);
     }
 
-    // Check for stale connections from OTHER instance IDs
-    // A connection is stale if idle > 45s (no activity)
+    // Check for unresponsive connections from OTHER instance IDs.
+    // Liveness is decided by the keepalive (did it answer our PING), not by raw
+    // idle time — a connection that answers the PING is healthy even when it has
+    // been quiet for longer than the threshold. See src/liveness.js.
     for (const [otherId, state] of this.activeConnections.entries()) {
-      const idleTime = now - state.lastActivityAt;
-      if (idleTime > this.STALE_CONNECTION_TIMEOUT_MS) {
-        vlog(`[Bridge DO] Evicting stale connection for instance ${otherId} (idle ${Math.round(idleTime/1000)}s > 45s).`);
+      if (isEvictable(state, now, { staleAfterMs: this.STALE_CONNECTION_TIMEOUT_MS })) {
+        vlog(`[Bridge DO] Evicting unresponsive connection for instance ${otherId} (idle ${Math.round((now - state.lastActivityAt) / 1000)}s).`);
         try { state.socket.close(1000, "Stale connection evicted"); } catch (e) {}
         this.activeConnections.delete(otherId);
       }
@@ -429,6 +431,10 @@ export class GeminiBridgeDO extends DurableObject {
       socket,
       connectedAt: now,
       lastActivityAt: now,
+      // Keepalive bookkeeping: the DO stamps lastPingAt when it probes, and
+      // touchConnection stamps lastPongAt when the extension answers.
+      lastPingAt: 0,
+      lastPongAt: 0,
       epoch: this.epochCounter,
       tokens: null,
       scope: null
@@ -448,17 +454,20 @@ export class GeminiBridgeDO extends DurableObject {
     const state = this.activeConnections.get(instanceId);
     if (state) {
       state.lastActivityAt = Date.now();
+      // Any inbound traffic is also the answer to the keepalive we sent.
+      state.lastPongAt = state.lastActivityAt;
     }
   }
 
   /**
-   * Checks if a connection for the given instance ID is stale (idle > 45s).
+   * Checks if a connection for the given instance ID may be evicted.
+   * Liveness comes from the keepalive exchange, not raw idle time — see
+   * src/liveness.js for why raw idle time closed healthy connections.
    */
   isConnectionStale(instanceId) {
     const state = this.activeConnections.get(instanceId);
     if (!state) return false;
-    const idleTime = Date.now() - state.lastActivityAt;
-    return idleTime > this.STALE_CONNECTION_TIMEOUT_MS;
+    return isEvictable(state, Date.now(), { staleAfterMs: this.STALE_CONNECTION_TIMEOUT_MS });
   }
 
   /**
@@ -639,22 +648,36 @@ export class GeminiBridgeDO extends DurableObject {
   static MCP_KEEPALIVE_MIN_MS = 30000;
 
   /**
-   * RunAlarm: periodic staleness check for active WebSocket connections.
+   * RunAlarm: periodic keepalive + liveness check for active WebSocket connections.
    * Previously ran every 15s via setInterval (which kept the DO hot indefinitely
    * and exhausted the free-tier CPU quota). Now fires via the native DO alarm API.
-   * If the active socket has been idle (no messages, pings, or other activity)
-   * for > 45s, close it as stale.
+   *
+   * A connection is closed when it fails to answer the PING sent in step 1, not
+   * when it merely looks idle. With a 120s idle cadence every healthy connection
+   * is "idle" past 45s when the sweep runs, and the sweep used to run in the same
+   * tick as the PING — so it closed a live socket roughly every two minutes.
+   * See src/liveness.js.
    */
   async alarm() {
     // ─── 1. Keepalive PING (from former initKeepalive) ───
-    // This doubles as the liveness probe. touchConnection() fires only on an
-    // INBOUND message, so a live extension answers PONG and keeps
-    // lastActivityAt fresh, while a dead one goes quiet and is swept as
-    // stale in step 2. That is why staleness detection works at all despite
-    // the PING — do not "optimise" the PING away without replacing it.
-    if (this.activeSocket && this.activeSocket.readyState === 1) { // 1 = OPEN
+    // Probe EVERY tracked connection, not just the "primary" one: the sweep below
+    // judges liveness by whether a connection answered, so a connection that is
+    // never probed can never be proven dead. Stamping lastPingAt is what gives
+    // the sweep something to compare the answer against.
+    const pingFrame = JSON.stringify({ type: "PING" });
+    for (const [instanceId, state] of this.activeConnections.entries()) {
+      if (!state.socket || state.socket.readyState !== 1) continue;
       try {
-        this.activeSocket.send(JSON.stringify({ type: "PING" }));
+        state.socket.send(pingFrame);
+        state.lastPingAt = Date.now();
+      } catch (e) {
+        console.warn(`[Bridge DO] PING send error for ${instanceId}:`, e.message);
+      }
+    }
+    // Legacy path: harnesses that assign activeSocket directly have no map entry.
+    if (this.activeConnections.size === 0 && this.activeSocket && this.activeSocket.readyState === 1) {
+      try {
+        this.activeSocket.send(pingFrame);
       } catch (e) {
         console.warn("[Bridge DO] PING send error:", e.message);
       }
@@ -686,25 +709,29 @@ export class GeminiBridgeDO extends DurableObject {
     }
 
     // ─── 2. Stale connection cleanup (Phase 3 activeConnections) ───
+    // Sweep a connection only when it failed to answer the keepalive sent in
+    // step 1 (or its socket is no longer OPEN). Raw idle time is deliberately
+    // NOT the criterion: the idle alarm runs every 120s, so a healthy
+    // connection always looks idle by then and used to be closed every cycle.
     const now = Date.now();
     for (const [instanceId, state] of this.activeConnections.entries()) {
-      const idleMs = now - state.lastActivityAt;
-      if (idleMs > GeminiBridgeDO.STALE_SOCKET_IDLE_MS) {
-        vlog(`[Bridge DO] Stale socket detected for instance ${instanceId} (idle ${Math.round(idleMs / 1000)}s > ${GeminiBridgeDO.STALE_SOCKET_IDLE_MS / 1000}s). Closing and allowing reconnection.`);
-        try {
-          state.socket.close(1000, "Stale socket cleanup: idle timeout exceeded");
-        } catch (e) {
-          console.warn("[Bridge DO] Error closing stale socket:", e.message);
-        }
-        this.activeConnections.delete(instanceId);
-        // Notify any in-flight streams that were owned by this instance.
-        for (const handler of this.activeStreams.values()) {
-          try {
-            handler({ type: "STREAM_ERROR", error: "Stale socket cleaned up", code: "stale_socket_cleanup" });
-          } catch (e) {}
-        }
-        vlog(`[Bridge DO] Stale socket cleanup complete for instance ${instanceId}. Remaining connections: ${this.activeConnections.size}`);
+      if (!isKeepaliveMissed(state, now, { graceMs: PONG_GRACE_MS })) continue;
+      const idleSec = Math.round((now - state.lastActivityAt) / 1000);
+      const pingAgeSec = state.lastPingAt ? Math.round((now - state.lastPingAt) / 1000) : null;
+      vlog(`[Bridge DO] Unresponsive connection for instance ${instanceId} (idle ${idleSec}s, last PING ${pingAgeSec === null ? "never sent" : pingAgeSec + "s ago"} unanswered). Closing and allowing reconnection.`);
+      try {
+        state.socket.close(1000, "Stale socket cleanup: keepalive unanswered");
+      } catch (e) {
+        console.warn("[Bridge DO] Error closing stale socket:", e.message);
       }
+      this.activeConnections.delete(instanceId);
+      // Notify any in-flight streams that were owned by this instance.
+      for (const handler of this.activeStreams.values()) {
+        try {
+          handler({ type: "STREAM_ERROR", error: "Stale socket cleaned up", code: "stale_socket_cleanup" });
+        } catch (e) {}
+      }
+      vlog(`[Bridge DO] Stale socket cleanup complete for instance ${instanceId}. Remaining connections: ${this.activeConnections.size}`);
     }
 
     // ─── 3. Reschedule alarm only if there is still active work ───
@@ -1779,32 +1806,32 @@ export class GeminiBridgeDO extends DurableObject {
         this.activeConnections.delete(instanceId);
       }
 
-      // Check for stale connections from OTHER instance IDs
-      // A connection from a different instanceId is only allowed if the existing
-      // connection is stale (idle > 45s)
+      // Check for unresponsive connections from OTHER instance IDs.
+      // A connection from a different instanceId is only allowed in if the
+      // existing one failed to answer our keepalive — a connection that answers
+      // the PING is healthy even when it has been quiet past the 45s threshold.
+      // See src/liveness.js for why raw idle time was the wrong criterion.
       let staleConnectionEvicted = false;
+      const now = Date.now();
       for (const [otherId, state] of this.activeConnections.entries()) {
         if (otherId === instanceId) continue;
-        const idleTime = Date.now() - state.lastActivityAt;
-        if (idleTime > this.STALE_CONNECTION_TIMEOUT_MS) {
-          vlog(`[Bridge DO] Evicting stale connection for instance ${otherId} (idle ${Math.round(idleTime/1000)}s > 45s) to allow new instance ${instanceId}.`);
+        if (isEvictable(state, now, { staleAfterMs: this.STALE_CONNECTION_TIMEOUT_MS })) {
+          vlog(`[Bridge DO] Evicting unresponsive connection for instance ${otherId} to allow new instance ${instanceId}.`);
           try { state.socket.close(1000, "Stale connection evicted"); } catch (e) {}
           this.activeConnections.delete(otherId);
           staleConnectionEvicted = true;
         }
       }
 
-      // If there's still an active connection from a different instanceId and it's NOT stale,
-      // reject the new connection (protect healthy session from hijacking)
+      // If there's still an active connection from a different instanceId and it
+      // is responsive, reject the new connection (protect the healthy session
+      // from being hijacked).
       if (this.activeConnections.size > 0) {
         for (const [otherId, state] of this.activeConnections.entries()) {
           if (otherId === instanceId) continue;
           const idleTime = Date.now() - state.lastActivityAt;
-          if (idleTime <= this.STALE_CONNECTION_TIMEOUT_MS) {
-            // Active healthy connection from different instance exists
-            console.warn(`[Bridge DO] Rejected connection from instance ${instanceId}: healthy active connection exists for instance ${otherId} (idle ${Math.round(idleTime/1000)}s).`);
-            return new Response("Conflict: Another instance is currently active and healthy", { status: 409, headers: corsHeaders });
-          }
+          console.warn(`[Bridge DO] Rejected connection from instance ${instanceId}: responsive connection exists for instance ${otherId} (idle ${Math.round(idleTime/1000)}s).`);
+          return new Response("Conflict: Another instance is currently active and healthy", { status: 409, headers: corsHeaders });
         }
       }
 

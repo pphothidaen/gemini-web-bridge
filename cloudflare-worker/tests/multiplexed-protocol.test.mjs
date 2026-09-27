@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { randomUUID } from 'node:crypto';
 import * as modelCatalog from '../src/model-catalog.js';
+import * as liveness from '../src/liveness.js';
 import * as protocol from '../../extension-cloudflare/protocol-messages.js';
 
 // ─── Load DO source and strip Cloudflare imports ───────────────
@@ -34,6 +35,7 @@ const doClassSrc = doSource
 // ─── VM context for DO ────────────────────────────────────────
 const sharedContext = {
   ...modelCatalog,
+  ...liveness,
   DurableObject: class {},
   // Workers-runtime-accurate crypto: WebCrypto only. Node's global crypto also
   // exposes createHash/createHmac/Cipheriv, which do NOT exist in workerd —
