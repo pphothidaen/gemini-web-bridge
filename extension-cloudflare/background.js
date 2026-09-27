@@ -122,17 +122,12 @@ async function getOrCreateInstanceId(storageSession) {
  */
 const SCOPE_ID_RE = /^[A-Za-z0-9_-]+$/;
 
-function computeBackoff(attempt, base = 1000, max = 30000, rnd = Math.random) {
-  const exp = Math.min(base * Math.pow(2, Math.max(0, attempt)), max);
-  return Math.min(exp + Math.floor(rnd() * 1000), max);
-}
-
 /**
  * How long the SW tolerates silence from the DO before declaring the socket
  * dead and reconnecting.
  *
  * KAN-162: this was 60_000 while the DO only PINGs once per keepalive alarm
- * tick (IDLE_ALARM_INTERVAL_MS = 120s in the worker). The client therefore
+ * tick (IDLE_ALARM_INTERVAL_MS = 120s). The client therefore
  * always hit its own stale timer BEFORE the server's first PING could arrive
  * to prove liveness, and closed a perfectly healthy socket roughly every two
  * minutes — the mirror image of the server-side bug KAN-159/KAN-161 just fixed.
@@ -149,6 +144,35 @@ function computeBackoff(attempt, base = 1000, max = 30000, rnd = Math.random) {
  * connection is never mistaken for a dead one.
  */
 export const CLIENT_STALE_SOCKET_IDLE_MS = 180000;
+
+/**
+ * Reconnect backoff, using full jitter.
+ *
+ * KAN-165: this was `min(exponential + rnd() * 1000, max)`. The jitter was
+ * added on top and then clipped by the cap, so it vanished exactly when it
+ * mattered most — every attempt from the cap onward returned precisely
+ * `maxDelay`:
+ *
+ *   attempt 0: 1000-1999ms   spread 999ms
+ *   attempt 4: 16000-16999ms spread 999ms
+ *   attempt 5: 30000-30000ms spread 0ms   <- no randomness left
+ *   attempt 9: 30000-30000ms spread 0ms
+ *
+ * A long outage parks every client at the cap, which is precisely the case
+ * where synchronised retries do the most damage. Full jitter samples the whole
+ * window instead, so the spread grows with the delay and survives the cap:
+ *
+ *   attempt 0: 0..1000ms     attempt 4: 0..16000ms
+ *
+ * The growth stays exponential rather than Fibonacci. Fibonacci reaches the
+ * 30s cap four attempts later, which means more requests at the intermediate
+ * delays for no benefit; this DO admits a single connection at a time (the
+ * upgrade path 409s a second instance), so there is no herd to spread.
+ */
+export function computeBackoff(attempt, base = 1000, max = 30000, rnd = Math.random) {
+  const ceiling = Math.min(base * Math.pow(2, Math.max(0, attempt)), max);
+  return Math.floor(rnd() * ceiling);
+}
 
 /**
  * Mirror of the DO's stale-connection window
@@ -200,6 +224,16 @@ export const DO_PONG_GRACE_MS = 30000;
  */
 export const CONFLICT_RETRY_DELAY_MS =
   DO_STALE_CONNECTION_TIMEOUT_MS + DO_PONG_GRACE_MS + DO_PONG_GRACE_MS;
+
+/**
+ * KAN-165: extra random delay added to the 409 retry.
+ *
+ * CONFLICT_RETRY_DELAY_MS on its own is a fixed 4 minutes, so every client that
+ * lost the same slot retried in lockstep. Additive jitter only ever pushes the
+ * retry later, which preserves the "never land before the DO would have evicted"
+ * guarantee that CONFLICT_RETRY_DELAY_MS encodes.
+ */
+export const CONFLICT_RETRY_JITTER_MS = 15000;
 
 export class CentralTabCoordinator {
   constructor(storageSession = null) {
@@ -638,7 +672,18 @@ export class BridgeSocketManager {
     // Wait out the DO's real eviction conditions (stale threshold + PONG grace
     // + margin), not a guessed 50s. The state stays RECONNECTING so
     // scheduleReconnect() does not stack a shorter backoff on top of this.
-    console.log(`[BridgeSocket] 409 Conflict: will retry with fresh identity in ${CONFLICT_RETRY_DELAY_MS / 1000}s.`);
+    //
+    // KAN-165: the wait is now jittered. It used to be a flat 4-minute timer,
+    // which meant every client that hit a 409 retried at the same instant —
+    // the one place in this file with no randomness at all, and the one place
+    // where several clients genuinely do collide, because a deploy or a
+    // reconnect race briefly puts two of them on the same DO slot. The jitter
+    // is additive and bounded, so the retry still never lands before the DO
+    // would have evicted the prior instance (the invariant the conflict-retry
+    // test asserts against CONFLICT_RETRY_DELAY_MS itself).
+    const jitter = Math.floor(Math.random() * CONFLICT_RETRY_JITTER_MS);
+    const delay = CONFLICT_RETRY_DELAY_MS + jitter;
+    console.log(`[BridgeSocket] 409 Conflict: will retry with fresh identity in ${Math.round(delay / 1000)}s.`);
     if (!this.reconnectTimer) {
       this._state = ConnectionState.RECONNECTING;
       this.reconnectTimer = setTimeout(() => {
@@ -646,7 +691,7 @@ export class BridgeSocketManager {
         // Re-initialize instanceId before the next attempt so wsUrl() always
         // includes the required ?instanceId= param (missing it causes 401).
         this.initInstanceId().then(() => this.connect()).catch(() => this.connect());
-      }, CONFLICT_RETRY_DELAY_MS);
+      }, delay);
     }
   }
 
