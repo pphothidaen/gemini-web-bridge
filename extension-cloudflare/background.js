@@ -127,6 +127,29 @@ function computeBackoff(attempt, base = 1000, max = 30000, rnd = Math.random) {
   return Math.min(exp + Math.floor(rnd() * 1000), max);
 }
 
+/**
+ * How long the SW tolerates silence from the DO before declaring the socket
+ * dead and reconnecting.
+ *
+ * KAN-162: this was 60_000 while the DO only PINGs once per keepalive alarm
+ * tick (IDLE_ALARM_INTERVAL_MS = 120s in the worker). The client therefore
+ * always hit its own stale timer BEFORE the server's first PING could arrive
+ * to prove liveness, and closed a perfectly healthy socket roughly every two
+ * minutes — the mirror image of the server-side bug KAN-159/KAN-161 just fixed.
+ *
+ * Measured on production: "Background bridge port disconnected" at 13:00:17,
+ * 13:02:17, 13:04:17, 13:06:17, 13:08:17 — a 120s period, and DO epoch
+ * incrementing 1 -> 2 -> 3 alongside it. conns stayed pinned at 1 and the
+ * instanceId never changed, proving the client was tearing down and rebuilding
+ * its own socket rather than two instances contending.
+ *
+ * The invariant is the same one the server now holds
+ * (STALE_SOCKET_IDLE_MS > IDLE_ALARM_INTERVAL_MS): the client threshold must
+ * exceed the server keepalive interval, with margin, so a live-but-quiet
+ * connection is never mistaken for a dead one.
+ */
+export const CLIENT_STALE_SOCKET_IDLE_MS = 180000;
+
 export class CentralTabCoordinator {
   constructor(storageSession = null) {
     this.sessionStorage = storageSession || (typeof chrome !== "undefined" && chrome.storage?.session ? chrome.storage.session : null);
@@ -303,7 +326,7 @@ export class BridgeSocketManager {
     this._mutex = new AsyncMutex();
     this._state = ConnectionState.DISCONNECTED;
     this._connectionAttemptTimer = null; // 15s timeout guard
-    this._staleCheckTimer = null;        // 60s idle detection
+    this._staleCheckTimer = null;        // CLIENT_STALE_SOCKET_IDLE_MS idle detection
     // requestId -> { scope, timer } for in-flight scope switches awaiting a tab publish
     this.pendingScopes = new Map();
     // tabId -> Port for content scripts connected via "gemini-bridge-socket"
@@ -550,8 +573,12 @@ export class BridgeSocketManager {
   }
 
   /**
-   * Starts/resets the 60-second stale-socket detection timer.
-   * Each incoming message or successful send resets the clock.
+   * Starts/resets the stale-socket detection timer. Each incoming message or
+   * successful send resets the clock.
+   *
+   * KAN-162: the threshold must exceed the DO's keepalive interval, otherwise
+   * the client tears the socket down before the server's PING can ever prove it
+   * alive. See CLIENT_STALE_SOCKET_IDLE_MS.
    */
   _resetStaleCheckTimer() {
     if (this._staleCheckTimer) {
@@ -560,17 +587,17 @@ export class BridgeSocketManager {
     this._staleCheckTimer = setTimeout(() => {
       this._staleCheckTimer = null;
       this._detectStaleSocket();
-    }, 60_000);
+    }, CLIENT_STALE_SOCKET_IDLE_MS);
   }
 
   /**
-   * Called when the 60s idle threshold expires.
+   * Called when the idle threshold expires.
    * If the socket is still open but has had no activity, treat as stale
    * and reconnect.
    */
   _detectStaleSocket() {
     if (this._state !== ConnectionState.CONNECTED || !this.socket) return;
-    console.warn("[BridgeSocket] ⚠️ Stale socket detected: 60s without activity. Reconnecting.");
+    console.warn(`[BridgeSocket] ⚠️ Stale socket detected: ${CLIENT_STALE_SOCKET_IDLE_MS / 1000}s without activity. Reconnecting.`);
     try { this.socket.close(1001, "stale socket"); } catch (e) {}
     this.socket = null;
     this._state = ConnectionState.DISCONNECTED;

@@ -2,9 +2,36 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { STALE_AFTER_MS, PONG_GRACE_MS, isKeepaliveMissed, isEvictable } from '../src/liveness.js';
+import { CLIENT_STALE_SOCKET_IDLE_MS } from '../../extension-cloudflare/background.js';
 
 const NOW = 1_800_000_000_000;
 const OPEN = { readyState: 1 }; // 1 = WebSocket.OPEN
+
+test('the client stale threshold exceeds the DO keepalive interval', () => {
+  // The invariant both sides now depend on. The client tears its own socket
+  // down after CLIENT_STALE_SOCKET_IDLE_MS of silence, and the server only
+  // PINGs once per IDLE_ALARM_INTERVAL_MS. If the client threshold is not
+  // strictly greater, the client closes a healthy socket before the server's
+  // PING can ever prove it alive — the KAN-162 flap, and the same class of bug
+  // the server hit in KAN-159/KAN-161.
+  const src = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  const interval = Number(/IDLE_ALARM_INTERVAL_MS\s*=\s*(\d+)/.exec(src)[1]);
+
+  assert.ok(
+    CLIENT_STALE_SOCKET_IDLE_MS > interval,
+    `client stale threshold (${CLIENT_STALE_SOCKET_IDLE_MS}ms) must exceed the DO keepalive interval (${interval}ms)`
+  );
+  assert.ok(
+    STALE_AFTER_MS > interval,
+    `server stale threshold (${STALE_AFTER_MS}ms) must exceed the DO keepalive interval (${interval}ms)`
+  );
+});
+
+test('the client threshold is not the old 60s value that caused the flap', () => {
+  // Regression pin: 60_000 was below the 120s keepalive interval, so the
+  // client always fired first and the socket was rebuilt roughly every 2 min.
+  assert.notEqual(CLIENT_STALE_SOCKET_IDLE_MS, 60_000);
+});
 
 test('a connection that answered the keepalive is never swept, however long it has been idle', () => {
   // This is the production failure (2026-09-27): the idle alarm only PINGs every
