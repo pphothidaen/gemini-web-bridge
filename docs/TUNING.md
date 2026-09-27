@@ -79,6 +79,39 @@ continuously — that was the original cause of the outage.
 
 ---
 
+## MCP / SSE keepalive
+
+The alarm also sends a `: keepalive` comment to every open MCP session so
+proxies do not drop the stream. That write is **per session**, so N parked
+clients meant N writes on every wakeup — and the streams most in need of
+a keepalive are precisely the ones doing nothing.
+
+Each session now records `lastWriteAt`, stamped both by the keepalive
+loop and by real traffic in `sendSseMessage`. A session written within
+the last 30 s is skipped.
+
+```js
+static MCP_KEEPALIVE_MIN_MS = 30000;
+```
+
+Writes per day with 5 parked clients:
+
+| Alarm cadence | Before | After |
+|---|---|---|
+| 15 s (busy) | 28,800 | **14,400** |
+| 120 s (idle) | 3,600 | 3,600 |
+
+The idle row is unchanged by design: at a 120 s alarm there is never a
+second fire inside the 30 s window, so nothing is suppressed. The floor
+matters in the busy case, where the alarm fires twice inside 30 s and
+the second write was pure waste.
+
+30 s is chosen because typical proxies drop an idle SSE connection at
+roughly 60 s — a longer floor would risk the connection, a shorter one
+would buy nothing.
+
+---
+
 ## Logging
 
 `console.log` is not free in Workers: each call formats its arguments,
@@ -86,7 +119,9 @@ serialises them, and enqueues a log entry, all charged to the same
 budget.
 
 - **23 high-frequency sites** (per-connection, per-message, per-model-sync)
-  now go through `vlog()`, a no-op unless `BRIDGE_VERBOSE=1`.
+  now go through `vlog()`, a no-op unless `BRIDGE_VERBOSE=1`. That is
+  every `console.log` in the file except the one inside `vlog` itself:
+  **44 call sites -> 1.**
 - **All 11 `console.warn` and 10 `console.error` sites are untouched.**
   They are rare and they are the diagnostic that matters when something
   is actually wrong. Gating those would trade a real signal for a
@@ -167,4 +202,6 @@ Optimisation buys headroom. The plan removes the cliff.
 |---|---|
 | `85a370b` | `setInterval` → native DO alarm. Removed the constant burn. |
 | `af5ec4f` | Adaptive interval: 15 s busy, 60 s idle. Also fixed `scheduleAlarm` so it re-arms instead of no-op'ing when an alarm is already pending. |
-| this change | Idle interval 60 s → 120 s; 23 hot log sites gated behind `vlog()`; observability off; 6-hourly health probe with issue filing. |
+| `e502a0e` | Idle interval 60 s → 120 s; 23 hot log sites gated behind `vlog()`; observability off. |
+| `27d37f6` | 6-hourly production health probe, failing loudly and filing an issue. |
+| this change | MCP SSE keepalive throttled per session to one write per 30 s. |

@@ -632,6 +632,11 @@ export class GeminiBridgeDO extends DurableObject {
   static STALE_SOCKET_IDLE_MS = 45000; // 45 seconds
   static RUN_ALARM_INTERVAL_MS = 15000; // 15s while work is in flight
   static IDLE_ALARM_INTERVAL_MS = 120000; // 120s when only holding a connection
+  // Minimum gap between SSE keepalive writes to a single MCP session. The
+  // alarm can fire as often as every 15s while work is in flight; without
+  // this floor a busy-but-idle client would be pinged on every wakeup.
+  // 30s is comfortably under the ~60s idle timeout of typical proxies.
+  static MCP_KEEPALIVE_MIN_MS = 30000;
 
   /**
    * RunAlarm: periodic staleness check for active WebSocket connections.
@@ -654,8 +659,22 @@ export class GeminiBridgeDO extends DurableObject {
         console.warn("[Bridge DO] PING send error:", e.message);
       }
     }
+    // SSE keepalive. Written per session, so N parked MCP clients meant N
+    // writes on every wakeup — and the streams that most need it are
+    // exactly the ones doing nothing.
+    //
+    // lastWriteAt is set by the real-traffic write sites too, so a session
+    // that just received a message is skipped here. Proxies drop an idle
+    // SSE connection after roughly 60s, so a keepalive interval above that
+    // would be pointless anyway; this keeps the write cadence bounded by
+    // what the protocol actually requires rather than by the alarm.
     if (this.mcpSessions && this.mcpSessions.size > 0) {
+      const now = Date.now();
       for (const [sessionId, session] of this.mcpSessions.entries()) {
+        if (now - (session.lastWriteAt || 0) < GeminiBridgeDO.MCP_KEEPALIVE_MIN_MS) {
+          continue; // written recently by real traffic or a prior keepalive
+        }
+        session.lastWriteAt = now;
         try {
           session.writer.write(session.encoder.encode(": keepalive\n\n")).catch(() => {
             this.mcpSessions.delete(sessionId);
@@ -2408,6 +2427,10 @@ export class GeminiBridgeDO extends DurableObject {
       if (sess) {
         try {
           const sseData = `event: message\ndata: ${JSON.stringify(msgObj)}\n\n`;
+          // Stamp on real traffic too: this is the write the keepalive
+          // throttle in alarm() is skipping, so without it a session that
+          // is actively streaming would still be pinged 30s later.
+          sess.lastWriteAt = Date.now();
           sess.writer.write(sess.encoder.encode(sseData)).catch(() => {
             this.mcpSessions.delete(sessionId);
           });
@@ -2428,7 +2451,7 @@ export class GeminiBridgeDO extends DurableObject {
       const writer = writable.getWriter();
 
       if (!this.mcpSessions) this.mcpSessions = new Map();
-      this.mcpSessions.set(sessionId, { writer, encoder });
+      this.mcpSessions.set(sessionId, { writer, encoder, lastWriteAt: Date.now() });
 
       if (request.signal) {
         request.signal.addEventListener("abort", () => {
