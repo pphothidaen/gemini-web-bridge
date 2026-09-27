@@ -39,6 +39,19 @@ function workerStaleTimeout() {
   return Number(m[1]);
 }
 
+/**
+ * The DO's keepalive cadence — how often it PINGs an idle connection. This is
+ * what resets the client's own stale timer, so it (not the stale threshold) is
+ * the value the client threshold has to outlast.
+ */
+function workerIdleAlarmInterval() {
+  const m = /IDLE_ALARM_INTERVAL_MS\s*=\s*(\d+)/.exec(workerSource);
+  assert.ok(m, 'IDLE_ALARM_INTERVAL_MS must still exist in src/index.js');
+  return Number(m[1]);
+}
+
+const DO_IDLE_ALARM_INTERVAL_MS = workerIdleAlarmInterval();
+
 test('the extension 409 retry is not shorter than the server stale threshold', () => {
   // THE invariant. This is the assertion that would have caught the bug: a
   // retry fired before the DO is willing to evict the prior instance cannot
@@ -81,13 +94,27 @@ test('the extension mirrors of the server constants are exact, not approximate',
   );
 });
 
-test('the client idle threshold is not below the threshold it must outlast', () => {
-  // The client must not call its own socket dead while the server still
-  // considers the same connection healthy, or the two sides tear down and
-  // rebuild in lockstep (the KAN-162 flap).
+test('the client idle threshold outlasts the DO keepalive alarm interval', () => {
+  // The real invariant is NOT "client threshold >= server stale threshold".
+  //
+  // _detectStaleSocket() (background.js) tears the socket down unconditionally
+  // when this timer expires — it never checks whether the socket is still
+  // alive. The only thing that saves it is the DO's keepalive PING, which
+  // arrives every IDLE_ALARM_INTERVAL_MS and calls _resetStaleCheckTimer().
+  //
+  // So the requirement is: client threshold > keepalive alarm interval. Anything
+  // at or below the alarm interval means the client self-destructs before the
+  // first PING can ever arrive, and then it rebuilds a socket that was healthy
+  // all along — which is the flap this ticket exists to stop.
+  //
+  // An earlier version of this test compared against the server's STALE
+  // threshold instead. That pinned the wrong relationship: it rejected a
+  // 150s client threshold (still safely above the 120s alarm) while saying
+  // nothing about the 110s value that actually breaks. Verified by mutation
+  // in both directions.
   assert.ok(
-    CLIENT_STALE_SOCKET_IDLE_MS >= DO_STALE_CONNECTION_TIMEOUT_MS,
-    `client idle threshold (${CLIENT_STALE_SOCKET_IDLE_MS}ms) must not fire before the server gives up on the connection (${DO_STALE_CONNECTION_TIMEOUT_MS}ms)`
+    CLIENT_STALE_SOCKET_IDLE_MS > DO_IDLE_ALARM_INTERVAL_MS,
+    `client idle threshold (${CLIENT_STALE_SOCKET_IDLE_MS}ms) must exceed the DO keepalive interval (${DO_IDLE_ALARM_INTERVAL_MS}ms), otherwise the client tears down a healthy socket before the first PING arrives`
   );
 });
 
