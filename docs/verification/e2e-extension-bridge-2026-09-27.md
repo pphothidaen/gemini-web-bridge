@@ -308,3 +308,107 @@ It remains a working rollback target.
 app noted in the handoff is not present on the new account. The Access
 interception described there belonged to the old account and is irrelevant
 now that no hostname routes there.
+
+---
+
+## Addendum — the three skipped tests, and a test that knocked the bridge offline
+
+Chased down the `3 skipped` in the worker suite. They were three unrelated
+problems sharing one gate, and one of them was masking a production bug.
+
+### 1. `rejects empty messages` was gated on a browser for an unrelated reason
+
+The empty-`messages` check sat **after** the extension-readiness gate
+(`index.js:2061` before `:2100`). So with no browser attached:
+
+| Request | Before | After |
+|---|---|---|
+| `{messages: []}` | **503** after **22.7 s** | **400** after **0.13 s** |
+| well-formed, no extension | 503 after ~12 s | 503 after 12.2 s (unchanged) |
+
+A malformed request is malformed regardless of who is attached. The old
+ordering pointed the caller at their browser instead of their payload, and
+held a slot in the wait queue for a request that could never succeed.
+
+The ordering was also why the test needed a live browser at all: the 400 branch
+was unreachable whenever no extension was attached, so it could not be
+regression-tested in CI. Moving validation first makes the contract testable
+without a browser — `tests/validation-ordering.test.mjs` pins it (5 tests,
+verified to fail 3/5 against the old ordering, each after a 12 s wait).
+
+Deployed and confirmed in production: `400` in 0.13 s.
+
+### 2. `WebSocket upgrade` was gated backwards and could never pass
+
+Two independent defects, both of which made the test unpassable rather than
+merely skipped:
+
+- It requested `Sec-WebSocket-Protocol: gemini-bridge-v2`. The worker builds
+  its 101 from a bare `WebSocketPair` and never echoes the header, so RFC 6455
+  requires the client to fail the handshake — it died with **1006** before a
+  single assertion ran. `phase5-instance-id.test.mjs` already documents this A/B.
+- After connecting it sent `{type: "ping"}` and waited for a reply. The DO is
+  **silent on open** and only answers `SESSION_READY` / `MODELS_DISCOVERED` /
+  `PONG` (`index.js:1870-1884`). So it always burned the full 10 s timeout even
+  on a fully successful upgrade. Observed directly: `onopen` fires, then silence.
+
+And the gate itself was inverted: it was skipped unless `BRIDGE_LIVE_EXTENSION=1`,
+i.e. it demanded a *connected* extension, which guarantees the **409** that
+correct single-instance enforcement returns. It needs the lease to be **free**.
+Now gated on lease availability and asserting the 101 itself. Verified passing
+against a free-lease host and skipping with a reason against the live one.
+
+### 3. Fixing (2) evicted the live production extension
+
+The lease probes treated `isStale` as "free". It is not. The DO reaps a socket
+only after 45 s of silence, and the extension's MV3 service worker is routinely
+quiet that long between WebSocket frames, so `/health` reports a connection as
+stale while the DO still holds the slot. A competing `instanceId` arriving in
+that window is treated as a competitor and evicts the real client.
+
+This happened during verification: the probe read "free", the upgrade succeeded,
+and the live extension dropped to `DISCONNECTED` (`epoch` bumped). It reconnected
+on its own after ~30 s the first time. **A `/health` probe cannot close this
+race**, so:
+
+- both probes now treat *any* tracked connection as a held lease, stale or not;
+- the Phase 5 tests additionally require `BRIDGE_PHASE5_TARGET_ISOLATED=1`,
+  because they take the lease deliberately and repeatedly. `WORKER_URL` still
+  defaults to production, so the safe default is to skip.
+
+Verified both ways: refused to run against production, and passed 3/3 against
+an isolated host.
+
+### Suite
+
+| | Tests | Pass | Fail | Skipped |
+|---|---|---|---|---|
+| Before | 260 | 257 | 0 | 3 |
+| After | 265 | 261 | 0 | 4\* |
+
+\* With tokens against deployed production. The 4 are the 1 live-Gemini
+round-trip (cannot be faked) and the 3 Phase 5 lease tests (now opt-in). The
+WebSocket upgrade test is no longer among them. Without tokens — the plain
+local `npm test` — it is 2 skips.
+
+### Left undone, and it needs a human
+
+The eviction left the extension's **background** service worker wedged: its
+WebSocket to the DO is dead and it is not reconnecting. Diagnosis:
+
+- DO healthy: `/health` 200, `auth-check` 200, `/bridge/chat/completions` 503
+  with no error counters, and a fresh upgrade from an external client returns
+  **101**.
+- Content script **healthy and talking**: after a tab reload it logs
+  `Session state received: READY` and `Leader role granted`, so the
+  content↔background port link is fine.
+- Generation returns **503 `extension_disconnected`** after the 12 s grace.
+
+So the break is specifically background→worker, which is the `AUTH_FAILED`
+short-circuit already tracked as a BLOCKED item. A tab reload is not enough —
+it revives the content script, not the service worker. Fixing it needs
+`chrome://extensions` → Reload, which is not reachable from the page context or
+from AppleScript (Chrome reports 0 windows to `osascript` on this machine).
+
+Until then the bridge is offline: the worker is correct and deployed, but no
+browser is attached to it.
