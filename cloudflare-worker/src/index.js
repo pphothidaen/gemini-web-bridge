@@ -226,6 +226,12 @@ export class GeminiBridgeDO extends DurableObject {
     this.activeStreams = new Map();
     this.pendingRequests = [];
     this.requestBusy = false;
+    // True only while a generation is actually being produced. Read by
+    // scheduleAlarm() to pick the fast (15s) vs idle (60s) alarm interval.
+    // activeStreams/pendingRequests already cover most in-flight work, but a
+    // generation in progress with no stream registered is exactly the case
+    // that must not back off.
+    this._generationInFlight = false;
     this.protocolVersion = 0;
     this.enforcementMode = "strict";
     this.currentScope = null;
@@ -560,21 +566,39 @@ export class GeminiBridgeDO extends DurableObject {
    * Uses the native alarm API instead of setInterval to avoid keeping the
    * DO hot indefinitely (which exhausts free-tier CPU quota).
    * See: https://developers.cloudflare.com/durable-objects/learn/alarms/
+   *
+   * The interval is adaptive. While a generation or stream is in flight the
+   * short interval applies, because that is when a dropped socket must be
+   * noticed quickly. When the DO is only holding an idle connection it backs
+   * off to IDLE_ALARM_INTERVAL_MS, cutting wakeups from 5,760/day to
+   * 1,440/day for the overwhelmingly common case of a connected but unused
+   * bridge. The stale threshold is unchanged, so eviction still happens
+   * within STALE_SOCKET_IDLE_MS; only the granularity of detection coarsens.
    */
   scheduleAlarm() {
-    if (typeof this.ctx !== "undefined" && this.ctx !== null && this.ctx.alarm === null) {
-      this.ctx.alarm = GeminiBridgeDO.RUN_ALARM_INTERVAL_MS / 1000; // 15 seconds
-    }
+    if (typeof this.ctx === "undefined" || this.ctx === null) return;
+    // Re-arm unconditionally. Previously this only fired when alarm === null,
+    // which meant an interval change could never take effect on a DO that
+    // already had a pending alarm.
+    const busy =
+      (this.activeStreams && this.activeStreams.size > 0) ||
+      (this.pendingRequests && this.pendingRequests.length > 0) ||
+      this._generationInFlight === true;
+    const ms = busy ? GeminiBridgeDO.RUN_ALARM_INTERVAL_MS
+                    : GeminiBridgeDO.IDLE_ALARM_INTERVAL_MS;
+    // Cloudflare stores the alarm in whole seconds; sub-second would throw.
+    this.ctx.alarm = Math.max(1, Math.round(ms / 1000));
   }
 
   // TTL-based Stale Socket Cleanup (Phase 2)
   // Configuration: if a socket is idle > 45s, it's considered stale and will be
-  // closed. The alarm() method runs every 15s to detect and clean up stale sockets.
+  // closed. The alarm() method detects and cleans up stale sockets.
   // This prevents server-side sockets from lingering after client SW termination
   // without a close frame, which would otherwise cause reconnection attempts to
   // hit Guard 2 and receive 409.
   static STALE_SOCKET_IDLE_MS = 45000; // 45 seconds
-  static RUN_ALARM_INTERVAL_MS = 15000; // 15 seconds
+  static RUN_ALARM_INTERVAL_MS = 15000; // 15s while work is in flight
+  static IDLE_ALARM_INTERVAL_MS = 60000; // 60s when only holding a connection
 
   /**
    * RunAlarm: periodic staleness check for active WebSocket connections.
@@ -585,6 +609,11 @@ export class GeminiBridgeDO extends DurableObject {
    */
   async alarm() {
     // ─── 1. Keepalive PING (from former initKeepalive) ───
+    // This doubles as the liveness probe. touchConnection() fires only on an
+    // INBOUND message, so a live extension answers PONG and keeps
+    // lastActivityAt fresh, while a dead one goes quiet and is swept as
+    // stale in step 2. That is why staleness detection works at all despite
+    // the PING — do not "optimise" the PING away without replacing it.
     if (this.activeSocket && this.activeSocket.readyState === 1) { // 1 = OPEN
       try {
         this.activeSocket.send(JSON.stringify({ type: "PING" }));
@@ -1522,8 +1551,16 @@ export class GeminiBridgeDO extends DurableObject {
         });
       } catch (error) { return this.failure(503, error.message, "Browser request queue interrupted"); }
     } else this.requestBusy = true;
+    // Bracket the whole generation so scheduleAlarm() keeps the fast interval
+    // while a request is being produced, and drops to the idle interval the
+    // moment it finishes. The finally block guarantees the flag is cleared on
+    // throw as well as on success.
+    this._generationInFlight = true;
+    this.scheduleAlarm();
     try { return await this.handleRequest(request); }
     finally {
+      this._generationInFlight = false;
+      this.scheduleAlarm();
       const next = this.pendingRequests.shift();
       if (next) next.resolve(); else this.requestBusy = false;
     }
