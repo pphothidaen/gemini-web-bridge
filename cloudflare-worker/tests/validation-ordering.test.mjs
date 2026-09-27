@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
+import { makeCtx } from './helpers/fake-ctx.mjs';
 
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 const context = {
@@ -56,7 +57,7 @@ const { GeminiBridgeDO } = vm.runInNewContext(
 // A DO with no extension attached: isExtensionReady() is false, which is
 // exactly the state in which the old ordering produced a 503 after 12s.
 const disconnectedBridge = () =>
-  new GeminiBridgeDO({}, { CLIENT_API_TOKEN: 'client-secret', BRIDGE_AUTH_TOKEN: 'bridge-secret' });
+  new GeminiBridgeDO(makeCtx(), { CLIENT_API_TOKEN: 'client-secret', BRIDGE_AUTH_TOKEN: 'bridge-secret' });
 
 const post = (b, body) =>
   b.fetch(new Request('https://test/v1/chat/completions', {

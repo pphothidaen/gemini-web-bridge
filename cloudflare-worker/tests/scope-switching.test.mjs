@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { scopeFromPath, scopeToUrl } from '../../extension-cloudflare/protocol-messages.js';
 import * as catalog from '../src/model-catalog.js';
+import { makeCtx } from './helpers/fake-ctx.mjs';
 
 // Instantiate GeminiBridgeDO from cloudflare-worker/src/index.js
 // We strip cloudflare:workers imports and run in a VM context with stubs
@@ -37,7 +38,7 @@ const { GeminiBridgeDO } = vm.runInNewContext(
 const NOTEBOOK_ID = 'b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0';
 
 function createBridge() {
-  const b = new GeminiBridgeDO({}, { CLIENT_API_TOKEN: 'secret-token-123', BRIDGE_AUTH_TOKEN: 'bridge-secret' });
+  const b = new GeminiBridgeDO(makeCtx(), { CLIENT_API_TOKEN: 'secret-token-123', BRIDGE_AUTH_TOKEN: 'bridge-secret' });
   b.currentTokens = { sessionReady: true };
   b.lastNotebookScope = `notebook:${NOTEBOOK_ID}`;
   return b;

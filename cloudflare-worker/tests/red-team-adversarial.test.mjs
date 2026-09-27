@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
+import { makeCtx } from './helpers/fake-ctx.mjs';
 
 // ─── Harness Setup ───────────────────────────────────────────
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
@@ -35,7 +36,7 @@ const { GeminiBridgeDO } = vm.runInNewContext(
 );
 
 function createTestDO(env = {}) {
-  const bridge = new GeminiBridgeDO({}, {
+  const bridge = new GeminiBridgeDO(makeCtx(), {
     CLIENT_API_TOKEN: 'client-bearer-secret-2026',
     BRIDGE_AUTH_TOKEN: 'bridge-secret-token-2026',
     ...env

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
+import { makeCtx } from './helpers/fake-ctx.mjs';
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 const context = { ...catalog, ...emulator, DurableObject: class {}, crypto, Request, Response, URL, TextEncoderStream, console, setTimeout, clearTimeout, setInterval: () => {} };
 const { GeminiBridgeDO, ProtocolDecoder } = vm.runInNewContext(source.replace(/import[\s\S]*?from "[^"\n]+";/g, '').replaceAll('export class ', 'class ').replace('export default {', 'const entry = {') + '\n;({GeminiBridgeDO, ProtocolDecoder})', context);
@@ -11,7 +12,7 @@ const safeTool = emulator.SUPPORTED_TOOLS.read_file;
 const policy = { tools: [safeTool], required: false, parallel: true };
 const call = '<tool_call>{"name":"read_file","arguments":{"file_path":"/workspace/a.js"}}</tool_call>';
 function bridge(models = [{id:"gemini-9-pro-thinking",name:"9 Pro",thinking:true,verification:'verified',mapping_revision:'rev-1'}]) {
-  const b = new GeminiBridgeDO({}, { CLIENT_API_TOKEN: 'test', BRIDGE_AUTH_TOKEN: 'bridge' });
+  const b = new GeminiBridgeDO(makeCtx(), { CLIENT_API_TOKEN: 'test', BRIDGE_AUTH_TOKEN: 'bridge' });
   b.currentTokens = { sessionReady: true };
   b.replaceModelCatalog({ protocolVersion: 2, models });
   b.activeSocket = { readyState: 1, send(raw) {

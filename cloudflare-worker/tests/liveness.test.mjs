@@ -33,6 +33,62 @@ test('recording a connection arms the alarm', () => {
   );
 });
 
+test('the alarm is armed through the storage API, not a ctx property', () => {
+  // KAN-168 root cause. scheduleAlarm() used to do:
+  //
+  //     this.ctx.alarm = Math.max(1, Math.round(ms / 1000));
+  //
+  // DurableObjectState has no `alarm` property, so that only created a plain
+  // own-property on the ctx object. The runtime never saw it and no alarm was
+  // ever scheduled — which is why alarm() had never run once in production.
+  //
+  // The reason this survived so long: the KAN-168 read-back instrumentation
+  // logged "read back ctx.alarm=120 type=number" and read as proof the arm had
+  // worked. It only proved the assignment reached a JS object. Confirmed in
+  // wrangler dev: an arm via `ctx.alarm` left getAlarm() === null, while an
+  // arm via storage.setAlarm() returned a real timestamp and fired.
+  //
+  // setAlarm takes an ABSOLUTE time, not a delay in seconds, so this also pins
+  // the Date.now() + offset shape. A bare number would be a 1970 timestamp and
+  // could never produce a future wakeup.
+  const body = /scheduleAlarm\(reason = "unspecified"\)\s*\{[\s\S]*?\n  \}/.exec(workerSrc);
+  assert.ok(body, 'scheduleAlarm() must still exist in src/index.js');
+  assert.match(
+    body[0],
+    /this\.ctx\.storage\.setAlarm\(\s*fireAt\s*\)/,
+    'scheduleAlarm() must arm via this.ctx.storage.setAlarm(fireAt) — assigning to ' +
+      'this.ctx.alarm silently does nothing and leaves the DO without liveness detection'
+  );
+  assert.match(
+    body[0],
+    /const fireAt = Date\.now\(\) \+ ms;/,
+    'the alarm time must be absolute (Date.now() + ms) — setAlarm does not take a ' +
+      'delay in seconds, so a bare interval would be a 1970 timestamp'
+  );
+});
+
+test('nothing assigns to the non-existent ctx.alarm property', () => {
+  // A direct pin on the mistake, independent of scheduleAlarm(): even if a
+  // future edit reintroduced `ctx.alarm =` somewhere else — a new re-arm path,
+  // a hibernation branch — this fails. The comment inside scheduleAlarm()
+  // quotes the old line deliberately, so only executable code is matched.
+  const offenders = workerSrc
+    .split('\n')
+    .map((line, i) => ({ line, n: i + 1 }))
+    .filter(({ line }) => {
+      const code = line.replace(/\/\/.*$/, ''); // strip line comments
+      return /(this|ctx|self)\.ctx\.alarm\s*=(?!=)/.test(code);
+    });
+
+  assert.deepEqual(
+    offenders,
+    [],
+    'ctx.alarm is not part of DurableObjectState — assigning to it creates a ' +
+      'dead property and schedules nothing. Use ctx.storage.setAlarm() instead. ' +
+      `Found at line(s): ${offenders.map((o) => o.n).join(', ')}`
+  );
+});
+
 test('the client stale threshold exceeds the DO keepalive interval', () => {
   // The invariant both sides now depend on. The client tears its own socket
   // down after CLIENT_STALE_SOCKET_IDLE_MS of silence, and the server only

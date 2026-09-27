@@ -657,35 +657,45 @@ export class GeminiBridgeDO extends DurableObject {
       this._generationInFlight === true;
     const ms = busy ? GeminiBridgeDO.RUN_ALARM_INTERVAL_MS
                     : GeminiBridgeDO.IDLE_ALARM_INTERVAL_MS;
-    // Cloudflare stores the alarm in whole seconds; sub-second would throw.
-    this.ctx.alarm = Math.max(1, Math.round(ms / 1000));
-    // KAN-168 diagnostic (TEMPORARY). Reads ctx.alarm straight back after the
-    // assignment, which separates the two possible failures: the assignment not
-    // taking effect at all, versus it taking effect and the runtime never
-    // delivering the callback. On 2026-09-27 the arm log fired repeatedly and
-    // alarm() still never ran, so "the code set it" was never actually
-    // established — only "the code reached the assignment".
+
+    // KAN-168 — THE ROOT CAUSE. This used to read:
     //
-    // console.warn rather than vlog so this needs no BRIDGE_VERBOSE, and
-    // once-per-instance so leaving it costs one line per DO creation.
-    if (!this._alarmReadbackLogged) {
-      this._alarmReadbackLogged = true;
-      console.warn(
-        `[Bridge DO] ALARM READBACK (once per instance): ` +
-        `set ctx.alarm=${this.ctx.alarm}s (mode=${busy ? "busy" : "idle"}); ` +
-        `read back ctx.alarm=${JSON.stringify(this.ctx.alarm)} ` +
-        `type=${typeof this.ctx.alarm}. ` +
-        'If the read-back is null/undefined the assignment is not taking effect; ' +
-        'if it holds a timestamp the runtime is not delivering the callback.'
-      );
+    //     this.ctx.alarm = Math.max(1, Math.round(ms / 1000));
+    //
+    // DurableObjectState has no `alarm` property. That line therefore only
+    // created a plain own-property on the ctx object: the runtime never saw
+    // it, and no alarm was ever scheduled. Because reading the property back
+    // returned the number just written, the KAN-168 read-back instrumentation
+    // logged "read back ctx.alarm=120 type=number" and looked like proof the
+    // arm had succeeded. It proved only that the assignment reached a JS
+    // object — a getAlarm() check in wrangler dev returned null for exactly
+    // that arm while a setAlarm() arm fired normally.
+    //
+    // The real API is ctx.storage.setAlarm(scheduledTime), and it takes an
+    // ABSOLUTE time (epoch ms or a Date), not a delay in seconds. A delay of
+    // 120 is therefore a timestamp in 1970 — in the past, so it can never
+    // produce a future wakeup even where the property did exist.
+    const fireAt = Date.now() + ms;
+
+    // setAlarm is async. scheduleAlarm is called from synchronous contexts
+    // (the constructor, recordConnection, the generation brackets) that cannot
+    // await, so the promise is handled here rather than left to reject
+    // unobserved. A failed arm is precisely the silent-death condition this
+    // bug was, so it is logged ungated: errors are never vlog-gated in this
+    // file, and one warning per failed arm is worth the CPU.
+    const armed = this.ctx.storage.setAlarm(fireAt);
+    if (armed && typeof armed.catch === "function") {
+      armed.catch((e) => {
+        console.warn(
+          `[Bridge DO] scheduleAlarm(${reason}) FAILED to arm alarm:`, e && e.message
+        );
+      });
     }
-    // KAN-168 diagnostic. This is the only way to tell an armed alarm from one
-    // that was never set, and there was previously no way to see the
-    // arm/skip-re-arm decision at all — which is why the cause of the dead
-    // keepalive could not be established from production.
+
     vlog(
-      `[Bridge DO] scheduleAlarm(${reason}): armed in ${this.ctx.alarm}s ` +
-      `(mode=${busy ? "busy" : "idle"}, conns=${this.activeConnections ? this.activeConnections.size : 0}, ` +
+      `[Bridge DO] scheduleAlarm(${reason}): armed in ${Math.round(ms / 1000)}s ` +
+      `(mode=${busy ? "busy" : "idle"}, fires at ${fireAt}, ` +
+      `conns=${this.activeConnections ? this.activeConnections.size : 0}, ` +
       `mcpSessions=${this.mcpSessions ? this.mcpSessions.size : 0})`
     );
   }
@@ -721,6 +731,18 @@ export class GeminiBridgeDO extends DurableObject {
    * See src/liveness.js.
    */
   async alarm() {
+    // KAN-168: the alarm is real now (it never fired before — see the note in
+    // scheduleAlarm). getAlarm() is read first, before any of the work below,
+    // so that if this handler ever throws, the log still shows whether the
+    // runtime had actually delivered an alarm. A null here would mean the
+    // handler was invoked without a scheduled alarm, which is the signature
+    // of a runtime problem rather than an application one.
+    try {
+      vlog(`[Bridge DO] alarm() fired. getAlarm()=${await this.ctx.storage.getAlarm()}`);
+    } catch (e) {
+      console.warn("[Bridge DO] alarm() getAlarm() read failed:", e && e.message);
+    }
+
     // ─── 1. Keepalive PING (from former initKeepalive) ───
     // Probe EVERY tracked connection, not just the "primary" one: the sweep below
     // judges liveness by whether a connection answered, so a connection that is

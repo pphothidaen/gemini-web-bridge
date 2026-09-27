@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto';
 import * as modelCatalog from '../src/model-catalog.js';
 import * as liveness from '../src/liveness.js';
 import * as protocol from '../../extension-cloudflare/protocol-messages.js';
+import { makeCtx } from './helpers/fake-ctx.mjs';
 
 // ─── Load DO source and strip Cloudflare imports ───────────────
 const doSource = fs.readFileSync(
@@ -95,7 +96,7 @@ function mockSocket() {
 
 /** Create a DO instance with scopeRouter wired up for testing */
 function createBridge() {
-  const b = new GeminiBridgeDO({}, {
+  const b = new GeminiBridgeDO(makeCtx(), {
     CLIENT_API_TOKEN: 'test-token',
     BRIDGE_AUTH_TOKEN: 'bridge-secret',
   });

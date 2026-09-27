@@ -28,6 +28,7 @@ import vm from 'node:vm';
 import { randomUUID } from 'node:crypto';
 import * as modelCatalog from '../src/model-catalog.js';
 import * as liveness from '../src/liveness.js';
+import { makeCtx } from './helpers/fake-ctx.mjs';
 
 // -- Load DO source and strip Cloudflare imports ----------------
 const doSource = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
@@ -115,7 +116,7 @@ const INSTANCE_A = '4e2b3729-f87d-43da-8ad4-6f88f1864bce';
 const NOTEBOOK = 'b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0';
 
 function createBridge() {
-  return new GeminiBridgeDO({}, { BRIDGE_AUTH_TOKEN: BRIDGE_TOKEN, CLIENT_API_TOKEN: 'client-token' });
+  return new GeminiBridgeDO(makeCtx(), { BRIDGE_AUTH_TOKEN: BRIDGE_TOKEN, CLIENT_API_TOKEN: 'client-token' });
 }
 
 function wsRequest(instanceId) {

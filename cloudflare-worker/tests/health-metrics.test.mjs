@@ -13,6 +13,7 @@ import vm from 'node:vm';
 import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
 import * as pdfLib from 'pdf-lib';
+import { makeCtx } from './helpers/fake-ctx.mjs';
 
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 const context = {
@@ -43,7 +44,7 @@ const { GeminiBridgeDO } = vm.runInNewContext(
 );
 
 const createBridge = () => {
-  const b = new GeminiBridgeDO({}, { CLIENT_API_TOKEN: 'k', BRIDGE_AUTH_TOKEN: 'b' });
+  const b = new GeminiBridgeDO(makeCtx(), { CLIENT_API_TOKEN: 'k', BRIDGE_AUTH_TOKEN: 'b' });
   b.currentTokens = { sessionReady: true };
   return b;
 };
