@@ -22,9 +22,23 @@ import tls from 'node:tls';
 const WORKER_URL = process.env.WORKER_URL || 'https://prod.gemini-web-bridge.workers.dev';
 const BRIDGE_AUTH_TOKEN = process.env.BRIDGE_AUTH_TOKEN || '';
 
-const skip = BRIDGE_AUTH_TOKEN
+// These tests take the single-instance lease and hold it, so they can knock a
+// real user's bridge offline. That happened while verifying the other fixes in
+// this suite: the lease looked free (the extension was mid-reconnect, so the DO
+// reported zero connections), the tests connected, and the live extension was
+// evicted. It recovered on its own ~30s later, but "recovered on its own" is not
+// a safety property.
+//
+// A /health probe cannot close that race, so require an explicit acknowledgement
+// that the target is a host nobody is using. Deliberately NOT defaulted to
+// production: WORKER_URL above still points there, so the safe default is to skip.
+const ISOLATED = process.env.BRIDGE_PHASE5_TARGET_ISOLATED === '1';
+
+const skip = BRIDGE_AUTH_TOKEN && ISOLATED
   ? false
-  : 'BRIDGE_AUTH_TOKEN not set — Phase 5 live tests not exercised';
+  : !BRIDGE_AUTH_TOKEN
+    ? 'BRIDGE_AUTH_TOKEN not set — Phase 5 live tests not exercised'
+    : 'set BRIDGE_PHASE5_TARGET_ISOLATED=1 to confirm no real user depends on this worker — these tests evict a live extension';
 
 // These tests drive the single-instance connection lease. If a real browser
 // extension is already connected to the DO, it owns that lease, and the worker
@@ -38,16 +52,28 @@ const skip = BRIDGE_AUTH_TOKEN
 // attached (e.g. a dedicated test DO).
 let leaseTaken = false;
 let leaseDetail = '';
+// `isStale` is not evidence that the lease is free. The DO reaps a socket only
+// after 45s of silence, and the extension's MV3 service worker can be quiet that
+// long between WebSocket frames without being gone. In that window /health
+// reports the connection stale while the DO still holds the slot, so a new
+// instanceId is treated as a competitor and the real extension is evicted.
+// Observed directly on production: a stale-looking connection let a competing
+// upgrade through and the live extension dropped to DISCONNECTED (it reconnected
+// on its own ~30s later). These tests connect deliberately and repeatedly, so
+// they are the most likely to trigger it — treat ANY tracked connection as a
+// held lease, stale or not.
 async function detectBusyLease() {
   if (process.env.BRIDGE_PHASE5_ASSUME_FREE_LEASE === '1') return;
   try {
     const res = await fetch(`${WORKER_URL}/health`);
     const body = await res.json();
     const it = body?.instance_tracking ?? {};
-    const live = (it.connections ?? []).filter((c) => !c.isStale);
-    if (live.length > 0) {
+    const tracked = it.connections ?? [];
+    if (tracked.length > 0) {
       leaseTaken = true;
-      leaseDetail = live.map((c) => c.instanceId).join(',');
+      leaseDetail = tracked
+        .map((c) => `${c.instanceId}${c.isStale ? ' (stale)' : ''}`)
+        .join(',');
     }
   } catch {
     // /health unreachable — let the tests run and report their own failure.
@@ -62,6 +88,12 @@ async function detectBusyLease() {
  * reaper fires). A fixed sleep is therefore unreliable — it flaked between
  * TS-005, TS-007 and TS-012 depending on which one happened to start while a
  * previous socket was still registered. Poll the real state instead.
+ *
+ * This is cleanup between tests, not a licence to run. Each test still gates on
+ * its own detectBusyLease() check, and there is an unavoidable race: the DO can
+ * report no connections during the window where the real extension is
+ * reconnecting, and the next test's upgrade then evicts it. That race is why
+ * BRIDGE_PHASE5_TARGET_ISOLATED exists — see the note above detectBusyLease().
  */
 async function waitForFreeLease(timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;

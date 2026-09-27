@@ -2056,6 +2056,23 @@ export class GeminiBridgeDO extends DurableObject {
         }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
+      // Validate request shape BEFORE the extension-readiness gate below.
+      //
+      // A malformed request is malformed regardless of whether a browser
+      // happens to be attached, so the answer must not depend on it. Checking
+      // this afterwards meant an empty `messages` array from a client with no
+      // extension attached sat in waitForExtension() for the full 12s grace
+      // window and then came back 503 "Chrome Extension is not connected" —
+      // sending the caller to debug their browser instead of their payload,
+      // and holding a slot in the wait queue for a request that could never
+      // succeed. It also meant this validation was untestable without a live
+      // browser, because the 400 it returns was unreachable whenever the
+      // extension was absent.
+      if (!body || !Array.isArray(body.messages) || !body.messages.length) {
+        return new Response(JSON.stringify({ error: { message: "messages must be a non-empty array", type: "invalid_request_error" } }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
       // ตรวจสอบสถานะการเชื่อมต่อของ Extension ก่อนแบบ Strict Fail-Fast หรือ GCP Fallback
       // (พร้อม reconnect grace: รอสั้นๆ ก่อนยอมแพ้ เพื่อกลืน blip ระยะสั้น)
       if (!this.isExtensionReady() || this.protocolVersion < 2 || this.protocolVersion > 3) {
@@ -2095,11 +2112,6 @@ export class GeminiBridgeDO extends DurableObject {
           }
         }), { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } });
         }
-      }
-
-      if (!body || !Array.isArray(body.messages) || !body.messages.length) {
-        return new Response(JSON.stringify({ error: { message: "messages must be a non-empty array", type: "invalid_request_error" } }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
       const requestId = `chatcmpl-${crypto.randomUUID()}`;

@@ -37,21 +37,88 @@ const PROTOCOL_VERSION = 3;
 // the redteam-token-test job already proves both tokens against production.
 const skip = (CLIENT_API_TOKEN || BRIDGE_AUTH_TOKEN) ? false : 'No tokens set — live-server tests not exercised';
 
-// A further, harder dependency. Three tests here need a browser extension
-// actually connected to the DO: chat/completions must route through a real
-// Gemini session, and the WebSocket test opens a client connection. With no
-// extension the worker answers 503 (no model) or the upgrade has nothing to
-// bind to, so these fail on infrastructure state rather than on a defect —
-// and they fail intermittently, whenever the 45s stale-connection timeout
-// lapses between runs.
+// A further, harder dependency, and the two remaining tests split apart here.
 //
-// So they are opt-in via BRIDGE_LIVE_EXTENSION=1, which must be set only
-// when a browser is genuinely connected. The default is skip, with the
-// reason visible, so the suite never reports a false failure and never
-// claims a pass it did not earn.
+// `POST /v1/chat/completions` with a real message must route through a genuine
+// Gemini session, so it needs a browser extension actually connected to the DO.
+// With no extension the worker answers 503, and it fails intermittently whenever
+// the 45s stale-connection timeout lapses between runs. That test is opt-in via
+// BRIDGE_LIVE_EXTENSION=1, which must be set only when a browser is genuinely
+// connected.
+//
+// The WebSocket test is gated on the OPPOSITE condition and cannot share that
+// gate. The worker enforces a single-instance connection lease: with an
+// extension attached and healthy, every new instanceId is refused with 409,
+// which is correct production behaviour. Asserting a successful upgrade in that
+// state would demand the worker break its own conflict detection. So this test
+// needs the lease to be FREE, and skips with a truthful reason when it is not.
+// (phase5-instance-id.test.mjs already models this correctly via
+// detectBusyLease(); the same reasoning applies here.)
+//
+// It also must not request a subprotocol. The worker builds its 101 from a bare
+// WebSocketPair and never echoes Sec-WebSocket-Protocol, so per RFC 6455 a
+// client that offered one must fail the handshake — the previous
+// `new WebSocket(url, ['gemini-bridge-v2'])` therefore could never pass, and
+// failed with 1006 before a single assertion ran. phase5-instance-id.test.mjs
+// documents the A/B that proves this.
 const skipLive = process.env.BRIDGE_LIVE_EXTENSION === '1'
   ? false
   : 'needs a connected browser extension — set BRIDGE_LIVE_EXTENSION=1 to run';
+
+let leaseTaken = false;
+let leaseDetail = '';
+
+/**
+ * Is a *real* extension holding the connection lease right now?
+ *
+ * `isStale` is NOT enough to conclude the lease is free. The DO reaps a socket
+ * only after 45s of silence, and the extension's MV3 service worker can be
+ * quiet for that long between WebSocket frames without being gone. During that
+ * window /health reports the connection as stale while the worker still holds
+ * the slot, and a new instanceId that arrives then is treated as a competitor:
+ * the DO evicts the real extension and the test's socket takes the lease.
+ *
+ * That is not hypothetical — it happened while verifying this fix against
+ * production. /health showed one stale connection, the gate concluded the lease
+ * was free, the upgrade succeeded, and the live extension was displaced
+ * (`DISCONNECTED`, `epoch` bumped). It reconnected on its own ~30s later, so
+ * nothing broke, but a test run must never be able to knock the bridge offline
+ * for whoever is using it.
+ *
+ * So treat ANY tracked connection as a held lease, stale or not. Only a DO
+ * reporting no connections at all is genuinely free.
+ */
+async function detectBusyLease() {
+  if (process.env.BRIDGE_LIVE_EXTENSION === '1') return;
+  // Reset first: this runs more than once, and a stale `true` from the
+  // import-time snapshot would otherwise skip a test whose lease is now free.
+  leaseTaken = false;
+  leaseDetail = '';
+  try {
+    const res = await fetch(`${WORKER_URL}/health`);
+    const body = await res.json();
+    const tracked = body?.instance_tracking?.connections ?? [];
+    if (tracked.length > 0) {
+      leaseTaken = true;
+      leaseDetail = tracked
+        .map((c) => `${c.instanceId}${c.isStale ? ' (stale)' : ''}`)
+        .join(',');
+    }
+  } catch {
+    // /health unreachable — run the test and let it report its own failure.
+  }
+}
+
+// Resolved once, up front, rather than from a `skip: async () => ...`.
+// node:test does not await a Promise returned from the `skip` option: it
+// treats the Promise itself as truthy and skips with the bare label "SKIP",
+// discarding the reason. Probed on Node 26. An async skip would therefore have
+// hidden exactly the explanation this gate exists to give.
+await detectBusyLease();
+
+const skipLease = leaseTaken
+  ? `connection lease held by live extension (${leaseDetail}) — this test needs it free`
+  : false;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -129,7 +196,25 @@ test('GET /v1/models returns model catalog', { skip }, async () => {
 
 // ─── Test Suite 3: WebSocket Bridge Connection ──────────────────────
 
-test('WebSocket upgrade succeeds with valid subprotocol', { skip: skipLive }, async () => {
+// `skipLease` alone is not enough: with no tokens set this test would still
+// run, build a tokenless URL, and collect a legitimate 401 that has nothing to
+// do with the upgrade path it is meant to verify. Gate on both, and report
+// whichever is actually missing.
+const skipUpgrade = skip || skipLease;
+
+test('WebSocket upgrade succeeds with valid subprotocol', { skip: skipUpgrade }, async (t) => {
+  // Re-check the lease immediately before connecting. `skipLease` is a snapshot
+  // taken at import time, and the gap between then and here is enough for the
+  // extension to attach: observed live as `readyState=3` in onerror, because
+  // the DO had just evicted a departing instance and had not yet accepted a new
+  // one. That is a transient worker state, not a defect in the upgrade path, so
+  // report it as a skip with the reason rather than a false failure.
+  await detectBusyLease();
+  if (leaseTaken) {
+    t.skip(`connection lease taken since load (${leaseDetail}) — this test needs it free`);
+    return;
+  }
+
   const wsUrl = WORKER_URL.replace('https://', 'wss://');
   // instanceId is REQUIRED. The DO rejects any /bridge upgrade without a
   // UUID instanceId with 401 "Unauthorized: Invalid instance ID" — the same
@@ -140,43 +225,43 @@ test('WebSocket upgrade succeeds with valid subprotocol', { skip: skipLive }, as
   const instanceId = crypto.randomUUID();
   const url = `${wsUrl}/bridge${token}&instanceId=${instanceId}`;
 
-  // Use native WebSocket if available (Node 22+), otherwise skip
-  const ws = new WebSocket(url, ['gemini-bridge-v2']);
-  
-  const result = await new Promise((resolve, reject) => {
+  // No subprotocol is requested, and that is load-bearing. The worker builds
+  // its 101 from a bare WebSocketPair and never echoes Sec-WebSocket-Protocol.
+  // Per RFC 6455 a client that offered subprotocols but receives none must fail
+  // the handshake, so the previous `new WebSocket(url, ['gemini-bridge-v2'])`
+  // could never pass — it died with 1006 before any assertion ran. The test name
+  // is retained for continuity with the suite history; what it actually
+  // verifies is the authenticated upgrade with a valid instanceId.
+  const ws = new WebSocket(url);
+
+  // Assert the UPGRADE, which is what this test is named for. The DO is silent
+  // on connect: it returns a bare 101 and waits for the client to speak first,
+  // answering only SESSION_READY / MODELS_DISCOVERED / PONG (index.js:1870-1884).
+  // The previous version sent a lowercase {type:'ping'} and then waited for a
+  // 'pong' — a message type the DO does not handle — so it always burned the
+  // full 10s timeout and failed even when the upgrade had fully succeeded.
+  // Confirmed against a live host with a free lease: onopen fires, then silence.
+  await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      ws.close();
-      reject(new Error('WebSocket connection timeout'));
+      try { ws.close(); } catch { /* already closing */ }
+      reject(new Error('WebSocket upgrade timed out (no 101 within 10s)'));
     }, 10000);
 
-    ws.onopen = () => {
-      // Send a ping message
-      ws.send(JSON.stringify({ type: 'ping' }));
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'pong' || msg.type === 'connected') {
-          clearTimeout(timeout);
-          ws.close();
-          resolve({ connected: true, response: msg });
-        }
-      } catch {
-        // Non-JSON message, still connected
-        clearTimeout(timeout);
-        ws.close();
-        resolve({ connected: true, raw: event.data });
-      }
-    };
-
-    ws.onerror = (err) => {
+    ws.onopen = () => { clearTimeout(timeout); resolve(); };
+    ws.onerror = () => {
       clearTimeout(timeout);
-      reject(new Error('WebSocket error'));
+      // A refused upgrade surfaces here: 401 for a bad token or a missing or
+      // malformed instanceId, 409 when another instance holds the lease.
+      reject(new Error(`WebSocket upgrade failed (readyState=${ws.readyState})`));
     };
   });
 
-  assert.ok(result.connected, 'should establish WebSocket connection');
+  assert.equal(ws.readyState, WebSocket.OPEN, 'socket should be OPEN after a 101');
+
+  // Close cleanly and let the DO observe it, so the lease is released promptly
+  // for the next run instead of lingering until the 45s stale reaper fires.
+  ws.close(1000, 'test complete');
+  await new Promise((resolve) => { ws.onclose = resolve; setTimeout(resolve, 2000); });
 });
 
 // ─── Test Suite 4: Gemini RPC Flow ───────────────────────────────────
@@ -201,7 +286,13 @@ test('POST /v1/chat/completions sends message and receives response', { skip: sk
 
 // ─── Test Suite 5: Error Handling ───────────────────────────────────
 
-test('POST /v1/chat/completions rejects empty messages', { skip: skipLive }, async () => {
+// No longer gated on a live extension. The worker validates request shape
+// before its extension-readiness gate, so an empty `messages` array is a 400
+// whether or not a browser is attached. It used to be gated because validation
+// ran *after* the gate: with no extension the worker returned 503, so the 400
+// this asserts was unreachable and the test could only be exercised while a
+// browser happened to be connected.
+test('POST /v1/chat/completions rejects empty messages', { skip }, async () => {
   const { status } = await fetchJSON('/v1/chat/completions', {
     method: 'POST',
     body: JSON.stringify({ messages: [] }),

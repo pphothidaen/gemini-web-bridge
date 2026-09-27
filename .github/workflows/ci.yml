@@ -107,10 +107,22 @@ jobs:
         # authenticate with — CF_TOKEN is a different credential and the
         # worker rejects it on /v1/models with 401.
         #
-        # BRIDGE_LIVE_EXTENSION is deliberately NOT set: three of those tests
-        # need a browser extension connected to the DO, which is never true in
-        # CI, and they are gated on that flag so they skip with a reason
-        # rather than failing on infrastructure state.
+        # BRIDGE_LIVE_EXTENSION is deliberately NOT set: the remaining
+        # chat/completions round-trip needs a browser extension connected to the
+        # DO, which is never true in CI, and it is gated on that flag so it skips
+        # with a reason rather than failing on infrastructure state.
+        #
+        # BRIDGE_PHASE5_TARGET_ISOLATED is deliberately NOT set either. The Phase
+        # 5 lease tests take the single-instance connection lease and can evict
+        # a real extension, and CI runs against production. A /health probe
+        # cannot make that safe — during a genuine reconnect the DO reports zero
+        # connections, so the probe reads "free" precisely when a competing
+        # upgrade is most likely to displace the live client. They now require an
+        # explicit acknowledgement that the target host has no real user.
+        #
+        # Note the WebSocket upgrade test is NOT gated on either flag: it needs
+        # the lease to be FREE, and skips with a reason when a live extension
+        # holds it, so it is safe to run from CI.
         env:
           CLIENT_API_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
           BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
