@@ -14,6 +14,24 @@
  *   node sw-console.mjs 9222 dnapdkmdpjh   # the real bridge extension
  *
  * Requires Chrome to be started with --remote-debugging-port=<debugPort>.
+ *
+ * ── Operational notes (learned the hard way, 2026-09-27) ────────────────────
+ *
+ * 1. Chrome 137+ ignores --load-extension. You cannot seed a throwaway profile
+ *    with the extension from the command line. To test this script you either
+ *    load the extension by hand into the profile Chrome opens, or run against
+ *    the real browser (see 2).
+ *
+ * 2. NEVER run this against a throwaway profile while the real browser is
+ *    connected. Both extensions then hold the same Durable Object slot: the DO
+ *    admits one connection and 409s the other. The symptom is a client that
+ *    connects, gets evicted, and then retries into 409 forever — which looks
+ *    exactly like a client bug and is not one. Use the real browser.
+ *
+ * 3. If Chrome 137+ also blocks this, the user's own
+ *    scripts/chrome-dev-shortcut.command launches Chrome with an isolated
+ *    profile and remote debugging. It is untracked; do not assume it is safe to
+ *    delete.
  */
 const port = process.argv[2] || '9222';
 const match = process.argv[3] || '';
