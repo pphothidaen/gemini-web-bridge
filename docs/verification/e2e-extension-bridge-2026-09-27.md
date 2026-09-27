@@ -223,3 +223,88 @@ The cheap improvement is to make the DO's alarm distinguish "no client" from
 "client that stopped answering" and surface that as a distinct signal, rather
 than widening the probe to fail on `DISCONNECTED` — that state is legitimately
 common overnight and would cry wolf every night.
+
+---
+
+## Addendum — cutover closed on the new account
+
+Recorded after the Cloudflare account migration was approved and deployed.
+
+### What was approved
+
+CD run `36308246945` was parked on the `production` environment gate
+(`current_user_can_approve: true`). Approving it produced deployment
+`6690289516` and the deploy job went green:
+
+| Step | Result |
+|---|---|
+| Secrets from Doppler | success |
+| `BRIDGE_AUTH_TOKEN`, `CLIENT_API_TOKEN` uploaded | success |
+| `Uploaded prod` (2.33 s) | KV `400bc54565de455689ece92f8351bcb9` |
+| Version ID | `0d2f38a9-c2a8-49d0-9680-abaf16cf6023` |
+| Verify production deployment | success |
+
+### A reference the 23-file sweep had missed
+
+`cloudflare-worker/scripts/verify-live-mcp.py` still hardcoded the pre-migration
+host. It escaped the sweep because the value is a plain string literal rather
+than a `__WORKER_URL__` build placeholder, so a placeholder-oriented search
+never matched it. The live verification script would have kept probing the old
+account and reporting on it. Fixed in `1b58bbc` by reading `WORKER_URL` from
+the environment — the same variable `cloudflare-worker/.env` and the other
+verify scripts already use — so it cannot silently drift again.
+
+### The extension migrated without a manual reload
+
+The handoff listed "reload the extension" as a manual step. It turned out to be
+unnecessary. The unpacked extension loads
+`/Users/kimlenglim/Project/gemini-web-bridge/dist/extension` (Chrome
+`Secure Preferences`, `Profile 4`, id `dnapdkmdpjhpmnmpackekipejlfoplik`),
+and the sync-storage write-ahead log shows `workerUrl` had already been
+rewritten to `https://prod.gemini-web-bridge.workers.dev`. The extension
+picked up the new value on its own reconnect.
+
+Two bundle claims were checked line-by-line against the KAN-155 diff rather
+than trusted, because the handoff warned the shipped bundle predated the fix:
+
+- `d342beb` (KAN-155) touched **`content.js`**, not `background.js`. Checking
+  `background.js` would have produced a false "missing fix".
+- All 34 added lines are present in **both** `dist/extension/content.js` and
+  `release/gemini-bridge-v4.4.3/content.js`, including
+  `url.searchParams.set("instanceId", instanceId)` on the direct-WS path.
+
+The stale-bundle hazard was real but had already been cleared by the 14:20
+rebuild; `dist/` is newer than its sources.
+
+### End-to-end generation on the new host
+
+| Check | Result |
+|---|---|
+| `/health` | 200, v4.4.3 |
+| `/bridge/auth-check` | 200, `protocolVersion: 3` |
+| `/v1/models` | 200, authed |
+| Generation, valid token | **200 in 6.66 s, returned `BRIDGE_OK_442` exactly** |
+| Generation, invalid token | 401 |
+| Generation, extension absent | 503 `extension_disconnected` |
+| Worker tests | 260 · **257 pass · 0 fail · 3 skipped** |
+| CI on `1b58bbc` | success |
+
+The 401-vs-503 split is the useful part: a bad token is rejected at the auth
+wall, while a valid token with no browser attached reaches the hub and fails
+there. Auth on the new account is genuinely wired to the same secrets.
+
+Final health: `CONNECTED_AND_READY`, `last_successful_generation` recorded,
+`consecutive_errors: 0`, `epoch: 2`, browser model `3.8 Flash Extended`,
+scope `app`.
+
+### Old account
+
+`gemini-web-bridge.pansakorn-pho.workers.dev` still answers 200 and is now
+`DISCONNECTED` with `epoch 0` — the extension left it and it holds no state.
+It remains a working rollback target.
+
+`access/apps` on the new account returns an empty list, and
+`gemini-web-bridge.gemini-web-bridge.workers.dev` is 404, so the stale Access
+app noted in the handoff is not present on the new account. The Access
+interception described there belonged to the old account and is irrelevant
+now that no hostname routes there.
