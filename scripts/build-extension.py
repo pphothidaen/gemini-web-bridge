@@ -53,10 +53,10 @@ DOPPLER_CONFIG = "prd_worker"
 
 # Default fallback values for optional URL placeholders
 DEFAULT_VALUES = {
-    "WORKER_URL": "https://gemini-web-bridge.pansakorn-pho.workers.dev",
-    "MCP_ENDPOINT": "https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp",
-    "WSS_ENDPOINT": "wss://gemini-web-bridge.pansakorn-pho.workers.dev/bridge",
-    "OPENAI_ENDPOINT": "https://gemini-web-bridge.pansakorn-pho.workers.dev/v1",
+    "WORKER_URL": "https://prod.gemini-web-bridge.workers.dev",
+    "MCP_ENDPOINT": "https://prod.gemini-web-bridge.workers.dev/mcp",
+    "WSS_ENDPOINT": "wss://prod.gemini-web-bridge.workers.dev/bridge",
+    "OPENAI_ENDPOINT": "https://prod.gemini-web-bridge.workers.dev/v1",
 }
 
 

@@ -31,7 +31,7 @@ on:
 env:
   NODE_VERSION: '22'
   WORKER_DIR: 'cloudflare-worker'
-  PROD_URL: 'https://gemini-web-bridge.pansakorn-pho.workers.dev'
+  PROD_URL: 'https://prod.gemini-web-bridge.workers.dev'
 
 jobs:
   rotate-tokens:

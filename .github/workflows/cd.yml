@@ -41,9 +41,9 @@ concurrency:
 env:
   NODE_VERSION: '22'
   WORKER_DIR: 'cloudflare-worker'
-  PROD_WORKER: 'gemini-web-bridge'
-  WSS_ENDPOINT: 'wss://gemini-web-bridge.pansakorn-pho.workers.dev/bridge'
-  OPENAI_ENDPOINT: 'https://gemini-web-bridge.pansakorn-pho.workers.dev/v1'
+  PROD_WORKER: 'prod'
+  WSS_ENDPOINT: 'wss://prod.gemini-web-bridge.workers.dev/bridge'
+  OPENAI_ENDPOINT: 'https://prod.gemini-web-bridge.workers.dev/v1'
 
 jobs:
   # ─── Doppler Secret Fetch (Primary) ───────────────────────────────
@@ -286,7 +286,7 @@ jobs:
 
       - name: Verify production deployment
         env:
-          PROD_BASE_URL: https://gemini-web-bridge.pansakorn-pho.workers.dev
+          PROD_BASE_URL: https://prod.gemini-web-bridge.workers.dev
         run: |
           sleep 5
           HEALTH=$(curl -s --retry 3 --retry-delay 2 --max-time 30 "$PROD_BASE_URL/health")

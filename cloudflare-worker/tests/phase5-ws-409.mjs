@@ -3,7 +3,7 @@
  * Tests that a new connection from a DIFFERENT healthy instance gets HTTP 409.
  * Uses Node.js native WebSocket (v26+) with Doppler-injected BRIDGE_AUTH_TOKEN.
  */
-const WS_URL = (process.env.WORKER_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev').replace('https://', 'wss://');
+const WS_URL = (process.env.WORKER_URL || 'https://prod.gemini-web-bridge.workers.dev').replace('https://', 'wss://');
 const TOKEN = process.env.BRIDGE_AUTH_TOKEN;
 
 if (!TOKEN) {

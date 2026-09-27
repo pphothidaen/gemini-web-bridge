@@ -11,7 +11,7 @@
  *
  * Run with:
  *   doppler run --project gemini-web-bridge --config prd_worker -- \
- *     env WORKER_URL=https://gemini-web-bridge.pansakorn-pho.workers.dev \
+ *     env WORKER_URL=https://prod.gemini-web-bridge.workers.dev \
  *     node --test tests/phase5-instance-id.test.mjs
  */
 
@@ -19,7 +19,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import tls from 'node:tls';
 
-const WORKER_URL = process.env.WORKER_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev';
+const WORKER_URL = process.env.WORKER_URL || 'https://prod.gemini-web-bridge.workers.dev';
 const BRIDGE_AUTH_TOKEN = process.env.BRIDGE_AUTH_TOKEN || '';
 
 const skip = BRIDGE_AUTH_TOKEN

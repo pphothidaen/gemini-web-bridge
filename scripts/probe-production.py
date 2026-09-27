@@ -17,7 +17,7 @@ import tempfile
 import urllib.error
 import urllib.request
 
-DEFAULT_URL = "https://gemini-web-bridge.pansakorn-pho.workers.dev"
+DEFAULT_URL = "https://prod.gemini-web-bridge.workers.dev"
 
 
 def probe(url, timeout=30):

@@ -297,8 +297,8 @@ jobs:
         env:
           BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
           CLIENT_API_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
-          WORKER_URL: ${{ secrets.WORKER_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev' }}
-          MCP_ENDPOINT: ${{ secrets.MCP_ENDPOINT || 'https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp' }}
+          WORKER_URL: ${{ secrets.WORKER_URL || 'https://prod.gemini-web-bridge.workers.dev' }}
+          MCP_ENDPOINT: ${{ secrets.MCP_ENDPOINT || 'https://prod.gemini-web-bridge.workers.dev/mcp' }}
         run: |
           cd ${{ github.workspace }}
           echo "Building extension v${{ steps.bump-version.outputs.version }} with secrets injected..."
@@ -578,7 +578,7 @@ jobs:
           CURRENT_CLIENT_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
           OLD_BRIDGE_TOKEN: ${{ secrets.OLD_BRIDGE_AUTH_TOKEN }}
           CURRENT_BRIDGE_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
-          BASE_URL: ${{ vars.PROD_BASE_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev' }}
+          BASE_URL: ${{ vars.PROD_BASE_URL || 'https://prod.gemini-web-bridge.workers.dev' }}
         run: |
           echo "## 🔴 Redteam — Token Validation" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

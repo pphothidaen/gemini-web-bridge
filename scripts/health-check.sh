@@ -17,7 +17,7 @@ set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────
 
-WORKER_URL="${1:-https://gemini-web-bridge.pansakorn-pho.workers.dev}"
+WORKER_URL="${1:-https://prod.gemini-web-bridge.workers.dev}"
 CF_TOKEN="${CF_TOKEN:-}"
 TIMEOUT=10
 WARN_LATENCY_MS=2000

@@ -1,11 +1,17 @@
-name = "gemini-web-bridge"
+# Worker name determines the public hostname as
+# <name>.<subdomain>.workers.dev -> prod.gemini-web-bridge.workers.dev
+# The account subdomain is "gemini-web-bridge", so naming the worker
+# "gemini-web-bridge" produced the doubled, confusing
+# gemini-web-bridge.gemini-web-bridge.workers.dev. "prod" keeps the hostname
+# readable and leaves the subdomain as the branding.
+name = "prod"
 main = "src/index.js"
 compatibility_date = "2026-09-12"
 compatibility_flags = ["nodejs_compat"]
 
-# Enable workers.dev — this worker is accessible at gemini-web-bridge.pansakorn-pho.workers.dev
-# Note: route binding via API is not allowed on account's default workers.dev subdomain.
-# The route was created via Cloudflare Dashboard and workers_dev = true keeps it active.
+# This worker is reachable at prod.gemini-web-bridge.workers.dev
+# (subdomain "gemini-web-bridge" on the Gemini.web.bridge@gmail.com account).
+# workers_dev = true is what publishes it; there is no custom route.
 workers_dev = true
 
 # Configure BRIDGE_AUTH_TOKEN and CLIENT_API_TOKEN with wrangler secret put.
@@ -18,10 +24,14 @@ bindings = [
   { name = "BRIDGE_DO", class_name = "GeminiBridgeDO" }
 ]
 
-# Temporary PDF artifact storage for the horo_consult MCP tool (1h TTL entries).
+# Temporary PDF artifact storage for the horo_consult MCP tool (1h TTL).
+# Account-scoped: this id belongs to the Gemini.web.bridge@gmail.com Cloudflare
+# account (d91b1a43a188b73be61833adee445111). The previous id
+# (9620c1ac40ab481c83f9687b7d63a5ce) was in the Pansakorn.pho@gmail.com account
+# and is unreachable from here — a KV id is not valid across accounts.
 [[kv_namespaces]]
 binding = "ARTIFACT_KV"
-id = "9620c1ac40ab481c83f9687b7d63a5ce"
+id = "400bc54565de455689ece92f8351bcb9"
 
 [[migrations]]
 tag = "v1"

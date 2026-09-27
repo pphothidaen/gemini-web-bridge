@@ -53,7 +53,7 @@ jobs:
       - name: Classify the response
         id: classify
         env:
-          PROD_URL: ${{ vars.PROD_BASE_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev' }}
+          PROD_URL: ${{ vars.PROD_BASE_URL || 'https://prod.gemini-web-bridge.workers.dev' }}
         run: python3 scripts/probe-production.py
 
       - name: Report
@@ -61,7 +61,7 @@ jobs:
         env:
           CODE: ${{ steps.classify.outputs.code }}
           DETAIL: ${{ steps.classify.outputs.detail }}
-          PROD_URL: ${{ vars.PROD_BASE_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev' }}
+          PROD_URL: ${{ vars.PROD_BASE_URL || 'https://prod.gemini-web-bridge.workers.dev' }}
         run: |
           set -uo pipefail
           if [ "$CODE" = "200" ]; then
@@ -94,7 +94,7 @@ jobs:
             echo
             echo "- Probe run: $RUN_URL"
             echo "- Checked at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "- Endpoint: ${{ vars.PROD_BASE_URL || 'https://gemini-web-bridge.pansakorn-pho.workers.dev' }}/health"
+            echo "- Endpoint: ${{ vars.PROD_BASE_URL || 'https://prod.gemini-web-bridge.workers.dev' }}/health"
             echo
             echo '```'
             head -c 800 "${{ steps.classify.outputs.body_file }}"

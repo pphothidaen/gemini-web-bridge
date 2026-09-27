@@ -10,10 +10,18 @@
   // run from that directory (as ci.yml/cd.yml do). Keep the two in sync —
   // name, entrypoint, DO binding, KV namespace and migrations must match.
   //
+  // Must match cloudflare-worker/wrangler.toml — name, entrypoint, DO binding,
+  // KV namespace and migrations.
+  //
+  // "prod" is the worker name, so the public hostname is
+  // prod.gemini-web-bridge.workers.dev (the account subdomain is
+  // "gemini-web-bridge"). Naming it "gemini-web-bridge" had produced the
+  // doubled gemini-web-bridge.gemini-web-bridge.workers.dev.
+  //
   // If you deploy from the repo root, this file is used instead. Do not
   // deploy from both places in the same pipeline.
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "gemini-web-bridge",
+  "name": "prod",
   "main": "cloudflare-worker/src/index.js",
   "compatibility_date": "2026-09-12",
   "compatibility_flags": ["nodejs_compat"],
@@ -31,8 +39,11 @@
   },
 
   // Temporary PDF artifact storage for the horo_consult MCP tool (1h TTL).
+  // Account-scoped id — must match cloudflare-worker/wrangler.toml. It belongs to
+  // the Gemini.web.bridge@gmail.com Cloudflare account; the pre-migration id
+  // (9620c1ac…) was in a different account and is not valid here.
   "kv_namespaces": [
-    { "binding": "ARTIFACT_KV", "id": "9620c1ac40ab481c83f9687b7d63a5ce" }
+    { "binding": "ARTIFACT_KV", "id": "400bc54565de455689ece92f8351bcb9" }
   ],
 
   "migrations": [

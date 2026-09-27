@@ -10,10 +10,10 @@
   const Settings = (typeof globalThis !== "undefined" && globalThis.GeminiBridgeSettings)
     ? globalThis.GeminiBridgeSettings
     : {
-        DEFAULT_WORKER_URL: "https://gemini-web-bridge.pansakorn-pho.workers.dev",
+        DEFAULT_WORKER_URL: "https://prod.gemini-web-bridge.workers.dev",
         DEFAULT_BRIDGE_SECRET: "__BRIDGE_AUTH_TOKEN__",
         resolveSettings: (s = {}) => ({
-          workerUrl: s.workerUrl || "https://gemini-web-bridge.pansakorn-pho.workers.dev",
+          workerUrl: s.workerUrl || "https://prod.gemini-web-bridge.workers.dev",
           bridgeToken: s.bridgeToken || "__BRIDGE_AUTH_TOKEN__",
           rawBridgeToken: s.bridgeToken || "",
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",
@@ -75,6 +75,11 @@
     const directive = event.effectiveDirective || event.violatedDirective || '';
     const source = String(event.sourceFile || '');
     const blocked = String(event.blockedURI || '');
+    // Only react to CSP violations raised by our OWN origins; the Gemini UI
+    // raises its own against gemini.google.com and those are not ours.
+    // The pattern matches the live host prod.gemini-web-bridge.workers.dev via
+    // its "gemini-web-bridge" label, and keeps the pre-migration host
+    // pansakorn-pho so a rollback is still recognised.
     const ours = source.startsWith('chrome-extension://')
       || blocked.startsWith('chrome-extension://')
       || /gemini-web-bridge|pansakorn-pho/i.test(source + ' ' + blocked);

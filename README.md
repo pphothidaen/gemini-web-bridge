@@ -65,19 +65,19 @@ npx wrangler secret put GEMINI_API_KEY      # Optional: For GCP Hybrid Fallback
 model:
   default: gemini-web-thinking
   provider: gemini-web-bridge
-  base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
+  base_url: https://prod.gemini-web-bridge.workers.dev/v1
   api_key: ${CLIENT_API_TOKEN}
 
 providers:
   gemini-web-bridge:
     type: custom
     name: gemini-web-bridge
-    base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
+    base_url: https://prod.gemini-web-bridge.workers.dev/v1
     api_key: ${CLIENT_API_TOKEN}
 
 mcp_servers:
   gemini-web-bridge:
-    url: https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp
+    url: https://prod.gemini-web-bridge.workers.dev/mcp
     headers:
       Authorization: "Bearer ${CLIENT_API_TOKEN}"
 ```
@@ -88,7 +88,7 @@ mcp_servers:
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://gemini-web-bridge.pansakorn-pho.workers.dev/v1",
+    base_url="https://prod.gemini-web-bridge.workers.dev/v1",
     api_key="YOUR_CLIENT_API_TOKEN",
 )
 
@@ -149,7 +149,7 @@ npx wrangler secret put GEMINI_API_KEY      # ทางเลือก: สำ�
 #### 3. ตรวจสอบสุขภาพระบบ
 
 ```bash
-curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/health | jq .
+curl -s https://prod.gemini-web-bridge.workers.dev/health | jq .
 ```
 
 ---
