@@ -282,6 +282,14 @@ Gemini Web Bridge provides a complete suite of remote MCP tools via `POST /mcp` 
 
 ---
 
+## 🧾 Contributing
+
+- **[docs/COMMIT_TICKET_MAPPING.md](docs/COMMIT_TICKET_MAPPING.md)** — commit → Jira ticket
+  mapping, including six commits whose `KAN-` prefix does not match their scope.
+  Check it before acting on a ticket referenced from history.
+
+---
+
 ## 📄 License
 
 MIT License — Released for open research, learning, and enterprise AI enablement.
