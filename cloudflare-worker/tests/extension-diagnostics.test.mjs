@@ -92,7 +92,10 @@ test('invalid token halts reconnection until settings change or manual retry', a
     },
     clearTimeout: (id) => { if (timers[id]) timers[id].cancelled = true; },
     chrome: {
-      runtime: { getURL: p => p },
+      // No chrome.runtime here: this harness models a non-extension
+      // environment, where the direct tab WebSocket is the transport.
+      // Orphaned extension contexts are covered in
+      // extension-orphaned-context.test.mjs.
       storage: {
         sync: {
           get: async () => ({ workerUrl: 'https://worker.test', bridgeToken: 'invalid-token' })
@@ -105,8 +108,8 @@ test('invalid token halts reconnection until settings change or manual retry', a
 
   vm.runInNewContext(contentSource, sandbox);
   // Drain the microtask queue, not just one tick. The content script's
-  // init awaits chrome.storage, then tries the background port, then opens
-  // the fallback WebSocket; that chain needs several ticks to settle.
+  // init awaits chrome.storage, then opens the direct WebSocket; that
+  // chain needs several ticks to settle.
   // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
   // failed with "Cannot set properties of undefined".
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -123,8 +126,8 @@ test('invalid token halts reconnection until settings change or manual retry', a
   // Updating the settings in storage clears auth failure and triggers reconnect
   storageListener({ bridgeToken: { newValue: 'new-valid-token' } }, 'sync');
   // Drain the microtask queue, not just one tick. The content script's
-  // init awaits chrome.storage, then tries the background port, then opens
-  // the fallback WebSocket; that chain needs several ticks to settle.
+  // init awaits chrome.storage, then opens the direct WebSocket; that
+  // chain needs several ticks to settle.
   // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
   // failed with "Cannot set properties of undefined".
   for (let i = 0; i < 10; i++) await Promise.resolve();

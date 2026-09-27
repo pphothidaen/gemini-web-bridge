@@ -365,6 +365,16 @@
   }
 
   function connectWebSocket() {
+    // Orphaned content script guard: the extension was reloaded/updated while
+    // this tab stayed open, so chrome.runtime.id is undefined and every
+    // extension API call throws. An orphan must never open its own direct
+    // WebSocket — it races the live tabs for the worker lease and makes the
+    // bridge connection flap. Only reloading this tab recovers.
+    if (typeof chrome !== "undefined" && chrome.runtime && !chrome.runtime.id) {
+      console.warn("[Bridge] Extension context invalidated; refusing direct WebSocket (reload the tab).");
+      createOrUpdateIndicator("error", "Bridge: Reload tab (extension updated — click to retry)");
+      return;
+    }
     if (typeof chrome !== "undefined" && Boolean(chrome.runtime?.id)) {
       console.log("[Bridge] In Chrome Extension environment, direct WebSocket is disabled. Using background bridge port.");
       if (!bridgePort) initBridgePort();

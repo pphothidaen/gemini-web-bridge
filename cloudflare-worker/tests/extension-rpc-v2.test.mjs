@@ -95,18 +95,10 @@ function setupExtensionVm(options = {}) {
       if (timers[id]) timers[id].cancelled = true;
     },
     chrome: {
-      runtime: {
-        getURL: p => p,
-        connect: (opts) => {
-          // Exercise the direct-WebSocket fallback: only the coordinator port resolves.
-          if (opts?.name === 'gemini-bridge-socket') throw new Error('background bridge unavailable (fallback test)');
-          return {
-            onMessage: { addListener: (fn) => fn({ type: 'COORDINATOR_STATE', role: 'leader' }) },
-            onDisconnect: { addListener: () => {} },
-            postMessage: () => {}
-          };
-        }
-      },
+      // No chrome.runtime in this harness: it models a non-extension
+      // environment, where the direct tab WebSocket is the transport.
+      // Orphaned extension contexts (chrome.runtime present, id undefined)
+      // are covered in extension-orphaned-context.test.mjs.
       storage: {
         sync: {
           get: async () => ({
@@ -137,8 +129,8 @@ function setupExtensionVm(options = {}) {
 test('SESSION_READY and MODELS_DISCOVERED emit protocolVersion 3 without leaking Google CSRF tokens', async () => {
   const env = setupExtensionVm();
   // Drain the microtask queue, not just one tick. The content script's
-  // init awaits chrome.storage, then tries the background port, then opens
-  // the fallback WebSocket; that chain needs several ticks to settle.
+  // init awaits chrome.storage, then opens the direct WebSocket; that
+  // chain needs several ticks to settle.
   // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
   // failed with "Cannot set properties of undefined".
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -177,8 +169,8 @@ test('SESSION_READY and MODELS_DISCOVERED emit protocolVersion 3 without leaking
 test('PREPARE_MODEL performs UI selector click, transitions to learning, and fails closed with model_unverified after 10s', async () => {
   const env = setupExtensionVm();
   // Drain the microtask queue, not just one tick. The content script's
-  // init awaits chrome.storage, then tries the background port, then opens
-  // the fallback WebSocket; that chain needs several ticks to settle.
+  // init awaits chrome.storage, then opens the direct WebSocket; that
+  // chain needs several ticks to settle.
   // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
   // failed with "Cannot set properties of undefined".
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -228,8 +220,8 @@ test('PREPARE_MODEL performs UI selector click, transitions to learning, and fai
 test('EXECUTE_REQUEST strictly rejects unverified model or revision mismatch', async () => {
   const env = setupExtensionVm();
   // Drain the microtask queue, not just one tick. The content script's
-  // init awaits chrome.storage, then tries the background port, then opens
-  // the fallback WebSocket; that chain needs several ticks to settle.
+  // init awaits chrome.storage, then opens the direct WebSocket; that
+  // chain needs several ticks to settle.
   // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
   // failed with "Cannot set properties of undefined".
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -278,8 +270,8 @@ test('EXECUTE_REQUEST constructs replay payload via ModelAdapter under synthetic
     onWindowPostMessage: (data) => windowPosts.push(data)
   });
   // Drain the microtask queue, not just one tick. The content script's
-  // init awaits chrome.storage, then tries the background port, then opens
-  // the fallback WebSocket; that chain needs several ticks to settle.
+  // init awaits chrome.storage, then opens the direct WebSocket; that
+  // chain needs several ticks to settle.
   // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
   // failed with "Cannot set properties of undefined".
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -342,8 +334,8 @@ test('CANCEL_REQUEST aborts in-flight execution and cancels pending prepare', as
     onWindowPostMessage: (data) => postedToWindow.push(data)
   });
   // Drain the microtask queue, not just one tick. The content script's
-  // init awaits chrome.storage, then tries the background port, then opens
-  // the fallback WebSocket; that chain needs several ticks to settle.
+  // init awaits chrome.storage, then opens the direct WebSocket; that
+  // chain needs several ticks to settle.
   // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
   // failed with "Cannot set properties of undefined".
   for (let i = 0; i < 10; i++) await Promise.resolve();

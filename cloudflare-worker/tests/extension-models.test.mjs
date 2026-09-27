@@ -28,10 +28,14 @@ test('extension loads settings, discovers current labels, and resets catalog on 
  }
  vm.runInNewContext(source,{console:{log(){},warn(){},error(){}},URL,Map,Array,Boolean,document,window,WebSocket,
   setTimeout:(fn)=>{timers.push(fn);return timers.length;},clearTimeout(){},
-  chrome:{runtime:{getURL:p=>p, connect:(opts)=>{ if (opts?.name==='gemini-bridge-socket') throw new Error('background bridge unavailable (fallback test)'); return {onMessage:{addListener:(fn)=>fn({type:'COORDINATOR_STATE',role:'leader'})},onDisconnect:{addListener:()=>{}},postMessage:()=>{}}; }}, storage:{sync:{get:async()=>({workerUrl:'https://example.test',bridgeToken:'test-token'})},onChanged:{addListener(){}}}}});
+  // No chrome.runtime in this harness: it models a non-extension environment,
+  // where the direct tab WebSocket is the transport and settings arrive from
+  // the injected storage shim. Orphaned extension contexts (chrome.runtime
+  // present, id undefined) are covered in extension-orphaned-context.test.mjs.
+  chrome:{storage:{sync:{get:async()=>({workerUrl:'https://example.test',bridgeToken:'test-token'})},onChanged:{addListener(){}}}}});
  // Drain the microtask queue, not just one tick. The content script's
- // init awaits chrome.storage, then tries the background port, then opens
- // the fallback WebSocket; that chain needs several ticks to settle.
+ // init awaits chrome.storage, then opens the direct WebSocket; that
+ // chain needs several ticks to settle.
  // Awaiting a single Promise.resolve() left sockets.at(-1) undefined and
  // failed with "Cannot set properties of undefined".
  for (let i = 0; i < 10; i++) await Promise.resolve();
