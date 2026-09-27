@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Pre-destructive-operation guard: refuses to discard uncommitted work.
+#
+# Activated via core.hooksPath=.githooks (already set in this repo).
+#
+# WHY THIS EXISTS
+# ---------------
+# The pre-commit hook protects work at the *end* of the pipeline — it rejects a
+# bad commit. Nothing protected work *before* that. On 2026-09-27 a concurrent
+# agent's uncommitted edits to four files (three test harnesses plus
+# extension-cloudflare/content.js) were destroyed by a `git reset`; the reflog
+# showed six consecutive `reset: moving to HEAD` entries and no commit, no stash
+# and no branch preserved them. The work was unrecoverable.
+#
+# The real failure is not "someone forgot to commit". It is that the most
+# expensive mistake available in this repo — silently deleting another agent's
+# in-flight work — had no guard at all, while the cheapest mistake (a bad
+# commit message) had three.
+#
+# WHAT IT PROTECTS — AND WHAT IT CANNOT
+# -------------------------------------
+# Git exposes no `pre-reset`, `post-reset`, or `pre-checkout` hook, and a git
+# alias cannot shadow a built-in subcommand (`git config alias.reset` is ignored
+# for `reset`). So destructive work loss is NOT interceptable by hook. That was
+# confirmed empirically rather than assumed:
+#
+#   * `git reset --hard` on a dirty tree → no hook fires, change is gone.
+#   * `git config alias.reset '!f()'`     → git still runs its built-in reset.
+#
+# The real enforcement point is therefore scripts/safe-git.sh, which wraps
+# reset / clean / stash-drop and refuses to discard uncommitted work. This hook
+# is the passive half: it fires on the events git *does* expose (checkout, merge)
+# and reports when the tree went from dirty to clean, so a silent loss at least
+# becomes a loud one with recovery steps. It reports; it never blocks a command
+# the user already ran.
+
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$REPO_ROOT" || exit 0
+
+# Never fail a checkout the user asked for. This guard reports; it does not block
+# the command that already ran. exit 0 is deliberate: a non-zero post-checkout
+# exit makes git report the checkout as failed even though it succeeded.
+report_destructive_drop() {
+  local before_head="$1" after_head="$2" action="$3"
+
+  # A clean tree after a checkout is NORMAL — switching branches is supposed to
+  # leave a clean tree. Reporting there would cry wolf on every single branch
+  # switch, and a guard that cries wolf gets ignored.
+  #
+  # The only signal git actually exposes after the fact is the untracked-file
+  # count. `git checkout` never deletes untracked files, but `git clean -fd`
+  # does, so a large drop in that count across a checkout means a clean ran.
+  # With no recorded prior count there is nothing to compare against, so this
+  # stays advisory: it tells you what to look at, not that loss definitely
+  # happened.
+  #
+  # Honest scope: destructive loss is not hook-detectable. scripts/safe-git.sh
+  # is the enforcement point; this hook exists so the user has recovery steps
+  # at the moment a tree goes quiet.
+  local untracked
+  untracked="$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')"
+
+  [[ "${HERMES_POST_HOOK_VERBOSE:-0}" == "1" ]] || exit 0
+
+  printf '\n' >&2
+  printf 'ℹ️  post-%s: HEAD %s -> %s, untracked files now: %s\n' \
+    "$action" "${before_head:0:8}" "${after_head:0:8}" "$untracked" >&2
+  printf '   If work you expected is gone: git reflog / git stash list /\n' >&2
+  printf '   git fsck --lost-found. Prefer scripts/safe-git.sh over raw reset/clean.\n' >&2
+  exit 0
+}
+
+# HOW GIT ACTUALLY INVOKES THIS
+# ------------------------------
+# The hook NAME is not passed as an argument. git execs the file directly, so
+# `$1` is the first *hook-specific* argument:
+#
+#   post-checkout  ->  $1=<old-sha>  $2=<new-sha>  $3=<branch-flag>
+#   post-merge     ->  $1=<squash-flag>
+#
+# An earlier version matched on `$1 == post-checkout`, which never matches, so
+# the hook was silently inert. The basename of $0 is the reliable discriminator.
+HOOK_NAME="$(basename "$0")"
+
+case "$HOOK_NAME" in
+  post-checkout)
+    report_destructive_drop "${1:-HEAD}" "${2:-HEAD}" "checkout"
+    ;;
+  post-merge)
+    report_destructive_drop "MERGE_HEAD" "HEAD" "merge"
+    ;;
+  *)
+    # Not an event we report on — stay silent.
+    ;;
+esac
+
+exit 0
