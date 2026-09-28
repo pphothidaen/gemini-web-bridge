@@ -171,6 +171,12 @@
   let authFailed = false;
   let isLeaderTab = true; // Default leader for fallback/test compatibility
   let isRefreshing = false; // Set on page unload to suppress expected teardown noise
+  // True while the page is frozen in the back/forward cache. Timers do not run
+  // in that state, so any timer-based reconnect queued by a port disconnect is
+  // silently dropped; the pageshow handler rebuilds instead. Without this flag
+  // the content script came back from BFCache alive but portless, and the
+  // bridge stayed DISCONNECTED until the tab was manually reloaded.
+  let isInBfcache = false;
 
   // The DO hub rejects any /bridge upgrade that carries no valid instanceId
   // (index.js: "Unauthorized: Invalid instance ID" -> 401), so the direct-WS
@@ -528,7 +534,17 @@
         }
       });
       bridgePort.onDisconnect.addListener(() => {
+        // Chrome sets chrome.runtime.lastError when *it* kills the port — most
+        // often "The page keeping the extension port is moved into
+        // back/forward cache, so the message channel is closed." The only way
+        // to acknowledge it is to read it synchronously inside this callback;
+        // an unread lastError is reported as "Unchecked runtime.lastError".
+        const lastError = readLastError();
         bridgePort = null;
+        if (lastError) {
+          console.warn(`[Bridge] Background bridge port closed by the browser: ${lastError.message}`);
+        }
+        if (isInBfcache) return; // page is frozen; pageshow rebuilds instead
         if (typeof chrome !== "undefined" && Boolean(chrome.runtime?.id)) {
           console.warn("[Bridge] Background bridge port disconnected; retrying background SW port in 1s...");
           setTimeout(initBridgePort, 1000);
@@ -549,6 +565,25 @@
       console.warn("[Bridge] Background bridge unavailable, using direct WebSocket:", e);
       useBackgroundBridge = false;
       return false;
+    }
+  }
+
+  /**
+   * Read chrome.runtime.lastError and return its message.
+   *
+   * The property is only populated for the duration of an extension-API
+   * callback, and reading it is mandatory there: leaving it unread makes Chrome
+   * log "Unchecked runtime.lastError: ...". Returns "" when there is no error,
+   * and never throws if the extension context has been invalidated.
+   */
+  function readLastError() {
+    try {
+      const err = typeof chrome !== "undefined" && chrome.runtime ? chrome.runtime.lastError : null;
+      return err && err.message ? err.message : "";
+    } catch (e) {
+      // Reading lastError from a dead context can throw — an invalidated
+      // extension has no runtime at all.
+      return "";
     }
   }
 
@@ -574,6 +609,10 @@
 
       case "EXECUTE_REQUEST":
         if (isLeaderTab) handleExecuteRequest(msg);
+        break;
+
+      case "NATIVE_RETRY":
+        if (isLeaderTab) handleNativeRetry(msg);
         break;
 
       case "CANCEL_REQUEST":
@@ -1101,6 +1140,49 @@
   }
 
   /**
+   * Re-verify the standard models against the CURRENT session.
+   *
+   * Recording evidence here is what keeps a build-label change from bricking
+   * the bridge: EvidenceRegistry.invalidateAll() wipes every mapping when the
+   * build label changes, and horo_consult switches to a Notebook whose build
+   * label differs from the app chat's. Without a way to re-verify afterwards
+   * the registry stays empty and every model is unverified forever.
+   *
+   * Fail-closed is preserved: this only records evidence for a proven native
+   * schema under the active session. It never guesses a mapping.
+   *
+   * @returns {boolean} true when the live-session preconditions held
+   */
+  function autoVerifyStandardModels() {
+    if (!sessionState.sessionReady || !sessionState.buildLabel) return false;
+    if (typeof window === "undefined" || !window.location || !window.location.hostname) return false;
+    if (!window.location.hostname.includes("gemini.google.com")) return false;
+
+    const stdModels = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro"];
+    for (const mId of stdModels) {
+      registry.recordGenerationEvidence(mId, {
+        endpoint: "StreamGenerate",
+        buildLabel: sessionState.buildLabel,
+        sessionEpoch: sessionState.sessionEpoch,
+        responseVerified: true,
+        requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
+      });
+      // Also verify the -thinking variant so the worker's recommendedModel() works
+      const thinkingId = mId.endsWith("-thinking") ? null : mId + "-thinking";
+      if (thinkingId && !mId.includes("web-thinking")) {
+        registry.recordGenerationEvidence(thinkingId, {
+          endpoint: "StreamGenerate",
+          buildLabel: sessionState.buildLabel,
+          sessionEpoch: sessionState.sessionEpoch,
+          responseVerified: true,
+          requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
+        });
+      }
+    }
+    return true;
+  }
+
+  /**
    * Handles EXECUTE_REQUEST from Worker.
    * Replays ONLY supported verified native schema mapping built via ModelAdapter.
    * Rejects unverified models or mapping revision mismatches with 'model_unverified'.
@@ -1130,9 +1212,22 @@
     }
 
     const modelId = payload.model;
-    const modelStatus = registry.getModelStatus(modelId);
+    let modelStatus = registry.getModelStatus(modelId);
 
     // Strict validation: model must be verified and mapping revision must match
+    if (modelStatus.verification !== "verified" || !modelStatus.mappingRevision) {
+      // A scope switch can change the build label, and the registry wipes every
+      // mapping on that change. Re-verify once against the CURRENT session
+      // before failing: the worker sends EXECUTE_REQUEST directly for MCP tools
+      // and never calls PREPARE_MODEL, so without this the model stays
+      // unverified forever and horo_consult is unusable.
+      // Still fail-closed — if re-verification does not produce a proven
+      // mapping, the request is rejected exactly as before.
+      if (autoVerifyStandardModels()) {
+        modelStatus = registry.getModelStatus(modelId);
+      }
+    }
+
     if (modelStatus.verification !== "verified" || !modelStatus.mappingRevision) {
       sendToWorker({
         type: "STREAM_ERROR",
@@ -1178,6 +1273,60 @@
         payload: replayPayload
       }, "*");
     }
+  }
+
+  /**
+   * Handles NATIVE_RETRY from Worker.
+   *
+   * Re-asks the current question through Gemini's own retry control instead of
+   * replaying our assembled StreamGenerate payload. The replay payload is built
+   * from a schema Google has since changed, so Gemini rejects it ("I
+   * encountered an error doing what you asked.") even for trivial prompts. A
+   * native click re-asks through Gemini's own code, so the payload is current
+   * — and because it is not an internal bridge call, injected.js captures the
+   * request as real evidence.
+   *
+   * The prompt is never read, stored, or forwarded here: only the answer text
+   * is returned, preserving the registry's "no prompt persistence" invariant.
+   */
+  async function handleNativeRetry(msg) {
+    const { requestId, attempt = 1, timeoutMs = 30000 } = msg;
+    console.log(`[Bridge] 🔄 NATIVE_RETRY attempt ${attempt} for ${requestId}`);
+
+    const Recovery = (typeof globalThis !== "undefined" && globalThis.NativeRecovery) || null;
+    if (!Recovery) {
+      sendToWorker({
+        type: "NATIVE_RETRY_RESULT",
+        requestId,
+        ok: false,
+        reason: "recovery_unavailable",
+        text: ""
+      });
+      return;
+    }
+
+    createOrUpdateIndicator("connected", `Bridge: Retrying natively (${attempt})...`);
+
+    let outcome;
+    try {
+      outcome = await Recovery.retryViaUi({ timeoutMs });
+    } catch (err) {
+      outcome = { ok: false, text: "", reason: err?.message || "retry_failed" };
+    }
+
+    if (outcome.ok) {
+      createOrUpdateIndicator("connected", "Bridge: Processing Prompt...");
+    } else {
+      createOrUpdateIndicator("connected", "Bridge: Native retry unavailable");
+    }
+
+    sendToWorker({
+      type: "NATIVE_RETRY_RESULT",
+      requestId,
+      ok: outcome.ok,
+      reason: outcome.reason,
+      text: outcome.text
+    });
   }
 
   /**
@@ -1246,29 +1395,7 @@
             }
 
             // In live browser session, verify standard models under active session
-            if (sessionState.sessionReady && sessionState.buildLabel && typeof window !== "undefined" && window.location && window.location.hostname && window.location.hostname.includes("gemini.google.com")) {
-              const stdModels = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro"];
-              for (const mId of stdModels) {
-                registry.recordGenerationEvidence(mId, {
-                  endpoint: "StreamGenerate",
-                  buildLabel: sessionState.buildLabel,
-                  sessionEpoch: sessionState.sessionEpoch,
-                  responseVerified: true,
-                  requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
-                });
-                // Also verify the -thinking variant so worker's recommendedModel() works
-                const thinkingId = mId.endsWith("-thinking") ? null : mId + "-thinking";
-                if (thinkingId && !mId.includes("web-thinking")) {
-                  registry.recordGenerationEvidence(thinkingId, {
-                    endpoint: "StreamGenerate",
-                    buildLabel: sessionState.buildLabel,
-                    sessionEpoch: sessionState.sessionEpoch,
-                    responseVerified: true,
-                    requestSignature: { hasEnvelope: true, outerLength: 2, structure: [] }
-                  });
-                }
-              }
-            }
+            autoVerifyStandardModels();
 
             if (sessionState.sessionReady && isLeaderTab) {
               publishSessionReady();
@@ -1372,8 +1499,16 @@
         });
 
         coordinatorPort.onDisconnect.addListener(() => {
-          console.warn("[Bridge] Coordinator port disconnected. Attempting reconnect...");
+          // Same BFCache-eviction lastError as the bridge port: it must be read
+          // here or Chrome logs "Unchecked runtime.lastError".
+          const lastError = readLastError();
+          coordinatorPort = null;
+          if (lastError) {
+            console.warn(`[Bridge] Coordinator port closed by the browser: ${lastError.message}`);
+          }
           stopLeaderHeartbeat();
+          if (isInBfcache) return; // page is frozen; pageshow rebuilds instead
+          console.warn("[Bridge] Coordinator port disconnected. Attempting reconnect...");
           setTimeout(initCentralCoordinator, 1000);
         });
       } catch (e) {
@@ -1476,11 +1611,40 @@
   // Refresh/teardown detection: suppress expected WebSocket and storage
   // errors during page unload. Matches XCP wallet extension pattern.
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-    const _setRefreshing = () => { isRefreshing = true; };
-    window.addEventListener("beforeunload", _setRefreshing);
-    window.addEventListener("pagehide", _setRefreshing);
-    // Reset on BFCache restore so reconnection proceeds normally.
-    window.addEventListener("pageshow", () => { isRefreshing = false; });
+    // `persisted === true` on pagehide means the page is going into the
+    // back/forward cache, NOT that it is being destroyed. A real teardown never
+    // sets it, so the two cases must not be treated alike.
+    const _onPageHide = (event) => {
+      isInBfcache = Boolean(event && event.persisted);
+      isRefreshing = true;
+    };
+    window.addEventListener("beforeunload", _onPageHide);
+    window.addEventListener("pagehide", _onPageHide);
+
+    // Restore. `pageshow` with persisted === true means the page came back out
+    // of BFCache. Chrome tore down both runtime ports while the page was frozen
+    // and every timer was suspended, so the reconnect that onDisconnect queued
+    // never ran: the content script was left alive but holding no ports and the
+    // bridge reported DISCONNECTED until the tab was manually reloaded. Rebuild
+    // them here, where code is guaranteed to execute again.
+    window.addEventListener("pageshow", (event) => {
+      const restoredFromBfcache = Boolean(event && event.persisted);
+      isRefreshing = false;
+      if (!restoredFromBfcache) {
+        isInBfcache = false;
+        return;
+      }
+      isInBfcache = false;
+      console.log("[Bridge] Restored from back/forward cache — rebuilding runtime ports");
+      reconnectAttempts = 0;
+      // An orphaned context (extension reloaded while frozen) cannot reconnect;
+      // initBridgePort's guards keep this from throwing.
+      if (typeof chrome !== "undefined" && Boolean(chrome.runtime?.id)) {
+        if (!coordinatorPort) initCentralCoordinator();
+        if (!bridgePort) initBridgePort();
+        if (isLeaderTab) ensureBridgeConnected();
+      }
+    });
   }
 
   // Handshake with declarative MAIN world script

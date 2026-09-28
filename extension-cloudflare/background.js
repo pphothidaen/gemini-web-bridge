@@ -340,6 +340,9 @@ export class CentralTabCoordinator {
     });
 
     port.onDisconnect.addListener(() => {
+      // Same lastError acknowledgement as handleBridgePort — an unread
+      // chrome.runtime.lastError surfaces as "Unchecked runtime.lastError".
+      try { void chrome.runtime.lastError; } catch (e) {}
       this.connectedPorts.delete(tabId);
       console.log(`[BackgroundCoordinator] Tab ${tabId} disconnected`);
 
@@ -926,6 +929,7 @@ export class BridgeSocketManager {
       case "CANCEL_REQUEST":
       case "REFRESH_MODELS":
       case "AUTO_SELECT_MODEL":
+      case "NATIVE_RETRY":
       case "ENABLE_THINKING": {
         const forwarded = this.forwardToActiveTab(msg);
         if (!forwarded && ["PREPARE_MODEL", "EXECUTE_REQUEST"].includes(msg.type)) {
@@ -1163,7 +1167,7 @@ export class BridgeSocketManager {
       // Content script re-detected scope after navigation; resolve pending scopes
       // with the ACTUAL scope (not the target). Also forward to Worker for currentScope update.
       this.onScopeDetected(tabId, msg.scope);
-    } else if (["STREAM_CHUNK", "STREAM_DONE", "STREAM_ERROR", "MODEL_READY"].includes(msg.type)) {
+    } else if (["STREAM_CHUNK", "STREAM_DONE", "STREAM_ERROR", "MODEL_READY", "NATIVE_RETRY_RESULT"].includes(msg.type)) {
       this.sendToWorker(msg);
     } else if (msg.type === "REQUEST_SCOPE_DETECTION") {
       // Forward scope re-detection requests to the active content script.
@@ -1197,6 +1201,10 @@ export class BridgeSocketManager {
     }
     port.onMessage.addListener((msg) => this.onTabMessage(tabId, msg));
     port.onDisconnect.addListener(() => {
+      // Acknowledge chrome.runtime.lastError: when Chrome itself closes a port
+      // (e.g. the owning page enters the back/forward cache) an unread lastError
+      // is logged as "Unchecked runtime.lastError". Must be read synchronously.
+      try { void chrome.runtime.lastError; } catch (e) {}
       if (this.bridgePorts.get(tabId) === port) {
         this.bridgePorts.delete(tabId);
       }

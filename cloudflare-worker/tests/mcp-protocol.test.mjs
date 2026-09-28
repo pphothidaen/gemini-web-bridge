@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
 import * as pdfLib from 'pdf-lib';
+import * as promptTemplates from '../src/prompt-templates.js';
 import { makeCtx } from './helpers/fake-ctx.mjs';
 
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
@@ -14,6 +15,7 @@ const WORKER_VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', imp
 const context = {
   ...catalog,
   ...emulator,
+  ...promptTemplates,
   ...pdfLib,
   DurableObject: class {},
   crypto,
@@ -826,10 +828,15 @@ test('horo_consult: default notebook scope applied when args.scope omitted, prom
   // Default scope: notebook:id was prepared
   assert.deepEqual(preparedScopes, [HORO_DEFAULT_NOTEBOOK_SCOPE]);
 
-  // Prompt construction
-  assert.ok(capturedPrompt.startsWith('[Role: ซินแส AI'), 'prompt must start with the BaZi role directive');
-  assert.ok(capturedPrompt.includes('Birth Context: {"birth_datetime":"1997-05-10T08:30:00+07:00","longitude":100.5018,"utc_offset_hours":7,"day_master":"Jia Wood"}'));
-  assert.ok(capturedPrompt.includes('User Question: ช่วยวิเคราะห์ดวงการเงิน'));
+  // Prompt construction. The template is prose, not a "[Role: ...] / Birth
+  // Context: ... / User Question: ..." spec sheet — see src/prompt-templates.js.
+  // What still matters is that the persona directive comes first and that both
+  // the birth context and the question survive into the prompt.
+  assert.ok(capturedPrompt.startsWith('Act as ซินแส AI'), 'prompt must open with the BaZi persona');
+  assert.ok(capturedPrompt.includes('birth_datetime: 1997-05-10T08:30:00+07:00'), 'birth context must survive');
+  assert.ok(capturedPrompt.includes('day_master: Jia Wood'), 'birth context must survive');
+  assert.ok(capturedPrompt.includes('ช่วยวิเคราะห์ดวงการเงิน'), 'the user question must survive');
+  assert.doesNotMatch(capturedPrompt, /\[Role:/, 'no label block');
 });
 
 test('horo_consult: explicit args.scope overrides the default notebook scope', async () => {

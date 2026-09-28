@@ -1,9 +1,16 @@
 // Cloudflare Worker: Stateful Gemini Web-Bridge Edge Hub
 // Architecture: Cloudflare Durable Objects (Unified WSS + HTTP Stateful Coordinator)
-// Version: 4.4.3 (see WORKER_VERSION below — this comment is informational only)
+// Version: 4.7.0 (see WORKER_VERSION below — this comment is informational only)
 
 import { normalizeModels, recommendedModel } from "./model-catalog.js";
 import { PONG_GRACE_MS, isKeepaliveMissed, isEvictable } from "./liveness.js";
+import {
+  classifyGeminiReply,
+  isRetryWorthwhile,
+  RETRY_BACKOFF_MS,
+  REFUSAL_KIND
+} from "./gemini-refusal.js";
+import { buildToolPrompt } from "./prompt-templates.js";
 import { DurableObject } from "cloudflare:workers";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { 
@@ -25,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.4.3";
+const WORKER_VERSION = "4.7.0";
 
 // ─── Verbose logging gate ────────────────────────────────────────
 // console.log is not free in Workers: each call formats its arguments,
@@ -1632,9 +1639,91 @@ export class GeminiBridgeDO extends DurableObject {
       throw err;
     }
 
+    // One logical request keeps ONE requestId for its whole life, so a native
+    // retry and the replay attempt it replaces stay correlated in activeStreams.
     const requestId = `req_${crypto.randomUUID()}`;
     const encodedReq = ProtocolDecoder.encodeRequest(messages, {}, model);
 
+    // Stage 1: the replay attempt. If Gemini answers with a refusal or an
+    // upstream error, escalate to the native retry button below.
+    let text = await this.runReplayAttempt({ requestId, encodedReq, model, onChunk });
+
+    // Stage 1 escalation: re-ask through Gemini's own retry control.
+    // Our assembled StreamGenerate payload is rejected by a schema change on
+    // Google's side, so replaying it again can only fail identically. A native
+    // click makes Gemini rebuild the request itself.
+    for (let attempt = 0; attempt < RETRY_BACKOFF_MS.length; attempt++) {
+      const verdict = classifyGeminiReply(text);
+      if (!isRetryWorthwhile(verdict.kind)) break;
+      if (!text || !text.trim()) break;
+
+      const delay = RETRY_BACKOFF_MS[attempt];
+      vlog(`[Bridge DO] Gemini replied "${verdict.kind}"; native retry ${attempt + 1}/${RETRY_BACKOFF_MS.length} after ${delay}ms.`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+
+      const retried = await this.runNativeRetry({ requestId, attempt: attempt + 1, onChunk });
+      if (!retried.ok) {
+        vlog(`[Bridge DO] Native retry ${attempt + 1} unavailable (${retried.reason}); keeping previous text.`);
+        break;
+      }
+      text = retried.text;
+    }
+
+    // Surface a classified verdict to the caller so a refusal can never again
+    // be mistaken for a successful answer (the defect that let every Gemini
+    // refusal score as a PASS).
+    const finalVerdict = classifyGeminiReply(text);
+    if (finalVerdict.kind !== REFUSAL_KIND.ANSWERED) {
+      this.recordHealthError(`gemini_${finalVerdict.kind}: ${text.slice(0, 160)}`);
+    }
+    return text;
+  }
+
+  /**
+   * Asks the extension to re-ask via Gemini's own retry control and waits for
+   * the new answer. Resolves {ok:false} rather than throwing so a missing
+   * button degrades to the previous text instead of failing the request.
+   */
+  runNativeRetry({ requestId, attempt, onChunk, timeoutMs = 45000 }) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.activeStreams.delete(requestId);
+        resolve({ ok: false, reason: "native_retry_timeout", text: "" });
+      }, timeoutMs);
+
+      this.activeStreams.set(requestId, (msg) => {
+        if (msg.type !== "NATIVE_RETRY_RESULT") return;
+        clearTimeout(timer);
+        this.activeStreams.delete(requestId);
+        if (msg.ok && typeof msg.text === "string" && msg.text.trim()) {
+          try { Promise.resolve(onChunk?.(msg.text, msg.text)).catch(() => {}); } catch (e) {}
+        }
+        resolve({
+          ok: Boolean(msg.ok && typeof msg.text === "string" && msg.text.trim()),
+          reason: msg.reason || "",
+          text: typeof msg.text === "string" ? msg.text : ""
+        });
+      });
+
+      try {
+        this.activeSocket.send(JSON.stringify({
+          type: "NATIVE_RETRY",
+          requestId,
+          attempt,
+          timeoutMs: Math.min(timeoutMs - 5000, 40000)
+        }));
+      } catch (err) {
+        clearTimeout(timer);
+        this.activeStreams.delete(requestId);
+        resolve({ ok: false, reason: "native_retry_send_failed", text: "" });
+      }
+    });
+  }
+
+  /**
+   * A single replay attempt through the extension's verified-replay path.
+   */
+  runReplayAttempt({ requestId, encodedReq, model, onChunk }) {
     return new Promise((resolve, reject) => {
       let fullText = "";
       let rpcBuffer = "";
@@ -2869,6 +2958,21 @@ export class GeminiBridgeDO extends DurableObject {
       };
 
       if (toolName === "set_bridge_scope") {
+        // `scope` is declared required in the inputSchema. Enforce it here:
+        // applyScope() treats a falsy scope as "keep the current scope" and
+        // returns ok:true, so a call with a missing/blank argument used to
+        // report "Bridge is now scoped to '<current>'" while changing
+        // nothing — a silent no-op the caller cannot detect. A typo'd
+        // argument name must be a loud -32602, not a fake success.
+        if (typeof args.scope !== "string" || !args.scope.trim()) {
+          return {
+            response: {
+              jsonrpc: "2.0",
+              id,
+              error: { code: -32602, message: `Missing required argument 'scope' for tool '${toolName}'.` }
+            }
+          };
+        }
         const outcome = await applyScope(args.scope);
         if (!outcome.ok) {
           return { response: { jsonrpc: "2.0", id, error: { code: -32602, message: outcome.message } } };
@@ -2927,19 +3031,27 @@ export class GeminiBridgeDO extends DurableObject {
           let prompt = "";
           if (toolName === "sdlc_solution_architect") {
             if (!problemText) return missingArg("problem_description");
-            prompt = `[Role: Senior Solution Architect]\nProblem: ${problemText}\nTech Stack: ${args.tech_stack || "Modern Cloud-Native"}\nConstraints: ${args.constraints || "High Availability"}\n\nTask: Design full solution architecture, component model, data flow, and actionable implementation steps.`;
+            prompt = buildToolPrompt(toolName, args);
           } else if (toolName === "orchestrate_sdlc_plan") {
             if (!problemText) return missingArg("feature_or_goal");
-            prompt = `[Role: SDLC Orchestrator]\nGoal: ${problemText}\nCurrent Stage: ${args.current_stage || "Planning"}\n\nTask: Decompose into sequential SDLC tasks across Planning, Architecture, Implementation, QA, and CI/CD.`;
+            prompt = buildToolPrompt(toolName, args);
           } else if (toolName === "code_review_and_debug") {
             const snippet = firstString(args.code_snippet, args.problem_description);
             if (!snippet) return missingArg("code_snippet");
-            prompt = `[Role: Expert Code Reviewer & Debugger]\nLanguage: ${args.language || "Auto"}\nError Log: ${args.error_log || "None"}\nCode:\n\`\`\`\n${snippet}\n\`\`\`\n\nTask: Find root cause of the bug, check security, and provide clean code patch.`;
+            prompt = buildToolPrompt(toolName, args);
           } else if (toolName === "evaluate_tech_tradeoffs") {
             if (!firstString(args.decision_context, args.problem_description)) return missingArg("decision_context");
-            prompt = `[Role: Tech Lead]\nContext: ${firstString(args.decision_context, args.problem_description)}\nOptions: ${args.options}\n\nTask: Detailed architectural trade-off analysis across Scalability, Performance, DX, and Maintenance.`;
+            prompt = buildToolPrompt(toolName, args);
           } else if (toolName === "horo_consult") {
-            prompt = `[Role: ซินแส AI ผู้เชี่ยวชาญโหราศาสตร์จีน (BaZi),  numerology และดาราศาสตร์ไทย ตอบโดยอ้างอิงความรู้ใน Notebook ที่ผูกไว้เป็นหลัก ตอบเป็นภาษาเดียวกับคำถาม มีโครงสร้างชัดเจน (หัวข้อ/บุลเล็ต) และระบุข้อจำกัดเชิงการพยากรณ์เมื่อข้อมูลไม่พอ]\nBirth Context: ${args.birth_context ? JSON.stringify(args.birth_context) : "not provided"}\nUser Question: ${args.query}`;
+            // `query` is declared required in the inputSchema. Check it before
+            // anything expensive happens: without this the prompt was built
+            // with "User Question: undefined" and the worker still switched the
+            // session to the HoroConsultant Notebook and spent a full Gemini
+            // round-trip, only to surface an upstream -32000 ("Active Gemini
+            // session is not ready") that points the caller at their browser
+            // instead of at the missing payload field.
+            if (!firstString(args.query)) return missingArg("query");
+            prompt = buildToolPrompt(toolName, args);
           }
 
           // Switch conversation scope (normal chat / notebook) before executing.

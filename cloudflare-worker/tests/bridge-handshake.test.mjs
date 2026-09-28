@@ -25,6 +25,8 @@ import vm from 'node:vm';
 import { randomUUID } from 'node:crypto';
 import * as modelCatalog from '../src/model-catalog.js';
 import * as liveness from '../src/liveness.js';
+import * as geminiRefusal from '../src/gemini-refusal.js';
+import * as promptTemplates from '../src/prompt-templates.js';
 import { makeCtx } from './helpers/fake-ctx.mjs';
 
 // ─── Load DO source and strip Cloudflare imports ───────────────
@@ -100,6 +102,8 @@ function loadDO({ ResponseImpl = MockResponse } = {}) {
   const context = {
     ...modelCatalog,
     ...liveness,
+    ...geminiRefusal,
+    ...promptTemplates,
     DurableObject: class {},
     crypto: workerdCrypto,
     Response: ResponseImpl,

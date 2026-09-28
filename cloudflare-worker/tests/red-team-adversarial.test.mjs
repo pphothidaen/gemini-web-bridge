@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
+import * as promptTemplates from '../src/prompt-templates.js';
 import { makeCtx } from './helpers/fake-ctx.mjs';
 
 // ─── Harness Setup ───────────────────────────────────────────
@@ -11,6 +12,7 @@ const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf
 const context = {
   ...catalog,
   ...emulator,
+  ...promptTemplates,
   DurableObject: class {},
   crypto,
   Request,

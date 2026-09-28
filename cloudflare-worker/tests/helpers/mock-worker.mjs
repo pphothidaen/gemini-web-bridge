@@ -18,6 +18,8 @@ import * as modelCatalog from '../../src/model-catalog.js';
 import * as emulator from '../../src/tool-emulator.ts';
 import * as pdfLib from 'pdf-lib';
 import * as liveness from '../../src/liveness.js';
+import * as geminiRefusal from '../../src/gemini-refusal.js';
+import * as promptTemplates from '../../src/prompt-templates.js';
 import { makeCtx } from './fake-ctx.mjs';
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -83,6 +85,8 @@ function loadDO() {
     ...emulator,
     ...pdfLib,
     ...liveness,
+    ...geminiRefusal,
+    ...promptTemplates,
     DurableObject: class {},
     crypto: workerdCrypto,
     Response: MockResponse,
