@@ -1,0 +1,215 @@
+name: CD Watchdog
+
+# Why this exists
+# ---------------
+# GitHub has no native notification for a deployment approval gate: a CD run
+# left 'waiting' at the production gate sits there forever unless a human
+# happens to look. That is exactly how a KAN-159-era run (2026-09-27 18:53)
+# sat waiting for ~1.5 days while silently blocking every later deploy under
+# the old concurrency setting (KAN-173), and why CD executed no job at all in
+# that window. KAN-173 fixed the lock side (latest-wins); this watchdog fixes
+# the visibility side, because the remaining failure mode — nobody notices a
+# deploy is waiting — still ends with production silently not deploying.
+#
+# The gate itself stays a human control on purpose (see cd.yml): auto-approving
+# would make the required-reviewer rule decorative, the same way the deleted
+# staging job once made it decorative. So the remediation here is visibility,
+# never bypass:
+#   * a stall fails this workflow LOUDLY — same philosophy as the health
+#     probe, where a silent monitor is indistinguishable from no monitor;
+#   * one idempotent GitHub issue tracks the stall and is auto-closed when it
+#     resolves, so the loop closes without human bookkeeping;
+#   * the Jira ticket cited by the stalled run's HEAD commit gets a comment
+#     (opt-in via JIRA_CI_TOKEN, never fatal — same security posture as
+#     ci.yml's jira-sync job), because Jira is the board the team reads.
+#
+# Stall detection uses the run's `waiting` status: that is the state GitHub
+# reports while a required-reviewer rule holds the job. Age is measured from
+# created_at, so a fresh gate (minutes old) never alerts.
+
+on:
+  schedule:
+    # Every 30 minutes. A deploy stalled for 2 hours is already worth a red X;
+    # the default threshold (120 min) means at most ~4 quiet checks before the
+    # first alert, and the cron cost is negligible.
+    - cron: '13,43 * * * *'
+  workflow_dispatch:
+    inputs:
+      stall_minutes:
+        description: 'Override stall threshold in minutes (for testing)'
+        required: false
+        default: ''
+
+concurrency:
+  group: cd-watchdog
+  # A hung watchdog must not block the next one — with false, a stuck check
+  # silently stops the monitoring while looking healthy in the Actions tab
+  # (the exact trap keepalive-probe.yml documents for the same reason).
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  watchdog:
+    name: Detect stalled CD runs
+    runs-on: ubuntu-latest
+    env:
+      # Event inputs arrive as '' when unset, so the || chain falls through to
+      # the repo variable and then the built-in default.
+      STALL_MINUTES: ${{ github.event.inputs.stall_minutes || vars.CD_STALL_ALERT_MINUTES || 120 }}
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_TITLE: 'CD STALLED: deploy waiting at the production gate past the alert threshold'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for CD runs waiting past the threshold
+        id: scan
+        env:
+          RUN_URL_BASE: ${{ github.server_url }}/${{ github.repository }}/actions/runs
+        run: |
+          set -uo pipefail
+          STALLS=$(mktemp)
+          NOW=$(date -u +%s)
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=waiting&per_page=100" \
+            --jq '.workflow_runs[] | select(.name == "CD — Deploy & Secret Sync") | [.id, .created_at, .head_sha] | @tsv' |
+          while IFS=$'\t' read -r id created sha; do
+            AGE=$(( (NOW - $(date -u -d "$created" +%s)) / 60 ))
+            [ "$AGE" -ge "$STALL_MINUTES" ] || continue
+            printf '%s\t%s\t%s\t%s\n' "$id" "$AGE" "$sha" "$RUN_URL_BASE/$id" >> "$STALLS"
+          done
+
+          COUNT=$(wc -l < "$STALLS" | tr -d ' ')
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "stalls_file=$STALLS" >> "$GITHUB_OUTPUT"
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "Stalled runs found:"
+            awk -F'\t' '{print "  run " $1 " waiting " $2 " min (head " substr($3,1,7) ")"}' "$STALLS"
+          else
+            echo "No CD run has been waiting >= $STALL_MINUTES min."
+          fi
+
+      - name: Fail loudly on a stall
+        if: steps.scan.outputs.count != '0'
+        run: |
+          echo "::error::CD has been waiting at the production gate for >= $STALL_MINUTES minutes. Deploys do not happen while nobody looks — see the CD STALLED issue."
+          exit 1
+
+      - name: File or update the stall issue
+        if: always() && steps.scan.outputs.count != '0'
+        env:
+          STALL_MINUTES: ${{ env.STALL_MINUTES }}
+          STALLS_FILE: ${{ steps.scan.outputs.stalls_file }}
+          COUNT: ${{ steps.scan.outputs.count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          BODY_FILE=$(mktemp)
+          {
+            echo "Automated CD watchdog found **$COUNT** stalled run(s): a deploy has been waiting at the production approval gate for >= $STALL_MINUTES minutes."
+            echo
+            echo "| run | waiting | head |"
+            echo "|---|---|---|"
+            awk -F'\t' '{print "| [" $1 "](" $4 ") | " $2 " min | " substr($3,1,7) " |"}' "$STALLS_FILE"
+            echo
+            echo "- Watchdog run: $RUN_URL"
+            echo "- Checked at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "Remediation (see docs/CD-STALL-RUNBOOK.md): review the run, then approve or reject the gate:"
+            echo '```'
+            echo "gh api repos/$GITHUB_REPOSITORY/actions/runs/<RUN_ID>/pending_deployments   # get environment id"
+            echo "printf '{\"environment_ids\":[<ENV_ID>],\"state\":\"approved\"}' | gh api -X POST repos/$GITHUB_REPOSITORY/actions/runs/<RUN_ID>/pending_deployments --input -"
+            echo '```'
+            echo "Do NOT approve blindly: confirm the head commit is what production should run."
+            echo
+            echo "This issue closes itself when the watchdog next finds no stall."
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --state open --search "$ISSUE_TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || echo '')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$BODY_FILE" && echo "updated #$EXISTING"
+          else
+            gh issue create --title "$ISSUE_TITLE" --body-file "$BODY_FILE" && echo "filed a new issue"
+          fi
+
+      - name: Comment on the Jira ticket cited by the stalled run
+        # Opt-in and never fatal, exactly like ci.yml's jira-sync: the ticket
+        # named in the stalled run's HEAD commit is where this alert belongs,
+        # because that ticket's "done" is the thing not actually shipped.
+        # Deduped per run via the GitHub issue: the run URL is only posted to
+        # Jira if it is not already in the issue, so a 2-hour stall generates
+        # one Jira comment, not one per 30-minute check.
+        if: always() && steps.scan.outputs.count != '0'
+        env:
+          JIRA_CI_TOKEN: ${{ secrets.JIRA_CI_TOKEN }}
+          JIRA_BASE: ${{ vars.JIRA_BASE_URL || 'https://pansakorn.atlassian.net' }}
+          JIRA_EMAIL: ${{ vars.JIRA_ACCOUNT_EMAIL }}
+          STALLS_FILE: ${{ steps.scan.outputs.stalls_file }}
+        run: |
+          set -uo pipefail
+          set +x
+
+          if [ -z "$JIRA_CI_TOKEN" ]; then
+            echo "::notice::JIRA_CI_TOKEN not set; Jira alert skipped (GitHub issue still filed)."
+            exit 0
+          fi
+
+          ISSUE_NUM=$(gh issue list --state open --search "$ISSUE_TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || echo '')
+          ISSUE_TEXT=""
+          if [ -n "$ISSUE_NUM" ]; then
+            ISSUE_TEXT=$(gh issue view "$ISSUE_NUM" --json body,comments --jq '.body + (.comments | map(.body) | join("\n"))' 2>/dev/null || echo '')
+          fi
+
+          while IFS=$'\t' read -r id age sha run_url; do
+            case "$ISSUE_TEXT" in
+              *"$run_url"*) echo "run $id already alerted; skipping Jira"; continue ;;
+            esac
+
+            SUBJECT=$(git log -1 --pretty=%s "$sha" 2>/dev/null || echo "")
+            KEY=$(printf '%s' "$SUBJECT" | grep -oE '^KAN-[0-9]+' | head -1 || true)
+            if [ -z "$KEY" ]; then
+              echo "::notice::No KAN-<id> in subject of $sha ('$SUBJECT'); no Jira ticket to alert."
+              continue
+            fi
+
+            TXT=$(jq -nr --arg key "$KEY" --arg id "$id" --arg age "$age" --arg url "$run_url" \
+              '"CD STALL ALERT for \($key): deploy run [\($id)](\($url)) has been waiting at the production approval gate for \($age) minutes. No deploy ships while it waits — review and approve/reject the gate."')
+            jq -n --arg t "$TXT" \
+              '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$t}]}]}}' > /tmp/adf.json
+
+            # Same curl discipline as ci.yml jira-sync: --http1.1 + retries for
+            # the runner's flaky HTTP/2 to Jira; never fatal on any status.
+            HTTP=$(curl -sS -o /tmp/jira.out -w '%{http_code}' \
+              --http1.1 --max-time 30 --retry 3 --retry-delay 2 --retry-connrefused \
+              -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" \
+              -u "$JIRA_EMAIL:$JIRA_CI_TOKEN" \
+              -H 'Content-Type: application/json' \
+              --data-binary @/tmp/adf.json 2>/tmp/curl.err) || HTTP=""
+            HTTP=${HTTP:-000}
+            case "$HTTP" in
+              201|200) echo "✅ Alerted $KEY about stalled run $id" ;;
+              *) echo "::warning::Jira alert for $KEY failed (HTTP $HTTP). response=$(head -c 200 /tmp/jira.out 2>/dev/null)" ;;
+            esac
+          done < "$STALLS_FILE"
+
+      - name: Close the stall issue when healthy
+        # The autonomous half of the loop: once no CD run has been waiting past
+        # the threshold, the tracker issue closes itself. A human never has to
+        # remember to tidy it up, and an open CD STALLED issue always means a
+        # current (or unresolved) stall — never stale history.
+        if: always() && steps.scan.outputs.count == '0'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          EXISTING=$(gh issue list --state open --search "$ISSUE_TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || echo '')
+          if [ -z "$EXISTING" ]; then
+            echo "No open CD STALLED issue; nothing to close."
+            exit 0
+          fi
+          gh issue close "$EXISTING" --comment "Watchdog found no stalled CD run at $(date -u +%Y-%m-%dT%H:%M:%SZ) — stall resolved. Auto-closed by [$RUN_URL]($RUN_URL)." \
+            && echo "closed #$EXISTING"
