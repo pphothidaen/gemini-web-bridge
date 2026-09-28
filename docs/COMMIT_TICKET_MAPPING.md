@@ -57,6 +57,7 @@ correction instead.
 | [KAN-170](https://pansakorn.atlassian.net/browse/KAN-170) | `agent-hermes` | Done | `b2e046a` |
 | [KAN-169](https://pansakorn.atlassian.net/browse/KAN-169) | `agent-hermes` | Done (duplicate) | *none — stub* |
 | [KAN-173](https://pansakorn.atlassian.net/browse/KAN-173) | `agent-devops` | Done | `51c532a` |
+| [KAN-174](https://pansakorn.atlassian.net/browse/KAN-174) | `agent-devops` | Done | `6ae487f` |
 
 - **KAN-155** — the extension's direct-WebSocket fallback now sends `instanceId`
   (the DO rejects an upgrade without a UUID `instanceId`), and the `onerror` handler
@@ -86,6 +87,11 @@ correction instead.
   Fixed to latest-wins in `51c532a` and verified by a real two-run test
   (run A parked at the gate, run B superseded and cancelled it, B approved and
   deployed at HEAD).
+- **KAN-174** — GitHub never notifies about pending approvals, so the residual
+  failure mode was a deploy sitting at the gate unnoticed. `6ae487f` added the
+  CD Watchdog (detect → loud failure → idempotent issue → Jira alert →
+  auto-close on resolution), pinned by `cd-concurrency-audit.test.mjs` and
+  verified end-to-end against a real gate stall. See `docs/CD-STALL-RUNBOOK.md`.
 
 ## Rule going forward
 

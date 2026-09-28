@@ -31,8 +31,9 @@ RUN_ID=<the stalled run id>
 gh api repos/pphothidaen/gemini-web-bridge/actions/runs/$RUN_ID/pending_deployments \
   --jq '.[0] | {environment_id: .environment.id, environment: .environment.name, can_approve: .current_user_can_approve}'
 
-# 2. Approve (environment_ids must be a JSON number, not a string)
-printf '{"environment_ids":[<ENV_ID>],"state":"approved"}' | \
+# 2. Approve (environment_ids must be a JSON number, and the API rejects the
+#    review without a `comment` — 422 "\"comment\" wasn't supplied" otherwise)
+printf '{"environment_ids":[<ENV_ID>],"state":"approved","comment":"reviewed: <why>"}' | \
   gh api -X POST repos/pphothidaen/gemini-web-bridge/actions/runs/$RUN_ID/pending_deployments --input -
 
 # 3. Watch it finish
