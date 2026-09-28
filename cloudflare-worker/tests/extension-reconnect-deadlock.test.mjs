@@ -78,15 +78,23 @@ function clearAttemptTimer(manager) {
 }
 
 /**
- * onopen arms the 180s stale-socket timer. Left armed it fires after the file
- * finishes, closes the fake socket, and cascades through scheduleReconnect()
- * into a long reconnect log that bleeds into the next run.
+ * onopen arms the 180s stale-socket timer AND (KAN-170) the 20s keepalive
+ * interval. Left armed, the stale timer fires after the file finishes, closes
+ * the fake socket, and cascades through scheduleReconnect() into a long
+ * reconnect log that bleeds into the next run. The keepalive is worse than
+ * noisy: a live setInterval keeps the event loop alive, so `node --test` never
+ * exits at all — the suite appears to hang after its last assertion rather
+ * than reporting a result.
  */
 function clearStaleTimer(manager) {
   if (manager._staleCheckTimer) {
     clearTimeout(manager._staleCheckTimer);
     manager._staleCheckTimer = null;
   }
+  // KAN-170: the keepalive interval must be torn down here too, or it holds
+  // the process open. Use the manager's own teardown so the test exercises the
+  // same path production uses rather than reaching past it.
+  manager._stopKeepaliveTimer();
   if (manager.reconnectTimer) {
     clearTimeout(manager.reconnectTimer);
     manager.reconnectTimer = null;
@@ -169,4 +177,120 @@ test('a successful attempt still reaches CONNECTED from RECONNECTING', async () 
 
   assert.equal(manager._state, 'CONNECTED', 'the full RECONNECTING -> CONNECTED path must work');
   clearStaleTimer(manager);
+});
+
+// ─── KAN-170: the self-generated keepalive ────────────────────────────────
+//
+// These drive the real manager with the fake socket and a controllable clock,
+// because the constants test in extension-conflict-retry.test.mjs can only
+// prove the NUMBER is right — not that anything actually sends on it. The
+// production bug was invisible to every value assertion: 180s was already
+// "correct" and the 120s cycle happened anyway.
+
+/** Install fake timers and return helpers to advance them. */
+function withFakeTimers(run) {
+  const realSetInterval = globalThis.setInterval;
+  const realClearInterval = globalThis.clearInterval;
+  const intervals = new Map();
+  let nextId = 1;
+
+  globalThis.setInterval = (fn, ms) => {
+    const id = nextId++;
+    intervals.set(id, { fn, ms });
+    return id;
+  };
+  globalThis.clearInterval = (id) => intervals.delete(id);
+
+  const tick = (times = 1) => {
+    for (let i = 0; i < times; i++) {
+      for (const { fn } of [...intervals.values()]) fn();
+    }
+  };
+
+  return {
+    tick,
+    count: () => intervals.size,
+    restore() {
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+    },
+  };
+}
+
+test('the keepalive emits a PING on a connected socket, on cadence', async () => {
+  const { manager, FakeWebSocket: WS } = makeManager();
+  const clock = withFakeTimers();
+  try {
+    manager.connect();
+    await settle();
+    const socket = WS.instances[0];
+    socket.open();
+    await settle();
+
+    const before = socket.sent.length;
+    // Six ticks = 120s of wall clock at the 20s cadence — the exact window in
+    // which production lost the socket, and three times Chrome's idle limit.
+    clock.tick(6);
+    const sent = socket.sent.slice(before).map((s) => JSON.parse(s).type);
+
+    assert.ok(
+      sent.length >= 6 && sent.every((t) => t === 'PING'),
+      `expected a PING per tick, got ${JSON.stringify(sent)}`
+    );
+  } finally {
+    clock.restore();
+    clearStaleTimer(manager);
+    clearAttemptTimer(manager);
+  }
+});
+
+test('the keepalive stays silent while the socket is not open', async () => {
+  // Otherwise the interval keeps "proving liveness" for a socket that is not
+  // there, and the DO sees traffic from a client that is effectively gone.
+  const { manager, FakeWebSocket: WS } = makeManager();
+  const clock = withFakeTimers();
+  try {
+    manager.connect();
+    await settle();
+    const socket = WS.instances[0];
+    // Deliberately NOT opened — still CONNECTING.
+    assert.equal(socket.readyState, 0);
+
+    const before = socket.sent.length;
+    clock.tick(5);
+    assert.equal(
+      socket.sent.length,
+      before,
+      'no keepalive may be sent before the socket is OPEN'
+    );
+    clearAttemptTimer(manager);
+  } finally {
+    clock.restore();
+    clearStaleTimer(manager);
+  }
+});
+
+test('the keepalive is torn down when the socket closes, not left running', async () => {
+  // A leaked interval survives the close and, in a reconnect loop, one stacks
+  // per attempt. Each stack doubles the outbound rate, and the survivors keep
+  // pointing at a socket that is no longer the live one.
+  const { manager, FakeWebSocket: WS } = makeManager();
+  const clock = withFakeTimers();
+  try {
+    manager.connect();
+    await settle();
+    const socket = WS.instances[0];
+    socket.open();
+    await settle();
+
+    assert.equal(clock.count(), 1, 'exactly one keepalive interval while connected');
+
+    socket.close(1006, 'network gone');
+    await settle();
+
+    assert.equal(clock.count(), 0, 'the keepalive interval must not outlive its socket');
+  } finally {
+    clock.restore();
+    clearStaleTimer(manager);
+  }
 });

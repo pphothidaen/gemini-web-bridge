@@ -76,14 +76,61 @@ Nothing user-visible depends on that latency:
 - The alarm is a memory-hygiene sweep, not a gate.
 
 The alternative — PINGing every 15–30 s so a healthy connection could
-answer inside a 45 s window — was rejected. It multiplies idle wakeups by
-4–8× (720/day → 2,880–5,760/day) to buy latency that the point above
-shows is not user-visible, and the DO is the exact component that
-exhausted the free tier in the September outage. The threshold is the
-cheaper side of that trade.
+answer inside a 45 s window — was rejected **for the DO's alarm**, and that
+rejection still stands. It multiplies idle DO wakeups by 4–8× (720/day →
+2,880–5,760/day) to buy latency that the point above shows is not
+user-visible, and the DO is the exact component that exhausted the free tier
+in the September outage.
 
-`tests/liveness.test.mjs` asserts this ordering directly, so a future
-edit that inverts it fails CI instead of production.
+### The client keeps ITSELF alive instead (KAN-170)
+
+The 120 s alarm turns out to have a second, non-obvious cost that only
+showed up once the DO was actually PINGing. Chrome terminates an idle MV3
+service worker after ~30 s, and the extension had no outbound traffic of its
+own — it only ever spoke when the DO probed. So the DO's first PING arrived
+120 s into a window in which the worker had already been torn down and
+restarted, landed in the gap, and the PONG never went back.
+
+Measured on production 2026-09-28, with the alarm confirmed live
+(`Alarm - Ok` in `wrangler tail`):
+
+| Signal | Value |
+|---|---|
+| `Background bridge port disconnected` period | 120.002 s / 119.994 s |
+| DO `lastActivityAt` vs `connectedAt` | identical on every sample — no PONG, ever |
+| Close code seen by the DO | 1001 (Chrome's), never 1000 (every DO close site) |
+
+The fix is on the client, so it costs the DO nothing: the service worker
+emits a `PING` every `CLIENT_KEEPALIVE_INTERVAL_MS` (20 s), which both keeps
+Chrome from reaping it and gives the DO the inbound frame that `alarm()` needs
+to make a real liveness decision instead of inferring one from silence.
+
+```js
+// extension-cloudflare/background.js
+export const CLIENT_KEEPALIVE_INTERVAL_MS = 20000;
+```
+
+**Why this is cheaper than the DO-side alternative that was rejected:**
+
+| | DO alarm 120 s → 15 s | Client heartbeat 20 s |
+|---|---|---|
+| DO wakeups/day | 720 → **4,320** | 720 → **720** (unchanged) |
+| Free-tier CPU | 6× on the component that caused the 1101 outage | unchanged |
+| Worker → DO bytes | unchanged | ~5 bytes / 20 s, from the browser |
+
+**The two timers must stay independent.** The heartbeat is deliberately *not*
+routed through `_resetStaleCheckTimer()`. That timer answers "is the DO still
+there?", and it can only be reset by traffic the DO actually receives.
+Feeding it our own outbound PINGs would make a genuinely dead DO look alive
+forever — a silent failure where nothing 409s and nothing errors, the socket
+is just quietly useless. `tests/extension-conflict-retry.test.mjs` asserts
+the two are not wired together, and
+`tests/extension-reconnect-deadlock.test.mjs` drives the real state machine
+to prove something is actually sent on the interval and torn down with its
+socket.
+
+`tests/liveness.test.mjs` asserts the server-side ordering directly, so a
+future edit that inverts it fails CI instead of production.
 
 ### Do not remove the PING
 

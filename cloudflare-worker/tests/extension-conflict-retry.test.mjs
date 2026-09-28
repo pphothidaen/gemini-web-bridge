@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { isEvictable, PONG_GRACE_MS, STALE_AFTER_MS } from '../src/liveness.js';
 import {
+  CLIENT_KEEPALIVE_INTERVAL_MS,
   CLIENT_STALE_SOCKET_IDLE_MS,
   CONFLICT_RETRY_DELAY_MS,
   DO_PONG_GRACE_MS,
@@ -115,6 +116,51 @@ test('the client idle threshold outlasts the DO keepalive alarm interval', () =>
   assert.ok(
     CLIENT_STALE_SOCKET_IDLE_MS > DO_IDLE_ALARM_INTERVAL_MS,
     `client idle threshold (${CLIENT_STALE_SOCKET_IDLE_MS}ms) must exceed the DO keepalive interval (${DO_IDLE_ALARM_INTERVAL_MS}ms), otherwise the client tears down a healthy socket before the first PING arrives`
+  );
+});
+
+test('the client heartbeat fires often enough to keep the MV3 worker alive', () => {
+  // KAN-170. The production failure this prevents:
+  //
+  //   "Background bridge port disconnected" every 120.002s, with the DO's alarm
+  //   confirmed live (wrangler tail: `Alarm - Ok`) and CLIENT_STALE_SOCKET_IDLE_MS
+  //   already at 180s. /health showed lastActivityAt === connectedAt throughout —
+  //   the extension never once answered a PING.
+  //
+  // The port only drops when Chrome tears down the service worker, so the
+  // worker was being terminated while the socket was still healthy and the
+  // DO's PING landed in the gap. Raising the client's stale threshold (what
+  // KAN-162 did) cannot prevent that: it only changes how long the client
+  // WAITS, not whether the worker survives.
+  //
+  // So the heartbeat must beat Chrome's ~30s idle limit, with margin for a
+  // late tick. 20s leaves a full third of the window as slack; a value at or
+  // above 30s reintroduces the exact production cycle.
+  assert.ok(
+    CLIENT_KEEPALIVE_INTERVAL_MS < 30000,
+    `client keepalive (${CLIENT_KEEPALIVE_INTERVAL_MS}ms) must stay under Chrome's ~30s MV3 idle teardown, otherwise the worker dies between PINGs and the socket is orphaned`
+  );
+
+  // And it must land well inside the DO's own cadence, so the DO's PING always
+  // finds a worker that is provably awake to answer it. Without this the two
+  // timers could drift into phase and PINGs would keep arriving during the
+  // worker's cold window.
+  assert.ok(
+    CLIENT_KEEPALIVE_INTERVAL_MS < DO_IDLE_ALARM_INTERVAL_MS,
+    `client keepalive (${CLIENT_KEEPALIVE_INTERVAL_MS}ms) must be well under the DO PING interval (${DO_IDLE_ALARM_INTERVAL_MS}ms) so a PING never lands on a dormant worker`
+  );
+});
+
+test('the client heartbeat is independent of the stale-socket detector', () => {
+  // These two timers answer different questions and must not be wired together.
+  // If the keepalive reset the stale timer, the client would keep refreshing its
+  // own "is the DO still there?" clock with traffic the DO never sees — so a
+  // genuinely dead DO would look alive forever and the client would never
+  // reconnect. That failure is silent: nothing 409s, nothing errors, the socket
+  // is just quietly useless.
+  assert.ok(
+    !/_resetKeepaliveTimer\s*\(\s*\)\s*\{[^}]*_resetStaleCheckTimer/.test(extensionSource),
+    'the keepalive must not reset the stale-socket timer — the DO cannot see our outbound traffic, so doing so would mask a dead DO'
   );
 });
 

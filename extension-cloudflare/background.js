@@ -123,25 +123,71 @@ async function getOrCreateInstanceId(storageSession) {
 const SCOPE_ID_RE = /^[A-Za-z0-9_-]+$/;
 
 /**
- * How long the SW tolerates silence from the DO before declaring the socket
- * dead and reconnecting.
+ * KAN-170: how often the SW proves it is still alive, unprompted.
  *
- * KAN-162: this was 60_000 while the DO only PINGs once per keepalive alarm
- * tick (IDLE_ALARM_INTERVAL_MS = 120s). The client therefore
- * always hit its own stale timer BEFORE the server's first PING could arrive
- * to prove liveness, and closed a perfectly healthy socket roughly every two
- * minutes — the mirror image of the server-side bug KAN-159/KAN-161 just fixed.
+ * WHY THIS EXISTS — the 120 s reconnect cycle that outlived KAN-162
+ * ------------------------------------------------------------------
+ * KAN-162 raised CLIENT_STALE_SOCKET_IDLE_MS from 60 s to 180 s, and that was
+ * correct for the bug it was written against: the client was closing a healthy
+ * socket BEFORE the DO's first PING could arrive to prove it alive. The
+ * invariant it pinned (client threshold > DO keepalive interval) is still
+ * right and is still asserted by tests/extension-conflict-retry.test.mjs.
  *
- * Measured on production: "Background bridge port disconnected" at 13:00:17,
- * 13:02:17, 13:04:17, 13:06:17, 13:08:17 — a 120s period, and DO epoch
- * incrementing 1 -> 2 -> 3 alongside it. conns stayed pinned at 1 and the
- * instanceId never changed, proving the client was tearing down and rebuilding
- * its own socket rather than two instances contending.
+ * But it was not the whole bug, and the same symptom survived it. Measured on
+ * production 2026-09-28, with 180 s already in place and the DO alarm live
+ * (wrangler tail shows `Alarm - Ok` firing every 120 s):
  *
- * The invariant is the same one the server now holds
- * (STALE_SOCKET_IDLE_MS > IDLE_ALARM_INTERVAL_MS): the client threshold must
- * exceed the server keepalive interval, with margin, so a live-but-quiet
- * connection is never mistaken for a dead one.
+ *   "Background bridge port disconnected" at 05:24:09.977, 05:26:09.972,
+ *   05:32:09.972  —  a 120.002 s / 119.994 s period, matching
+ *   IDLE_ALARM_INTERVAL_MS to within 6 ms.
+ *
+ *   DO /health over the same window: `lastActivityAt === connectedAt` on every
+ *   single sample. The extension sent one message at connect and then NOTHING —
+ *   no PONG, ever, despite the DO PINGing every 120 s.
+ *
+ * The port is what dropped, not the WebSocket: the content script logs
+ * `port disconnected`, which only happens when Chrome tears down the MV3
+ * service worker. A WebSocket close would have surfaced as
+ * `Disconnected (code: ...)` from background.js's own onclose, and that line is
+ * absent from the log. The DO is not the party closing either — every close it
+ * issues uses code 1000 (src/index.js, 6 sites), and production reports 1001.
+ *
+ * So the actual mechanism is Chrome's MV3 idle teardown, and KAN-162 could not
+ * have fixed it: raising the client's threshold only makes the client wait
+ * LONGER to notice, it does not keep the worker alive. The DO PING arrives at
+ * 120 s into a window in which the worker has already been terminated and
+ * restarted, so the PING lands in the gap and the PONG never goes back. That
+ * is why the period is 120 s and not 180 s — 120 s is the DO's cadence, not the
+ * client's threshold. The client threshold is not what sets the rhythm.
+ *
+ * THE FIX
+ * -------
+ * Generate inbound traffic instead of waiting to be probed. A live worker
+ * resets Chrome's idle timer on every event, so a self-sent heartbeat both
+ * keeps the worker resident AND gives the DO the `lastActivityAt` it needs for
+ * isEvictable() to make a real decision instead of guessing from silence.
+ *
+ * 20 s is chosen against the 30 s Chrome idle limit with margin for a tick to
+ * be late, and it is deliberately far below DO_IDLE_ALARM_INTERVAL_MS so that
+ * the DO's PING always finds a worker that is provably awake to answer it.
+ *
+ * COST: ~5 bytes every 20 s, ~21 KB/hour, from the BROWSER to the Worker.
+ * Free-tier Workers CPU is charged on the DO's execution, not on bytes
+ * received, so this adds nothing to the budget that the September 1101 outage
+ * exhausted — unlike shortening the DO's alarm, which would multiply DO
+ * wakeups by 6x (720/day -> 4,320/day).
+ */
+export const CLIENT_KEEPALIVE_INTERVAL_MS = 20000;
+
+/**
+ * KAN-162: how long the SW tolerates silence from the DO before declaring the
+ * socket dead and reconnecting.
+ *
+ * Kept at 180 s, above both the DO keepalive interval (120 s) and
+ * CLIENT_KEEPALIVE_INTERVAL_MS (20 s), so the client still never self-destructs
+ * a healthy socket on its own. With CLIENT_KEEPALIVE_INTERVAL_MS in place this
+ * timer is a genuine backstop rather than the primary reconnect path: it can
+ * only fire if the DO has gone silent for three full minutes.
  */
 export const CLIENT_STALE_SOCKET_IDLE_MS = 180000;
 
@@ -412,6 +458,9 @@ export class BridgeSocketManager {
     this._state = ConnectionState.DISCONNECTED;
     this._connectionAttemptTimer = null; // 15s timeout guard
     this._staleCheckTimer = null;        // CLIENT_STALE_SOCKET_IDLE_MS idle detection
+    // KAN-170: self-generated keepalive. Keeps the MV3 worker resident and
+    // gives the DO a live lastActivityAt. See CLIENT_KEEPALIVE_INTERVAL_MS.
+    this._keepaliveTimer = null;
     // requestId -> { scope, timer } for in-flight scope switches awaiting a tab publish
     this.pendingScopes = new Map();
     // tabId -> Port for content scripts connected via "gemini-bridge-socket"
@@ -578,6 +627,10 @@ export class BridgeSocketManager {
       this.scopeSessionManager.setSendFn((msg) => this.sendToWorker(msg));
       // Start stale-socket detection ticker.
       this._resetStaleCheckTimer();
+      // KAN-170: start the self-generated keepalive. Without it Chrome tears
+      // this worker down while the socket is still healthy, and the DO's next
+      // PING lands in the gap with nobody to answer it.
+      this._resetKeepaliveTimer();
       // After a SW restart the DO lost our session publish; ask the active
       // bridge tab to re-send its session/model state.
       this.requestSync();
@@ -593,6 +646,11 @@ export class BridgeSocketManager {
         this._connectionAttemptTimer = null;
       }
       this._resetStaleCheckTimer();
+      // KAN-170: the socket is gone, so stop emitting into it. Without this the
+      // interval survives the close and keeps running until the next successful
+      // connect replaces it — a reconnect loop would stack one interval per
+      // attempt.
+      this._stopKeepaliveTimer();
 
       if (!this.socket) return; // already nulled out by timeout path
       console.warn(`[BridgeSocket] Disconnected (code: ${event?.code}, reason: ${event?.reason || "none"})`);
@@ -645,6 +703,51 @@ export class BridgeSocketManager {
     this._state = ConnectionState.DISCONNECTED;
     if (this._state !== ConnectionState.AUTH_FAILED) {
       this.scheduleReconnect();
+    }
+  }
+
+  /**
+   * KAN-170: emit a heartbeat on a fixed cadence so this service worker is
+   * never idle long enough for Chrome to terminate it.
+   *
+   * Deliberately NOT routed through _resetStaleCheckTimer(). That timer is the
+   * "the DO went silent" detector and is armed at CLIENT_STALE_SOCKET_IDLE_MS;
+   * resetting it on our own outbound traffic would make the client blind to a
+   * genuinely dead DO — it would keep resetting the clock with traffic the DO
+   * never sees. The two timers are independent on purpose: one proves WE are
+   * alive, the other detects whether the SERVER is.
+   *
+   * The payload is a bare PING, which the DO already handles: alarm() answers a
+   * client PING the same way it answers its own probe cycle, and the inbound
+   * frame stamps lastPongAt via touchConnection(). No new server-side type, so
+   * an older deployed worker simply ignores an unknown frame harmlessly.
+   */
+  _resetKeepaliveTimer() {
+    if (this._keepaliveTimer) {
+      clearInterval(this._keepaliveTimer);
+      this._keepaliveTimer = null;
+    }
+    this._keepaliveTimer = setInterval(() => {
+      // Only while genuinely connected. Sending on a half-open socket throws
+      // inside sendToWorker, which is handled, but there is no reason to emit
+      // traffic for a socket we already know is gone.
+      if (this._state !== ConnectionState.CONNECTED || !this.socket || this.socket.readyState !== 1) {
+        return;
+      }
+      this.sendToWorker({ type: "PING" });
+    }, CLIENT_KEEPALIVE_INTERVAL_MS);
+  }
+
+  /**
+   * Stop the self-generated keepalive. Called wherever the socket is torn down
+   * so a reconnecting client does not stack two intervals — the second one
+   * would double the outbound rate and, worse, keep running against a socket
+   * that is no longer the live one.
+   */
+  _stopKeepaliveTimer() {
+    if (this._keepaliveTimer) {
+      clearInterval(this._keepaliveTimer);
+      this._keepaliveTimer = null;
     }
   }
 
@@ -721,6 +824,12 @@ export class BridgeSocketManager {
   _detectStaleSocket() {
     if (this._state !== ConnectionState.CONNECTED || !this.socket) return;
     console.warn(`[BridgeSocket] ⚠️ Stale socket detected: ${CLIENT_STALE_SOCKET_IDLE_MS / 1000}s without activity. Reconnecting.`);
+    // KAN-170: stop the keepalive before dropping the socket. close() nulls
+    // this.socket, so the interval's own guard would also stop it — but it
+    // would linger until the next connect, and the reconnect timer below can
+    // take up to 30s, during which the interval is a live timer with nothing
+    // to send to.
+    this._stopKeepaliveTimer();
     try { this.socket.close(1001, "stale socket"); } catch (e) {}
     this.socket = null;
     this._state = ConnectionState.DISCONNECTED;
@@ -759,6 +868,8 @@ export class BridgeSocketManager {
       clearTimeout(this._staleCheckTimer);
       this._staleCheckTimer = null;
     }
+    // KAN-170: same for the keepalive — the old socket is being discarded.
+    this._stopKeepaliveTimer();
     this.connect();
   }
 
