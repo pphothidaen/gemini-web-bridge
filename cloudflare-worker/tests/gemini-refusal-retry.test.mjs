@@ -16,6 +16,7 @@ import {
   REFUSAL_KIND
 } from '../src/gemini-refusal.js';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 import { buildToolPrompt } from '../src/prompt-templates.js';
 
 const require = createRequire(import.meta.url);
@@ -272,17 +273,48 @@ test("Gemini's 'Gemini บอกว่า' label is a placeholder, not an answer
   assert.equal(NativeRecovery.isPlaceholderOnly('It is Paris.'), false);
 });
 
-test('the Lottie spinner is the generation-in-progress signal', () => {
-  // lottie-web stamps every animation with an auto-generated
-  // `__lottie_element_<n>` clipPath id; the <svg> carries a matching clip-path.
-  const spinning = {
-    querySelector: (sel) =>
-      (sel === 'clipPath[id^="__lottie_element"]' || sel === 'svg[clip-path*="__lottie_element"]')
-        ? {} : null
+test('the live Material spinner is the generation-in-progress signal', () => {
+  // Verified against the real Gemini DOM (boq-gemini-web-uiserver 20260927.05)
+  // during a 1500-word generation:
+  //   <div class="loading-content-spinner-container ng-star-inserted">
+  //     <mat-progress-spinner class="mat-mdc-progress-spinner mdc-circular-progress">
+  const MATERIAL = [
+    'div.loading-content-spinner-container',
+    'mat-progress-spinner.mat-mdc-progress-spinner'
+  ];
+  for (const sel of MATERIAL) {
+    const spinning = { querySelector: (s) => (s === sel ? {} : null) };
+    assert.equal(NativeRecovery.isGenerating(spinning), true, sel);
+  }
+  assert.equal(NativeRecovery.isGenerating({ querySelector: () => null }), false);
+});
+
+test('the Lottie clipPath probe was falsified on the live DOM, kept only as fallback', () => {
+  // The `__lottie_element_<n>` clipPath was probed for 25s across a real
+  // generation and matched nothing on this build. It must not be the PRIMARY
+  // signal, or the wait silently degrades to text-stability every time.
+  const source = readFileSync(
+    new URL('../../extension-cloudflare/native-recovery.js', import.meta.url), 'utf8'
+  );
+  const start = source.indexOf('function isGenerating');
+  const end = source.indexOf('\n  }', start);
+  const body = source.slice(start, end);
+  const material = body.indexOf('loading-content-spinner-container');
+  const lottie = body.indexOf('__lottie_element');
+  assert.ok(material !== -1, 'the verified Material spinner must be checked');
+  assert.ok(
+    lottie === -1 || material < lottie,
+    'the verified Material spinner must be checked before the falsified Lottie one'
+  );
+});
+
+test('thinking-dots alone is not treated as still generating', () => {
+  // It appears only during the thinking phase and can vanish before the
+  // answer is finished, so it must not keep the wait open.
+  const thinkingOnly = {
+    querySelector: (s) => (s === 'div.thinking-dots-animation' ? {} : null)
   };
-  const idle = { querySelector: () => null };
-  assert.equal(NativeRecovery.isGenerating(spinning), true);
-  assert.equal(NativeRecovery.isGenerating(idle), false);
+  assert.equal(NativeRecovery.isGenerating(thinkingOnly), false);
 });
 
 test('a leaked system preamble is an upstream error, not an answer', () => {

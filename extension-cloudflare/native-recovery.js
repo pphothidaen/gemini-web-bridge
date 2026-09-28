@@ -168,19 +168,31 @@
   /**
    * True while Gemini is still generating.
    *
-   * The primary signal is the Lottie spinner that replaces the answer area
-   * during generation: lottie-web stamps every animation with an auto-generated
-   * `__lottie_element_<n>` clipPath id and the <svg> carries a matching
-   * clip-path="url(#__lottie_element_<n>)". Those ids are stable across builds,
-   * unlike the surrounding Angular classes.
+   * Verified against the live Gemini DOM on 2026-09-28 (boq-gemini-web-uiserver
+   * 20260927.05). The real indicator is Angular's Material spinner:
    *
-   * This is a far better "is it done yet?" signal than watching the text: a
-   * stream pauses and resumes, so a text-stability heuristic can resolve on a
+   *   <div class="loading-content-spinner-container ng-star-inserted">
+   *     <mat-progress-spinner class="mat-mdc-progress-spinner mdc-circular-progress">
+   *
+   * The `ng-star-inserted` marker means Angular inserts the node only while
+   * loading, so its presence/absence is a clean start/stop signal. The
+   * `thinking-dots-animation` node appears during the thinking phase only, so
+   * it is deliberately NOT counted as "generating" — it can disappear before
+   * the answer is finished.
+   *
+   * The Lottie SVG (clipPath id `__lottie_element_<n>`) was probed at length
+   * and matched NOTHING over a real 1500-word generation, so it is kept only
+   * as a last-resort fallback for other Gemini surfaces.
+   *
+   * This is a far better "is it done yet?" signal than watching text: a stream
+   * pauses and resumes, so a text-stability heuristic can resolve on a
    * half-finished answer, whereas the spinner is present for the whole
    * generation and disappears exactly once.
    */
   function isGenerating(doc = document) {
     if (!doc) return false;
+    if (doc.querySelector("div.loading-content-spinner-container")) return true;
+    if (doc.querySelector("mat-progress-spinner.mat-mdc-progress-spinner")) return true;
     if (doc.querySelector('clipPath[id^="__lottie_element"]')) return true;
     if (doc.querySelector('svg[clip-path*="__lottie_element"]')) return true;
     // While streaming, Gemini swaps the send button for a stop control.
