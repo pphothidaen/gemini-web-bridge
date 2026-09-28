@@ -33,10 +33,12 @@ USER_DATA_DIR="${USER_DATA_DIR:-$HOME/Library/Application Support/Google/Chrome 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# The gemini extension lives in THIS repo; the aipass one is a sibling
-# checkout (override both via env when your layout differs).
-GEMINI_EXT_DIR="${GEMINI_EXT_DIR:-$PROJECT_ROOT/extension-cloudflare}"
-AIPASS_EXT_DIR="${AIPASS_EXT_DIR:-$HOME/Project/aipass-web-bridge/release/chrome-extension}"
+# SCRIPT_DIR is <repo>/scripts, so the repo root is one level up; the aipass
+# extension is a sibling checkout of that repo. PROJECT_ROOT above is the
+# projects parent (two levels up) — both defaults stay env-overridable.
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+GEMINI_EXT_DIR="${GEMINI_EXT_DIR:-$REPO_ROOT/extension-cloudflare}"
+AIPASS_EXT_DIR="${AIPASS_EXT_DIR:-$REPO_ROOT/../aipass-web-bridge/release/chrome-extension}"
 
 # ---- Resolve which extension(s) to load ------------------------------------
 
@@ -110,4 +112,52 @@ echo ""
     --disable-ipc-foregrounding \
     "${EXT_ARGS[@]}"
 
-# Chrome runs in foreground; Ctrl+C in terminal to quit.
+# Run Chrome in the background so the script can verify its own success,
+# then wait — Ctrl+C in the terminal still reaches Chrome's process group.
+"$CHROME_BIN" \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-extensions-http-throttling \
+    --remote-debugging-port="$CHROME_PORT" \
+    --user-data-dir="$USER_DATA_DIR" \
+    --disable-translate \
+    --disable-background-timer-throttling \
+    --disable-renderer-backgrounding \
+    --disable-backgrounding-occluded-windows \
+    --disable-ipc-foregrounding \
+    "${EXT_ARGS[@]}" &
+CHROME_PID=$!
+
+# ---- Post-launch verification ---------------------------------------------
+#
+# Chrome 137+ on branded builds SILENTLY IGNORES --load-extension. Everything
+# above can succeed — Chrome launches, the debug port answers — while the
+# extension was never loaded. Without this check the tool reports success and
+# lies. The expected unpacked-extension ID is the SHA-256 of the resolved
+# path, hex nibbles mapped to a-p (Chrome's unpacked-ID algorithm).
+sleep 5
+EXPECTED_ID=$(python3 - "$GEMINI_EXT_DIR" <<'PYEOF'
+import hashlib, sys
+path = sys.argv[1].rstrip("/")
+print("".join(chr(ord("a") + int(c, 16)) for c in hashlib.sha256(path.encode()).hexdigest()[:32]))
+PYEOF
+)
+if curl -s --max-time 5 "http://localhost:$CHROME_PORT/json/list" | grep -q "chrome-extension://$EXPECTED_ID/"; then
+    echo "✅ Extension loaded — SW target chrome-extension://$EXPECTED_ID present"
+else
+    cat <<MSG
+⚠️  VERIFICATION FAILED: the extension was NOT loaded (no target
+    chrome-extension://$EXPECTED_ID). Chrome 137+ on branded builds ignores
+    --load-extension entirely — this is a Google policy change, not a script
+    bug. The debug port still works for page-level DevTools.
+    Workarounds:
+      1. Install Chrome for Testing and point CHROME_BIN at it (CfT still
+         honours --load-extension):
+         npx @puppeteer/browsers install chrome@stable
+      2. Or load the unpacked extension by hand in this dev profile
+         (chrome://extensions -> Developer mode -> Load unpacked), then
+         re-run this script WITHOUT --load-extension to just attach.
+MSG
+fi
+
+wait "$CHROME_PID"
