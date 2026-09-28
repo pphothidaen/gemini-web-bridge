@@ -28,3 +28,6 @@ FAILURE_ANALYSIS.json
 # committed source of truth)
 .zcodeignore
 scripts/chrome-dev-shortcut.app/
+
+# ZCode Desktop app metadata — foreign file, breaks Node module detection ("type": "module")
+/package.json
