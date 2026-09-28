@@ -34,9 +34,19 @@ on:
 # Serialize deploys. Without this, two pushes in quick succession ran two
 # `wrangler deploy`s against the same worker at once; whichever finished last
 # won, and secrets could be written by one run while the other deployed.
+#
+# cancel-in-progress MUST be true. With false, a run left waiting at the
+# production approval gate holds this lock indefinitely: a KAN-159-era run
+# (created 2026-09-27 18:53) sat 'waiting' for ~1.5 days and every later CD
+# run queued behind it as pending with zero jobs started — no deploy executed
+# at all in that window (KAN-173). Latest-wins is also the correct semantics
+# for a single worker: a wrangler deploy is one atomic upload, production only
+# changes when a run finishes, so superseding an older gate-waiting run with
+# the newest one leaves production exactly where the newest successful deploy
+# put it.
 concurrency:
   group: cd-deploy-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   NODE_VERSION: '22'
