@@ -55,6 +55,7 @@ correction instead.
 | [KAN-159](https://pansakorn.atlassian.net/browse/KAN-159) | `agent-hermes` | Done | `4d80260` + KAN-162 + `b2e046a` |
 | [KAN-160](https://pansakorn.atlassian.net/browse/KAN-160) | `agent-developer_core` | Done | `2da4d11` |
 | [KAN-170](https://pansakorn.atlassian.net/browse/KAN-170) | `agent-hermes` | Done | `b2e046a` |
+| [KAN-169](https://pansakorn.atlassian.net/browse/KAN-169) | `agent-hermes` | Done (duplicate) | *none — stub* |
 
 - **KAN-155** — the extension's direct-WebSocket fallback now sends `instanceId`
   (the DO rejects an upgrade without a UUID `instanceId`), and the `onerror` handler
@@ -75,6 +76,9 @@ correction instead.
   existed** (the same predicted-key failure mode as KAN-157 above); the ticket
   was created after the fact on 2026-09-28 and landed with that exact number, so
   the citation is now correct. See the `CLIENT_KEEPALIVE_INTERVAL_MS` heartbeat.
+- **KAN-169** — an empty stub (summary was literally `KAN-105`, no
+  description) citing the GOV-001 governance rule. Creator-confirmed duplicate
+  of KAN-163, which completed that scope. Closed as Done/duplicate.
 
 ## Rule going forward
 
