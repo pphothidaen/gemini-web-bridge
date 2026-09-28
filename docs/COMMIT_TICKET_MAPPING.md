@@ -85,5 +85,11 @@ that its scope matches the change**:
 twg jira workitem get KAN-<id>     # must exist; read the summary before citing
 ```
 
-A key that was never issued is silently accepted by the commit-msg hook, so the
-hook cannot catch this class of error — only pre-commit diligence can.
+Since KAN-163, the pre-push hook enforces the existence half of that rule
+automatically: every `KAN-<id>` in the subjects being pushed is checked against
+Jira, and the push is rejected if the ticket does not exist (see
+`.githooks/pre-push`). It fails open when `twg` is missing or unreachable — a
+wrong answer and no answer are different failures — so the scope half still
+needs pre-commit diligence. KAN-170 was created after this hook was written,
+not by it; the hook exists so the next predicted key is caught at push time,
+not in a post-hoc audit.

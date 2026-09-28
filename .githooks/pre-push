@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Pre-push guard: validates every Jira ticket cited in the pushed subjects.
+#
+# Closes the gap COMMIT_TICKET_MAPPING.md documents: commit-msg only checks the
+# KAN-<id> SHAPE, so a key that was never issued ("predicted key") is silently
+# accepted — KAN-157 and KAN-170 were both cited before any ticket existed.
+# This hook asks Jira itself, at push time, when the commits are about to
+# become someone else's problem.
+#
+# Activated via core.hooksPath=.githooks (already set in this repo).
+#
+# Fail-open vs fail-closed, deliberately split:
+#   - A key Jira says DOES NOT EXIST blocks the push. That answer is
+#     definitive, and shipping an untraceable commit is the exact failure
+#     this hook exists to stop.
+#   - twg missing, or any other twg failure (auth expired, network down),
+#     only warns. An unavailable oracle must not block an incident push;
+#     a wrong answer and no answer are different failures with different
+#     costs. commit-msg still enforces the format either way.
+
+set -uo pipefail
+
+if ! command -v twg >/dev/null 2>&1; then
+  echo "⚠️  [Jira Guard] twg CLI not found — skipping ticket validation." >&2
+  echo "   Push proceeds, but cited tickets are unverified. Install twg to enforce." >&2
+  exit 0
+fi
+
+# bash 3.2 (macOS default) has no associative arrays; the cache is a
+# newline-joined string instead.
+CACHE=""
+BLOCKED=""
+VALIDATED=""
+
+validate_key() {
+  local key="$1"
+
+  case "
+$CACHE
+" in
+    *"
+$key
+"*) return 0 ;;
+  esac
+
+  local out
+  out=$(twg jira workitem get "$key" 2>&1)
+  if [[ "$out" == *"does not exist"* ]]; then
+    BLOCKED="${BLOCKED}${key}
+"
+    CACHE="${CACHE}
+${key}"
+    return 1
+  fi
+
+  if [[ "$out" != *"✓ Completed"* ]]; then
+    echo "⚠️  [Jira Guard] could not verify $key (twg error below) — push proceeds unverified." >&2
+    printf '%s\n' "$out" | sed 's/^/      /' >&2
+    CACHE="${CACHE}
+${key}"
+    return 0
+  fi
+
+  CACHE="${CACHE}
+${key}"
+  if [[ -z "$VALIDATED" ]]; then VALIDATED="$key"; else VALIDATED="$VALIDATED, $key"; fi
+  return 0
+}
+
+FAILED=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Branch/tag deletion: nothing is being pushed, nothing to validate.
+  [[ "$local_sha" =~ ^0+$ ]] && continue
+
+  # New branch: the remote has no tip yet, so the range is "everything this
+  # repo would gain" — commits reachable from the tip but from no remote.
+  if [[ "$remote_sha" =~ ^0+$ ]]; then
+    subjects=$(git log --format=%s "$local_sha" --not --remotes 2>/dev/null)
+  else
+    subjects=$(git log --format=%s "${remote_sha}..${local_sha}" 2>/dev/null)
+  fi
+
+  for key in $(printf '%s\n' "$subjects" | grep -oE 'KAN-[0-9]+' | sort -u); do
+    if ! validate_key "$key"; then
+      FAILED=1
+    fi
+  done
+done
+
+if [[ "$FAILED" -ne 0 ]]; then
+  {
+    echo "❌ [Jira Guard] Push rejected: cited ticket(s) do not exist in Jira:"
+    printf '%s\n' "$BLOCKED" | sed '/^$/d; s/^/      /'
+    echo ""
+    echo "   Every KAN-<id> in a pushed subject must be a real ticket (the"
+    echo "   KAN-157 / KAN-170 predicted-key failure mode — see"
+    echo "   docs/COMMIT_TICKET_MAPPING.md)."
+    echo "   Fix: create the ticket, or correct the subject, then push again."
+    echo "   To override for a one-off: git push --no-verify"
+  } >&2
+  exit 1
+fi
+
+if [[ -n "$VALIDATED" ]]; then
+  echo "✅ [Jira Guard] ticket(s) validated against Jira: $VALIDATED"
+else
+  echo "✅ [Jira Guard] no ticket keys to validate in this push."
+fi
+exit 0
