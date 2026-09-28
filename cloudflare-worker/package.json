@@ -12,6 +12,7 @@
     "dev": "wrangler dev"
   },
   "devDependencies": {
+    "miniflare": "^5.20260916.0-alpha",
     "wrangler": "^4.0.0"
   },
   "engines": {
