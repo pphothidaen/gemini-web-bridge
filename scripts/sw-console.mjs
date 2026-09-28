@@ -15,6 +15,23 @@
  *
  * Requires Chrome to be started with --remote-debugging-port=<debugPort>.
  *
+ * ── Secret redaction ────────────────────────────────────────────────────────
+ *
+ * The service worker logs its own WebSocket URL, and that URL carries the
+ * bridge auth token as a query parameter:
+ *
+ *     wss://…/bridge?token=<BRIDGE_AUTH_TOKEN>&instanceId=…
+ *
+ * wrangler tail has the same exposure: it redacts instanceId but leaves token=
+ * in plain text. Anything that prints these URLs — this script, tail output
+ * pasted into a ticket, a CI log — can therefore leak a live credential. A
+ * token in a committed file or a public issue is a leaked token; see
+ * cloudflare-worker/wrangler.toml, which refuses to hold one for exactly this
+ * reason.
+ *
+ * So every line printed here is scrubbed before it reaches stdout. The
+ * instanceId is redacted too, since it identifies a browser install.
+ *
  * ── Operational notes (learned the hard way, 2026-09-27) ────────────────────
  *
  * 1. Chrome 137+ ignores --load-extension. You cannot seed a throwaway profile
@@ -38,6 +55,47 @@ const match = process.argv[3] || '';
 const seconds = Number(process.argv[4] || 10);
 const base = `http://127.0.0.1:${port}`;
 
+/**
+ * Scrub credentials out of anything about to be printed.
+ *
+ * The SW logs its own socket URL, which carries the bridge auth token. The
+ * token can appear as a query parameter in any case, and as a bare value when
+ * the URL has been URL-encoded or split across an object dump, so both shapes
+ * are covered:
+ *
+ *   ?token=<value>        → ?token=REDACTED
+ *   "token":"<value>"     → "token":"REDACTED"
+ *   Authorization: Bearer <value>   → …Bearer REDACTED
+ *
+ * instanceId is redacted as well: it is a stable per-browser-install
+ * identifier, and it is not useful when reading a console log.
+ */
+export function redact(line) {
+  return String(line)
+    // Query parameters, wherever the parameter starts. Matching only on a
+    // leading ? or & misses `token=<value>` in a bare parameter list, a log
+    // line that has been split, or an object dumped without its URL — which
+    // is exactly the case that leaks. The value stops at &, whitespace, a
+    // quote, or end of line, so a following parameter survives intact.
+    .replace(
+      /\b(token|access_token|auth|api_key|apikey)=[^&\s"'\\]+/gi,
+      '$1=REDACTED'
+    )
+    .replace(
+      /("(?:token|access_token|auth|api_key|apikey)"\s*:\s*")[^"]*(")/gi,
+      '$1REDACTED$2'
+    )
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1REDACTED')
+    .replace(/\binstanceId=[^&\s"'\\]+/gi, 'instanceId=REDACTED')
+    .replace(
+      /("(?:instanceId|clientId)"\s*:\s*")[^"]*(")/gi,
+      '$1REDACTED$2'
+    );
+}
+
+/** Single exit point for output, so no print site can forget to scrub. */
+const say = (...parts) => console.log(redact(parts.join(' ')));
+
 const res = await fetch(`${base}/json/list`);
 const targets = await res.json();
 
@@ -53,11 +111,16 @@ const picked = match
 
 if (picked.length === 0) {
   console.error(`No service worker matched "${match}". Available:`);
-  for (const w of workers) console.error('  ' + w.url);
+  // w.url is a chrome-extension:// URL, not a socket URL, so it carries no
+  // token — but it does identify the installed extension, and this script is
+  // run against someone's real browser. Scrub it anyway: the cost is zero and
+  // a redaction rule that only fires on today's URL shape is a rule that fails
+  // the first time Chrome changes it.
+  for (const w of workers) console.error(redact('  ' + w.url));
   process.exit(1);
 }
 
-for (const w of picked) console.error(`[attach] ${w.url}`);
+for (const w of picked) console.error(redact(`[attach] ${w.url}`));
 
 const deadline = Date.now() + seconds * 1000;
 
@@ -93,17 +156,17 @@ for (const ws of sockets) {
         .map((a) => (a.value !== undefined ? a.value : a.description || a.type))
         .join(' ');
       // Runtime.Timestamp is milliseconds since epoch (already ms — do not scale).
-      console.log(`${new Date(timestamp).toISOString()} [${type}] ${text}`);
+      say(`${new Date(timestamp).toISOString()} [${type}] ${text}`);
     } else if (msg.method === 'Log.entryAdded') {
       const e = msg.params.entry;
       // Log.Entry.timestamp is also milliseconds since epoch.
-      console.log(
+      say(
         `${new Date(e.timestamp).toISOString()} [log/${e.level}] ${e.text}` +
           (e.url ? ` (${e.url})` : '')
       );
     } else if (msg.method === 'Runtime.exceptionThrown') {
       const d = msg.params.exceptionDetails;
-      console.log(`[exception] ${d.text} ${d.exception?.description || ''}`);
+      say(`[exception] ${d.text} ${d.exception?.description || ''}`);
     }
   });
 }
