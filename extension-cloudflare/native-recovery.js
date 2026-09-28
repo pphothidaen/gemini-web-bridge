@@ -189,17 +189,40 @@
    * half-finished answer, whereas the spinner is present for the whole
    * generation and disappears exactly once.
    */
-  function isGenerating(doc = document) {
-    if (!doc) return false;
-    if (doc.querySelector("div.loading-content-spinner-container")) return true;
-    if (doc.querySelector("mat-progress-spinner.mat-mdc-progress-spinner")) return true;
-    if (doc.querySelector('clipPath[id^="__lottie_element"]')) return true;
-    if (doc.querySelector('svg[clip-path*="__lottie_element"]')) return true;
-    // While streaming, Gemini swaps the send button for a stop control.
-    if (doc.querySelector('button[aria-label*="หยุดการสร้าง"], button[aria-label*="Stop generating"]')) {
-      return true;
+  /**
+   * The generation signal, with provenance.
+   *
+   * Returned so callers can see WHICH selector actually matched. A dead
+   * selector must be loud: the previous implementation matched a Lottie
+   * clipPath that never existed on the live build, so isGenerating() returned
+   * false on every call and every wait silently degraded to text-stability
+   * without a single error. Reporting the source turns that into something
+   * visible in the bridge logs.
+   *
+   * @returns {{active: boolean, source: string}}
+   */
+  function generatingSignal(doc = document) {
+    if (!doc) return { active: false, source: "no_document" };
+    if (doc.querySelector("div.loading-content-spinner-container")) {
+      return { active: true, source: "material_spinner_container" };
     }
-    return false;
+    if (doc.querySelector("mat-progress-spinner.mat-mdc-progress-spinner")) {
+      return { active: true, source: "material_progress_spinner" };
+    }
+    if (doc.querySelector('clipPath[id^="__lottie_element"]')) {
+      return { active: true, source: "lottie_clippath" };
+    }
+    if (doc.querySelector('svg[clip-path*="__lottie_element"]')) {
+      return { active: true, source: "lottie_svg" };
+    }
+    if (doc.querySelector('button[aria-label*="หยุดการสร้าง"], button[aria-label*="Stop generating"]')) {
+      return { active: true, source: "stop_button" };
+    }
+    return { active: false, source: "none" };
+  }
+
+  function isGenerating(doc = document) {
+    return generatingSignal(doc).active;
   }
 
   /**
@@ -251,12 +274,18 @@
 
     // Phase 1: generation should start. If the spinner never appears the click
     // did not take, and waiting out the full timeout would just burn it.
-    const started = await waitFor(isGenerating, Math.min(5000, timeoutMs), doc, now, setT);
+    const started = await waitFor(() => generatingSignal(doc).active, Math.min(5000, timeoutMs), doc, now, setT);
+    const signal = generatingSignal(doc).source;
+    let waitedOnSpinner = false;
     if (started) {
+      waitedOnSpinner = true;
       // Phase 2: wait for the spinner to clear — that is the real completion
       // signal, and it cannot fire on a half-written answer the way text
       // stability can.
-      await waitFor((d) => !isGenerating(d), timeoutMs, doc, now, setT);
+      await waitFor((d) => !generatingSignal(d).active, timeoutMs, doc, now, setT);
+    } else {
+      console.warn("[NativeRecovery] No generation indicator appeared after clicking retry; " +
+        "falling back to text-stability. The loading selector may have gone stale.");
     }
 
     // Phase 3: let the finished DOM settle so we read the complete answer.
@@ -264,11 +293,11 @@
     if (!result.changed) {
       const finalText = readLastResponseText(doc);
       if (finalText && finalText !== before && !isPlaceholderOnly(finalText)) {
-        return { ok: true, text: finalText, reason: "" };
+        return { ok: true, text: finalText, reason: "", signal, waitedOnSpinner };
       }
-      return { ok: false, text: "", reason: "no_new_response" };
+      return { ok: false, text: "", reason: "no_new_response", signal, waitedOnSpinner };
     }
-    return { ok: true, text: result.text, reason: "" };
+    return { ok: true, text: result.text, reason: "", signal, waitedOnSpinner };
   }
 
   const NativeRecovery = {
@@ -279,6 +308,7 @@
     looksLikeFailure,
     isPlaceholderOnly,
     isGenerating,
+    generatingSignal,
     waitForResponseChange,
     retryViaUi
   };

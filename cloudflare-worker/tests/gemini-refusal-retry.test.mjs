@@ -273,6 +273,20 @@ test("Gemini's 'Gemini บอกว่า' label is a placeholder, not an answer
   assert.equal(NativeRecovery.isPlaceholderOnly('It is Paris.'), false);
 });
 
+test('generatingSignal reports WHICH selector matched, not just a boolean', () => {
+  // A dead selector is otherwise invisible: the wait silently degrades to
+  // text-stability. Reporting provenance is what makes that loud.
+  const spinner = { querySelector: (s) => (s === 'div.loading-content-spinner-container' ? {} : null) };
+  assert.deepEqual(NativeRecovery.generatingSignal(spinner),
+    { active: true, source: 'material_spinner_container' });
+
+  const lottie = { querySelector: (s) => (s === 'clipPath[id^="__lottie_element"]' ? {} : null) };
+  assert.equal(NativeRecovery.generatingSignal(lottie).source, 'lottie_clippath');
+
+  assert.deepEqual(NativeRecovery.generatingSignal({ querySelector: () => null }),
+    { active: false, source: 'none' });
+});
+
 test('the live Material spinner is the generation-in-progress signal', () => {
   // Verified against the real Gemini DOM (boq-gemini-web-uiserver 20260927.05)
   // during a 1500-word generation:
@@ -296,8 +310,9 @@ test('the Lottie clipPath probe was falsified on the live DOM, kept only as fall
   const source = readFileSync(
     new URL('../../extension-cloudflare/native-recovery.js', import.meta.url), 'utf8'
   );
-  const start = source.indexOf('function isGenerating');
+  const start = source.indexOf('function generatingSignal');
   const end = source.indexOf('\n  }', start);
+  assert.ok(start !== -1 && end > start, 'generatingSignal must exist');
   const body = source.slice(start, end);
   const material = body.indexOf('loading-content-spinner-container');
   const lottie = body.indexOf('__lottie_element');

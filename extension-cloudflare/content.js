@@ -1314,6 +1314,14 @@
       outcome = { ok: false, text: "", reason: err?.message || "retry_failed" };
     }
 
+    // Report WHICH loading signal actually matched. A stale selector is
+    // otherwise invisible: the wait just quietly falls back to text-stability
+    // and short answers get truncated mid-stream.
+    console.log(
+      `[Bridge] 🔄 NATIVE_RETRY ${outcome.ok ? "answered" : "failed"} ` +
+      `(signal=${outcome.signal || "n/a"}, spinner=${outcome.waitedOnSpinner ? "yes" : "no"})`
+    );
+
     if (outcome.ok) {
       createOrUpdateIndicator("connected", "Bridge: Processing Prompt...");
     } else {
