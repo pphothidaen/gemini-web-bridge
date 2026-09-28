@@ -31,3 +31,6 @@ scripts/chrome-dev-shortcut.app/
 
 # ZCode Desktop app metadata — foreign file, breaks Node module detection ("type": "module")
 /package.json
+
+# Local-only backup of the stray ZCode Desktop package.json (see KAN-176)
+/package.json.zcode-desktop.bak
