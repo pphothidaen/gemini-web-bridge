@@ -56,6 +56,7 @@ correction instead.
 | [KAN-160](https://pansakorn.atlassian.net/browse/KAN-160) | `agent-developer_core` | Done | `2da4d11` |
 | [KAN-170](https://pansakorn.atlassian.net/browse/KAN-170) | `agent-hermes` | Done | `b2e046a` |
 | [KAN-169](https://pansakorn.atlassian.net/browse/KAN-169) | `agent-hermes` | Done (duplicate) | *none — stub* |
+| [KAN-173](https://pansakorn.atlassian.net/browse/KAN-173) | `agent-devops` | Done | `51c532a` |
 
 - **KAN-155** — the extension's direct-WebSocket fallback now sends `instanceId`
   (the DO rejects an upgrade without a UUID `instanceId`), and the `onerror` handler
@@ -79,6 +80,12 @@ correction instead.
 - **KAN-169** — an empty stub (summary was literally `KAN-105`, no
   description) citing the GOV-001 governance rule. Creator-confirmed duplicate
   of KAN-163, which completed that scope. Closed as Done/duplicate.
+- **KAN-173** — CD deadlock: with `cancel-in-progress: false`, a run left
+  waiting at the production approval gate held the `cd-deploy` lock for
+  ~1.5 days and every later deploy queued behind it as pending with zero jobs.
+  Fixed to latest-wins in `51c532a` and verified by a real two-run test
+  (run A parked at the gate, run B superseded and cancelled it, B approved and
+  deployed at HEAD).
 
 ## Rule going forward
 
