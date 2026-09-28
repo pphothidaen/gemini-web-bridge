@@ -52,6 +52,9 @@ correction instead.
 | [KAN-155](https://pansakorn.atlassian.net/browse/KAN-155) | `agent-developer_core` | Done | `d342beb` |
 | [KAN-156](https://pansakorn.atlassian.net/browse/KAN-156) | `agent-devops` | Done | `51bc63e` + others |
 | [KAN-157](https://pansakorn.atlassian.net/browse/KAN-157) | `agent-hermes` | Done | `09ade78`, `c802a44`, `dc582c6` |
+| [KAN-159](https://pansakorn.atlassian.net/browse/KAN-159) | `agent-hermes` | Done | `4d80260` + KAN-162 + `b2e046a` |
+| [KAN-160](https://pansakorn.atlassian.net/browse/KAN-160) | `agent-developer_core` | Done | `2da4d11` |
+| [KAN-170](https://pansakorn.atlassian.net/browse/KAN-170) | `agent-hermes` | Done | `b2e046a` |
 
 - **KAN-155** — the extension's direct-WebSocket fallback now sends `instanceId`
   (the DO rejects an upgrade without a UUID `instanceId`), and the `onerror` handler
@@ -61,6 +64,17 @@ correction instead.
   errors, and the governance hook blocked `git revert`.
 - **KAN-157** — WebSocket handshake assertions could never pass (close code 1006
   carries no HTTP status) and the suite flaked on single-instance lease ordering.
+- **KAN-159** — the reported symptom (healthy idle connection dropped on a ~120 s
+  cycle) took three landed fixes: `4d80260`, the KAN-162 threshold raise, and
+  `b2e046a` (KAN-170) after production proved the residual cycle was Chrome
+  tearing down the idle MV3 service worker between DO PINGs. Verified closed on
+  production 2026-09-28: epoch stable, `lastActivityAt` advancing in 20 s steps.
+- **KAN-160** — the orphaned-tab reload hint now reloads the page instead of
+  retrying a connection that can never succeed.
+- **KAN-170** — the `KAN-170` key was cited in `b2e046a` **before any ticket
+  existed** (the same predicted-key failure mode as KAN-157 above); the ticket
+  was created after the fact on 2026-09-28 and landed with that exact number, so
+  the citation is now correct. See the `CLIENT_KEEPALIVE_INTERVAL_MS` heartbeat.
 
 ## Rule going forward
 
