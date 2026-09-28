@@ -45,7 +45,20 @@ $key
 
   local out
   out=$(twg jira workitem get "$key" 2>&1)
-  if [[ "$out" == *"does not exist"* ]]; then
+
+  # Success first: a fetched ticket's OWN body may legitimately contain the
+  # phrase "does not exist" (KAN-163's closure comment did, and the naive
+  # substring match below rejected a real push over it). twg's success and
+  # failure banners are mutually exclusive, so gating on "✗ Failed" before
+  # trusting the 404 text is what keeps the oracle honest.
+  if [[ "$out" == *"✓ Completed"* ]]; then
+    CACHE="${CACHE}
+${key}"
+    if [[ -z "$VALIDATED" ]]; then VALIDATED="$key"; else VALIDATED="$VALIDATED, $key"; fi
+    return 0
+  fi
+
+  if [[ "$out" == *"✗ Failed"* && "$out" == *"does not exist"* ]]; then
     BLOCKED="${BLOCKED}${key}
 "
     CACHE="${CACHE}
@@ -53,17 +66,10 @@ ${key}"
     return 1
   fi
 
-  if [[ "$out" != *"✓ Completed"* ]]; then
-    echo "⚠️  [Jira Guard] could not verify $key (twg error below) — push proceeds unverified." >&2
-    printf '%s\n' "$out" | sed 's/^/      /' >&2
-    CACHE="${CACHE}
-${key}"
-    return 0
-  fi
-
+  echo "⚠️  [Jira Guard] could not verify $key (twg error below) — push proceeds unverified." >&2
+  printf '%s\n' "$out" | sed 's/^/      /' >&2
   CACHE="${CACHE}
 ${key}"
-  if [[ -z "$VALIDATED" ]]; then VALIDATED="$key"; else VALIDATED="$VALIDATED, $key"; fi
   return 0
 }
 

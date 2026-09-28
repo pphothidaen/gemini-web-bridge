@@ -52,6 +52,14 @@ if [[ "$4" == "KAN-999" ]]; then
   echo "Error: network unreachable"
   exit 2
 fi
+if [[ "$4" == "KAN-640" ]]; then
+  # Regression fixture: a SUCCESSFUL fetch whose body contains the phrase
+  # "does not exist" — the real KAN-163 closure comment did, and the hook's
+  # original naive substring match rejected a real push over it.
+  echo "✓ Completed jira.workitem.get."
+  echo "[{\"key\":\"KAN-640\",\"comment\":\"rejects the push if the ticket does not exist, closing the failure mode\"}]"
+  exit 0
+fi
 echo "✓ Completed jira.workitem.get."
 echo "[{\\"key\\":\\"$4\\"}]"
 exit 0
@@ -144,6 +152,19 @@ test('twg failure other than 404 fails OPEN with a warning, not a block', () => 
   });
   assert.equal(r.status, 0, 'an unavailable oracle must not block an incident push: ' + r.stderr);
   assert.match(r.stderr, /could not verify KAN-999/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a ticket whose own body says "does not exist" still validates (regression)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-guard-'));
+  const { bin } = writeFakeTwg(dir);
+  const { repo, shas } = makeRepo(dir, ['KAN-640: body contains the 404 phrase']);
+  const r = runHook(repo, {
+    bin,
+    line: `refs/heads/main ${shas[0]} refs/heads/main 0000000000000000000000000000000000000000`,
+  });
+  assert.equal(r.status, 0, 'a successful fetch must never be read as a 404: ' + r.stderr);
+  assert.match(r.stdout, /KAN-640/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
