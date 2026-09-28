@@ -34,3 +34,6 @@ scripts/chrome-dev-shortcut.app/
 
 # Local-only backup of the stray ZCode Desktop package.json (see KAN-176)
 /package.json.zcode-desktop.bak
+
+# Workspace MCP config contains a Bearer secret — never commit
+.zcode/config.json

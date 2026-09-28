@@ -7,10 +7,8 @@
 # main Chrome profile.
 #
 # Usage:
-#   ./chrome-dev-shortcut.command              # load BOTH extensions
-#   ./chrome-dev-shortcut.command gemini       # load gemini-web-bridge only
-#   ./chrome-dev-shortcut.command aipass       # load aipass-web-bridge only
-#   CHROME_PORT=9333 ./chrome-dev-shortcut.command gemini  # custom port
+#   ./chrome-dev-shortcut.command              # load the gemini-web-bridge extension
+#   CHROME_PORT=9333 ./chrome-dev-shortcut.command       # custom port
 #
 # After launch, open DevTools at:
 #   http://localhost:$CHROME_PORT
@@ -33,35 +31,12 @@ USER_DATA_DIR="${USER_DATA_DIR:-$HOME/Library/Application Support/Google/Chrome 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# SCRIPT_DIR is <repo>/scripts, so the repo root is one level up; the aipass
-# extension is a sibling checkout of that repo. PROJECT_ROOT above is the
-# projects parent (two levels up) — both defaults stay env-overridable.
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GEMINI_EXT_DIR="${GEMINI_EXT_DIR:-$REPO_ROOT/extension-cloudflare}"
-AIPASS_EXT_DIR="${AIPASS_EXT_DIR:-$REPO_ROOT/../aipass-web-bridge/release/chrome-extension}"
 
-# ---- Resolve which extension(s) to load ------------------------------------
+# ---- Resolve which extension to load ---------------------------------------
 
-TARGET="${1:-both}"  # both | gemini | aipass
-
-EXT_ARGS=()
-
-case "$TARGET" in
-    both)
-        EXT_ARGS+=("--load-extension=$GEMINI_EXT_DIR,$AIPASS_EXT_DIR")
-        ;;
-    gemini)
-        EXT_ARGS+=("--load-extension=$GEMINI_EXT_DIR")
-        ;;
-    aipass)
-        EXT_ARGS+=("--load-extension=$AIPASS_EXT_DIR")
-        ;;
-    *)
-        echo "❌ Unknown target: $TARGET"
-        echo "   Usage: $0 [both|gemini|aipass]"
-        exit 1
-        ;;
-esac
+EXT_ARGS=("--load-extension=$GEMINI_EXT_DIR")
 
 # ---- Validate paths --------------------------------------------------------
 
