@@ -349,6 +349,18 @@ test('a leaked system preamble is an upstream error, not an answer', () => {
   );
 });
 
+test('the notebook phrasing of the same leak is also caught', () => {
+  // horo_consult runs against a NotebookLM notebook and leaks a different
+  // sentence for the same underlying failure. Scoring this as `answered` is
+  // what made a non-functional tool look healthy.
+  for (const t of [
+    'ฉันไม่ได้รับการโปรแกรมมาให้ทำเรื่องนี้',
+    'I was not given a program to handle this.'
+  ]) {
+    assert.equal(classifyGeminiReply(t).kind, REFUSAL_KIND.UPSTREAM_ERROR, t.slice(0, 40));
+  }
+});
+
 test('retryViaUi does not resolve on the placeholder mid-stream', async () => {
   // Gemini renders "Gemini บอกว่า" first, then streams the real answer. A
   // change-only detector returns the label; this must wait for the answer.

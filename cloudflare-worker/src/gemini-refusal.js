@@ -28,15 +28,21 @@ const UPSTREAM_ERROR = [
   /something went wrong/i,
   /internal error/i,
   /could you try again/i,
-  // Observed in production (4.6.0): Gemini leaked its own system preamble
-  // instead of answering. It arrives as a *successful* 200 with real text, so
-  // nothing else caught it — but "I only have the task of generating text" is
-  // not an answer and must not score as one.
+  // Observed in production (4.6.0 / 4.7.0): Gemini leaked its own system
+  // preamble instead of answering. It arrives as a *successful* 200 with real
+  // text, so nothing else caught it — but "I only have the task of generating
+  // text" is not an answer and must not score as one. Two distinct phrasings
+  // have now been seen, on the app chat and on the notebook respectively, so
+  // both are matched; the general shape is "I was not given a <program> to
+  // do this" rather than anything about the user's question.
   /อยู่นอกเหนือขอบเขต(ของ)?โปรแกรมที่(ฉัน|ผม)มี/i,
   /ฉันมีหน้าที่สร้างข้อความเท่านั้น/i,
   /ผมมีหน้าที่สร้างข้อความเท่านั้น/i,
+  /ฉันไม่ได้รับการโปรแกรมมาให้ทำเรื่องนี้/i,
   /outside the scope of (my|the) program/i,
-  /my only (task|role) is (to )?(generating|produce)( text)?/i
+  /my only (task|role) is (to )?(generating|produce)( text)?/i,
+  /I (was not|wasn't) (given|provided with) (a|the) program/i,
+  /no program (to|was) (handle|do|perform)/i
 ];
 
 const SOFT_REFUSAL = [
