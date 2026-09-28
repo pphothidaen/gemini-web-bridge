@@ -22,3 +22,9 @@ release/
 dist/
 .vscode/
 FAILURE_ANALYSIS.json
+
+# Machine-local dev tooling (ZCode workspace config; the .app is a binary
+# AppleScript build artifact with hardcoded user paths — the .command is the
+# committed source of truth)
+.zcodeignore
+scripts/chrome-dev-shortcut.app/
