@@ -89,6 +89,41 @@ test('nothing assigns to the non-existent ctx.alarm property', () => {
   );
 });
 
+test('no test constructs the DO with a ctx that lacks storage', () => {
+  // Constructing GeminiBridgeDO calls scheduleAlarm(), which now needs
+  // ctx.storage. Ten test files were passing a bare `{}` and had to be
+  // migrated to tests/helpers/fake-ctx.mjs.
+  //
+  // The migration was initially incomplete and the gap was invisible: the
+  // obvious search, `new GeminiBridgeDO({}`, matches nothing here because
+  // this file loads the DO through vm and constructs it as `new DOClass({})`.
+  // Ten tests failed on it in a way that looked pre-existing. So this asserts
+  // the property directly, over every test file, rather than a call shape.
+  const testDir = new URL('./', import.meta.url);
+  const offenders = [];
+
+  for (const name of fs.readdirSync(testDir)) {
+    if (!name.endsWith('.test.mjs')) continue;
+    const src = fs.readFileSync(new URL(name, testDir), 'utf8');
+    src.split('\n').forEach((line, i) => {
+      const code = line.replace(/\/\/.*$/, '');
+      // `new <Anything>({},` or `(ctx,` — the empty object is the tell. A
+      // real ctx is either makeCtx(), a literal with storage, or a fixture.
+      if (/\bnew\s+[A-Za-z_$][\w.$]*\s*\(\s*\{\s*\}\s*,/.test(code)) {
+        offenders.push(`${name}:${i + 1}`);
+      }
+    });
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    'a DO constructed with `{}` as ctx will throw on ctx.storage.setAlarm(). ' +
+      'Use makeCtx() from tests/helpers/fake-ctx.mjs. Found at: ' +
+      offenders.join(', ')
+  );
+});
+
 test('the client stale threshold exceeds the DO keepalive interval', () => {
   // The invariant both sides now depend on. The client tears its own socket
   // down after CLIENT_STALE_SOCKET_IDLE_MS of silence, and the server only

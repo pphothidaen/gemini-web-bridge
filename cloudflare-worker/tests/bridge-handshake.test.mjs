@@ -25,6 +25,7 @@ import vm from 'node:vm';
 import { randomUUID } from 'node:crypto';
 import * as modelCatalog from '../src/model-catalog.js';
 import * as liveness from '../src/liveness.js';
+import { makeCtx } from './helpers/fake-ctx.mjs';
 
 // ─── Load DO source and strip Cloudflare imports ───────────────
 const doSource = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
@@ -127,7 +128,13 @@ const INSTANCE_B = '51a73559-cbb9-44c9-bab2-28de0661c5e5';
 const INSTANCE_C = '97ac047d-479c-4ee7-9cb8-902791aae48e';
 
 function createBridge(DOClass = GeminiBridgeDO) {
-  return new DOClass({}, { BRIDGE_AUTH_TOKEN: BRIDGE_TOKEN, CLIENT_API_TOKEN: CLIENT_TOKEN });
+  // KAN-168: ctx used to be a bare `{}`, which worked only because
+  // scheduleAlarm() assigned to `ctx.alarm` — a property that does not exist
+  // on DurableObjectState, so the assignment needed nothing from ctx. The real
+  // call is ctx.storage.setAlarm(), so a ctx with storage is now required.
+  // This file loads the DO through vm rather than importing it, so it needed
+  // its own migration and was not covered by the other nine call sites.
+  return new DOClass(makeCtx(), { BRIDGE_AUTH_TOKEN: BRIDGE_TOKEN, CLIENT_API_TOKEN: CLIENT_TOKEN });
 }
 
 function wsRequest(instanceId, { token = BRIDGE_TOKEN, upgrade = 'websocket' } = {}) {
