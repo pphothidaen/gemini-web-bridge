@@ -18,7 +18,8 @@ set -euo pipefail
 # ─── Configuration ────────────────────────────────────────────────────
 
 WORKER_URL="${1:-https://prod.gemini-web-bridge.workers.dev}"
-CF_TOKEN="${CF_TOKEN:-}"
+BRIDGE_SECRET="${BRIDGE_SECRET:-}"
+CLIENT_API_KEY="${CLIENT_API_KEY:-}"
 TIMEOUT=10
 WARN_LATENCY_MS=2000
 CRIT_LATENCY_MS=5000
@@ -40,9 +41,9 @@ WARN=0
 # ─── Helper Functions ─────────────────────────────────────────────────
 
 log_info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
-log_ok()    { echo -e "${GREEN}[PASS]${NC} $*"; ((PASS++)); }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; ((WARN++)); }
-log_fail()  { echo -e "${RED}[FAIL]${NC} $*"; ((FAIL++)); }
+log_ok()    { echo -e "${GREEN}[PASS]${NC} $*"; PASS=$((PASS + 1)); }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; WARN=$((WARN + 1)); }
+log_fail()  { echo -e "${RED}[FAIL]${NC} $*"; FAIL=$((FAIL + 1)); }
 log_section() { echo -e "\n${BOLD}═══ $* ═══${NC}"; }
 
 check_jq() {
@@ -101,14 +102,14 @@ check_basic_health() {
 check_auth() {
   log_section "Authentication Check"
   
-  if [[ -z "$CF_TOKEN" ]]; then
-    log_warn "CF_TOKEN not set — skipping auth checks"
+  if [[ -z "$BRIDGE_SECRET" ]]; then
+    log_warn "BRIDGE_SECRET not set — skipping auth checks"
     return
   fi
   
   local response
   response=$(curl -s -w "\n%{http_code}" --max-time "$TIMEOUT" \
-    -H "Authorization: Bearer ${CF_TOKEN}" \
+    -H "x-bridge-token: ${BRIDGE_SECRET}" \
     "${WORKER_URL}/bridge/auth-check" 2>/dev/null)
   
   local http_code
@@ -138,7 +139,8 @@ check_models() {
   
   local response
   response=$(curl -s -w "\n%{http_code}" --max-time "$TIMEOUT" \
-    "${WORKER_URL}/bridge/models" 2>/dev/null)
+    -H "Authorization: Bearer ${CLIENT_API_KEY}" \
+    "${WORKER_URL}/v1/models" 2>/dev/null)
   
   local http_code
   http_code=$(echo "$response" | tail -1)
@@ -150,7 +152,7 @@ check_models() {
     
     if check_jq; then
       local count
-      count=$(echo "$body" | jq '.models | length // (. | length)')
+      count=$(echo "$body" | jq '.data | length')
       if [[ "$count" -gt 0 ]]; then
         log_ok "Model catalog has ${count} models"
       else

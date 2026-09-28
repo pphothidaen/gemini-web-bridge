@@ -17,13 +17,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const WORKER_URL = process.env.WORKER_URL || 'https://prod.gemini-web-bridge.workers.dev';
-const CLIENT_API_KEY = process.env.CLIENT_API_KEY || process.env.CF_TOKEN || '';
+const CLIENT_API_KEY = process.env.CLIENT_API_KEY || '';
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET || '';
 const PROTOCOL_VERSION = 3;
 
 // Every test in this file hits the LIVE worker, and all but /health and the
 // unauthenticated-rejection checks need a valid token. CI does not pass
-// CF_TOKEN to the test job, so these ran against production with no
+// CLOUDFLARE_API_TOKEN to the test job, so these ran against production with no
 // credentials and failed on 401.
 //
 // They previously "guarded" themselves with `if (!CF_TOKEN) return`, which is
@@ -33,7 +33,7 @@ const PROTOCOL_VERSION = 3;
 //
 // Gate the whole file on the credential instead. `skip` on the test context
 // reports as skipped with a reason, so the summary reflects what actually
-// ran. Set CF_TOKEN (and WORKER_URL to point at the target) to exercise it —
+// ran. Set CLIENT_API_KEY (and WORKER_URL to point at the target) to exercise it —
 // the redteam-token-test job already proves both tokens against production.
 const skip = (CLIENT_API_KEY || BRIDGE_SECRET) ? false : 'No tokens set — live-server tests not exercised';
 

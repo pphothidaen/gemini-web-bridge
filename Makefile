@@ -58,7 +58,7 @@ health:
 	@curl -s $(WORKER_URL)/health | jq .
 	@echo ""
 	@echo "=== Auth Check ==="
-	@curl -s -H "Authorization: Bearer $(CF_TOKEN)" $(WORKER_URL)/bridge/auth-check | jq .
+	@curl -s -H "x-bridge-token: $(BRIDGE_SECRET)" $(WORKER_URL)/bridge/auth-check | jq .
 
 ## health-deep: Deep health check with diagnostics
 health-deep:
