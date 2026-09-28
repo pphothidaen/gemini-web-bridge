@@ -13,7 +13,7 @@ match = re.search(r'const DEFAULT_BRIDGE_SECRET = "([^"]+)"', extension)
 if not client_key or not match:
     raise SystemExit('Existing credentials missing; no secrets changed')
 result = subprocess.run(['wrangler','secret','bulk'], input=json.dumps({
-    'BRIDGE_AUTH_TOKEN': match[1], 'CLIENT_API_TOKEN': client_key,
+    'BRIDGE_SECRET': match[1], 'CLIENT_API_KEY': client_key,
 }), text=True, capture_output=True)
 # Wrangler prints binding names only; suppress raw output defensively.
 print(json.dumps({'secrets_updated': result.returncode == 0, 'exit_code': result.returncode}))

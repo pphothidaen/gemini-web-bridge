@@ -1872,8 +1872,8 @@ export class GeminiBridgeDO extends DurableObject {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 
-    const BRIDGE_SECRET = this.env.BRIDGE_AUTH_TOKEN;
-    const CLIENT_API_KEY = this.env.CLIENT_API_TOKEN;
+    const BRIDGE_SECRET = this.env.BRIDGE_SECRET;
+    const CLIENT_API_KEY = this.env.CLIENT_API_KEY;
 
     // ─── 1. WebSocket Endpoint สำหรับ Chrome Extension (/bridge) ───
     if (url.pathname === "/bridge") {

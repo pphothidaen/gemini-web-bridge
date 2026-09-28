@@ -11,10 +11,10 @@
     ? globalThis.GeminiBridgeSettings
     : {
         DEFAULT_WORKER_URL: "https://prod.gemini-web-bridge.workers.dev",
-        DEFAULT_BRIDGE_SECRET: "__BRIDGE_AUTH_TOKEN__",
+        DEFAULT_BRIDGE_SECRET: "__BRIDGE_SECRET__",
         resolveSettings: (s = {}) => ({
           workerUrl: s.workerUrl || "https://prod.gemini-web-bridge.workers.dev",
-          bridgeToken: s.bridgeToken || "__BRIDGE_AUTH_TOKEN__",
+          bridgeToken: s.bridgeToken || "__BRIDGE_SECRET__",
           rawBridgeToken: s.bridgeToken || "",
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",
           isDefaultToken: !s.bridgeToken

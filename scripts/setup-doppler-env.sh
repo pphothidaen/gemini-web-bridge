@@ -12,7 +12,7 @@ export DOPPLER_MASK_SECRETS=***
 
 # ═══ Verify Doppler access ═══
 echo "🔍 Verifying Doppler access..."
-if ! doppler secrets get BRIDGE_AUTH_TOKEN --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" --plain >/dev/null 2>&1; then
+if ! doppler secrets get BRIDGE_SECRET --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" --plain >/dev/null 2>&1; then
     echo "❌ Doppler authentication failed."
     echo ""
     echo "Fix options:"
@@ -42,7 +42,7 @@ if [ $? -eq 0 ]; then
     echo "✅ .env synced successfully"
     echo ""
     echo "Synced secrets:"
-    grep -E "^(BRIDGE_AUTH_TOKEN|CLIENT_API_TOKEN|WORKER_URL|MCP_ENDPOINT)=" .env | sed 's/=.*/=***/'
+    grep -E "^(BRIDGE_SECRET|CLIENT_API_KEY|WORKER_URL|MCP_ENDPOINT)=" .env | sed 's/=.*/=***/'
 else
     echo "❌ Failed to sync .env"
     return 1 2>/dev/null || exit 1

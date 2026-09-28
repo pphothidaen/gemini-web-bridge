@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import tls from 'node:tls';
 
 const WORKER_URL = process.env.WORKER_URL || 'https://prod.gemini-web-bridge.workers.dev';
-const BRIDGE_AUTH_TOKEN = process.env.BRIDGE_AUTH_TOKEN || '';
+const BRIDGE_SECRET = process.env.BRIDGE_SECRET || '';
 
 // These tests take the single-instance lease and hold it, so they can knock a
 // real user's bridge offline. That happened while verifying the other fixes in
@@ -34,10 +34,10 @@ const BRIDGE_AUTH_TOKEN = process.env.BRIDGE_AUTH_TOKEN || '';
 // production: WORKER_URL above still points there, so the safe default is to skip.
 const ISOLATED = process.env.BRIDGE_PHASE5_TARGET_ISOLATED === '1';
 
-const skip = BRIDGE_AUTH_TOKEN && ISOLATED
+const skip = BRIDGE_SECRET && ISOLATED
   ? false
-  : !BRIDGE_AUTH_TOKEN
-    ? 'BRIDGE_AUTH_TOKEN not set — Phase 5 live tests not exercised'
+  : !BRIDGE_SECRET
+    ? 'BRIDGE_SECRET not set — Phase 5 live tests not exercised'
     : 'set BRIDGE_PHASE5_TARGET_ISOLATED=1 to confirm no real user depends on this worker — these tests evict a live extension';
 
 // These tests drive the single-instance connection lease. If a real browser
@@ -116,7 +116,7 @@ async function waitForFreeLease(timeoutMs = 20000) {
 function connectBridge(instanceId) {
   const wsUrl = WORKER_URL.replace('https://', 'wss://');
   const params = new URLSearchParams({
-    token: BRIDGE_AUTH_TOKEN,
+    token: BRIDGE_SECRET,
     instanceId,
   });
   const url = `${wsUrl}/bridge?${params.toString()}`;
@@ -181,7 +181,7 @@ function connectBridge(instanceId) {
  * cannot pass on any version of the server.
  */
 async function probeUpgradeStatus(instanceId) {
-  const url = `${WORKER_URL}/bridge?token=${encodeURIComponent(BRIDGE_AUTH_TOKEN)}&instanceId=${instanceId}`;
+  const url = `${WORKER_URL}/bridge?token=${encodeURIComponent(BRIDGE_SECRET)}&instanceId=${instanceId}`;
   // No Upgrade header: Node's fetch (undici) refuses to send one — it throws
   // "invalid upgrade header". That is fine, because the 409 guard is evaluated
   // BEFORE the worker checks for Upgrade (index.js returns 409, and only then
@@ -194,7 +194,7 @@ async function probeUpgradeStatus(instanceId) {
 function connectBridgeWithStatus(instanceId, tokenOverride) {
   const wsUrl = WORKER_URL.replace('https://', 'wss://');
   const params = new URLSearchParams({
-    token: tokenOverride ?? BRIDGE_AUTH_TOKEN,
+    token: tokenOverride ?? BRIDGE_SECRET,
     instanceId,
   });
   const url = `${wsUrl}/bridge?${params.toString()}`;
@@ -333,7 +333,7 @@ test('TS-005: Same instanceId reconnect is accepted (not 409)', { skip }, async 
   assert.equal(result1.code, 101, `First connection should succeed (101), got ${result1.code}`);
 
   // Send SESSION_READY to establish session
-  sendSessionReady(result1.ws, { instanceId, tokens: { bridge: BRIDGE_AUTH_TOKEN } });
+  sendSessionReady(result1.ws, { instanceId, tokens: { bridge: BRIDGE_SECRET } });
 
   // Give the server a moment to process SESSION_READY
   await new Promise(r => setTimeout(r, 500));
@@ -370,7 +370,7 @@ test('TS-007: Different instanceId + healthy old connection → 409', { skip }, 
   assert.equal(resultA.code, 101, `First connection should succeed, got ${resultA.code}`);
 
   // Send SESSION_READY to establish session
-  sendSessionReady(resultA.ws, { instanceId: instanceIdA, tokens: { bridge: BRIDGE_AUTH_TOKEN } });
+  sendSessionReady(resultA.ws, { instanceId: instanceIdA, tokens: { bridge: BRIDGE_SECRET } });
   await new Promise(r => setTimeout(r, 500));
 
   // Step 2: Try to connect with DIFFERENT instanceId=B (same token).

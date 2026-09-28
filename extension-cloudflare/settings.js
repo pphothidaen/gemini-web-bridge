@@ -9,8 +9,8 @@
   // ═══ DEFAULTS — injected at build time ═══
   // Secrets/URLs are injected by scripts/build-extension.py at build time.
   // NEVER hardcode real values here — this file is committed and zipped.
-  const DEFAULT_BRIDGE_SECRET = "__BRIDGE_AUTH_TOKEN__";
-  const DEFAULT_CLIENT_API_TOKEN = "__CLIENT_API_TOKEN__";
+  const DEFAULT_BRIDGE_SECRET = "__BRIDGE_SECRET__";
+  const DEFAULT_CLIENT_API_KEY = "__CLIENT_API_KEY__";
   const DEFAULT_WORKER_URL = "__WORKER_URL__";
   const DEFAULT_MCP_ENDPOINT = "__MCP_ENDPOINT__";
   const DEFAULT_WSS_ENDPOINT = "__WSS_ENDPOINT__";
@@ -33,7 +33,7 @@
     const bridgeToken = rawToken || DEFAULT_BRIDGE_SECRET;
 
     const rawClientToken = typeof stored.clientApiToken === "string" ? stored.clientApiToken.trim() : "";
-    const clientApiToken = rawClientToken || DEFAULT_CLIENT_API_TOKEN;
+    const clientApiToken = rawClientToken || DEFAULT_CLIENT_API_KEY;
 
     const enforcementMode = stored.enforcementMode === "permissive" ? "permissive" : "strict";
 
@@ -68,7 +68,7 @@
 
   const Settings = {
     DEFAULT_BRIDGE_SECRET,
-    DEFAULT_CLIENT_API_TOKEN,
+    DEFAULT_CLIENT_API_KEY,
     DEFAULT_WORKER_URL,
     DEFAULT_MCP_ENDPOINT,
     DEFAULT_WSS_ENDPOINT,

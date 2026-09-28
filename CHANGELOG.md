@@ -15,7 +15,7 @@ All notable changes to the Gemini Web-Bridge project.
 - **Version drift**: `/health`, MCP `serverInfo` and `ping` reported a hardcoded `4.3.4` while `package.json` said `4.3.7` and the extension manifest said `4.4.3`. All version strings now read a single `WORKER_VERSION` constant, and `package.json` / `package-lock.json` / `manifest.json` are pinned to the same release line.
 
 ### Security
-- `wrangler.staging.toml` no longer ships a plain-var `BRIDGE_AUTH_TOKEN` (was the guessable `staging-token-change-me`); the worker now fails closed until the secret is set with `wrangler secret put`.
+- `wrangler.staging.toml` no longer ships a plain-var `BRIDGE_SECRET` (was the guessable `staging-token-change-me`); the worker now fails closed until the secret is set with `wrangler secret put`.
 
 ### Added
 - `tests/decode-chunk.test.mjs` (9 cases: cumulative text, trailing `lmdx_content` link, string/array/structured text slots, malformed-payload state recovery, non-JSON lines).

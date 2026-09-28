@@ -1,7 +1,7 @@
-# 🔐 Token Rotation Runbook — BRIDGE_AUTH_TOKEN / CLIENT_API_TOKEN
+# 🔐 Token Rotation Runbook — BRIDGE_SECRET / CLIENT_API_KEY
 
 > **Status: OUTSTANDING — requires the operator.** The tokens below were exposed
-> and, at the time of this audit, `CLIENT_API_TOKEN` was still accepted by the
+> and, at the time of this audit, `CLIENT_API_KEY` was still accepted by the
 > production worker. Rotating is a human/credentialed action; this document is
 > the exact procedure. Everything that can be fixed in the repo already was
 > (see "Repo-side hardening already applied").
@@ -10,8 +10,8 @@
 
 | Token | Where it leaked | Still valid? (audited 2026-09-26) |
 |:--|:--|:--|
-| `BRIDGE_AUTH_TOKEN` (`gemini-bridge-…`) | Committed to `extension-cloudflare/{background,content,options}.js` + `options.html` in commit **`078824b`** ("pre-filled defaults"), removed in **`4f6cced`**. Both commits are ancestors of `main`/`origin/main` of the **public** repo `pphothidaen/gemini-web-bridge`. | Not probed (a WS connect could disturb the live extension session). Assume compromised. |
-| `CLIENT_API_TOKEN` (`hermes-…`) | Same commits; also present in local (gitignored) `.env`, `cloudflare-worker/.env`, `release/gemini-bridge-v4.4.2/`. | **Yes — verified: `GET /v1/models` returned HTTP 200 with the leaked bearer token.** |
+| `BRIDGE_SECRET` (`gemini-bridge-…`) | Committed to `extension-cloudflare/{background,content,options}.js` + `options.html` in commit **`078824b`** ("pre-filled defaults"), removed in **`4f6cced`**. Both commits are ancestors of `main`/`origin/main` of the **public** repo `pphothidaen/gemini-web-bridge`. | Not probed (a WS connect could disturb the live extension session). Assume compromised. |
+| `CLIENT_API_KEY` (`hermes-…`) | Same commits; also present in local (gitignored) `.env`, `cloudflare-worker/.env`, `release/gemini-bridge-v4.4.2/`. | **Yes — verified: `GET /v1/models` returned HTTP 200 with the leaked bearer token.** |
 | `CLOUDFLARE_API_TOKEN` | Exposed in the deleted pre-migration repo `taijustarrett417-lgtm`. | Rotate. |
 
 Anyone can still recover both tokens from history:
@@ -32,7 +32,7 @@ in history at all — it was in the current tree:
 |:--|:--|:--|
 | **Committed build archive** | `gemini-bridge-v4.3.6.zip` at the **repo root**, tracked on `main`/`origin/main`, re-committed in `d903ebe` (Sep 25). Contained the live tokens in `settings.js`, `background.js`, `options.js`, `content.js` and `options.html`. One browser download from the repo front page — no git knowledge needed. | Untracked + deleted (`a526180`+), `*.zip` gitignored |
 | **This runbook itself** | `docs/SECURITY_TOKEN_ROTATION.md:112-113` held both tokens **in plaintext at `HEAD`** (`a526180`), greppable by anyone with GitHub code search. | Redacted to `hermes-392e…d0e` / `gemini-bridge-5ee2…1240` |
-| **Committed archive (clean)** | `extension-cloudflare.zip` was also tracked, but contained only `__BRIDGE_AUTH_TOKEN__` / `__CLIENT_API_TOKEN__` placeholders — a stray artifact, not an exposure. | Untracked |
+| **Committed archive (clean)** | `extension-cloudflare.zip` was also tracked, but contained only `__BRIDGE_SECRET__` / `__CLIENT_API_KEY__` placeholders — a stray artifact, not an exposure. | Untracked |
 
 Why it recurred twice: `release/` and `dist/` were gitignored but the archives
 landed at the **repo root**, where nothing objected. The 16–17 `__MACOSX`
@@ -57,20 +57,20 @@ cd cloudflare-worker
 npx wrangler whoami
 
 # 1. Generate new values (keep the prefixes so logs/greps stay readable)
-openssl rand -hex 24          # -> BRIDGE_AUTH_TOKEN
-openssl rand -hex 24          # -> CLIENT_API_TOKEN
+openssl rand -hex 24          # -> BRIDGE_SECRET
+openssl rand -hex 24          # -> CLIENT_API_KEY
 
 # 2. Push to the worker (secrets, NOT vars)
-npx wrangler secret put BRIDGE_AUTH_TOKEN
-npx wrangler secret put CLIENT_API_TOKEN
+npx wrangler secret put BRIDGE_SECRET
+npx wrangler secret put CLIENT_API_KEY
 # staging, if used:
-npx wrangler secret put BRIDGE_AUTH_TOKEN --env staging
-npx wrangler secret put CLIENT_API_TOKEN  --env staging
+npx wrangler secret put BRIDGE_SECRET --env staging
+npx wrangler secret put CLIENT_API_KEY  --env staging
 
 # 3. Doppler (project: gemini-web-bridge, config: prd_worker) — the extension
 #    build reads its tokens from here.
-doppler secrets set BRIDGE_AUTH_TOKEN="…" --project gemini-web-bridge --config prd_worker
-doppler secrets set CLIENT_API_TOKEN="…"  --project gemini-web-bridge --config prd_worker
+doppler secrets set BRIDGE_SECRET="…" --project gemini-web-bridge --config prd_worker
+doppler secrets set CLIENT_API_KEY="…"  --project gemini-web-bridge --config prd_worker
 
 # 4. Local env files (gitignored — update, never commit)
 doppler secrets download --project gemini-web-bridge --config prd_worker \
@@ -78,7 +78,7 @@ doppler secrets download --project gemini-web-bridge --config prd_worker \
 # repeat for cloudflare-worker/.env
 
 # 5. GitHub Actions secrets (deploy pipeline reads these)
-gh secret set BRIDGE_AUTH_TOKEN; gh secret set CLIENT_API_TOKEN
+gh secret set BRIDGE_SECRET; gh secret set CLIENT_API_KEY
 # plus CLOUDFLARE_API_TOKEN if rotating that one
 ```
 
@@ -86,8 +86,8 @@ gh secret set BRIDGE_AUTH_TOKEN; gh secret set CLIENT_API_TOKEN
 
 ```bash
 # Rebuild the extension with the NEW tokens substituted into the placeholders
-export DOPPLER_SERVICE_TOKEN=…        # or export BRIDGE_AUTH_TOKEN/CLIENT_API_TOKEN
-python3 scripts/build-extension.py    # substitutes __BRIDGE_AUTH_TOKEN__ / __CLIENT_API_TOKEN__
+export DOPPLER_SERVICE_TOKEN=…        # or export BRIDGE_SECRET/CLIENT_API_KEY
+python3 scripts/build-extension.py    # substitutes __BRIDGE_SECRET__ / __CLIENT_API_KEY__
 python3 scripts/zip-extension.py      # release/gemini-bridge-v4.4.3.zip
 ```
 
@@ -135,8 +135,8 @@ git filter-repo --path-glob 'extension-cloudflare/*' --invert-paths   # not suff
 # The exact values are redacted here on purpose — a literal token in this file is
 # itself a leak (it happened at a526180). Read the exact values from the
 # incident record / Doppler, then substitute them at run time:
-#   git filter-repo --replace-text <(echo '<BRIDGE_AUTH_TOKEN>==>***REMOVED***')
-#   git filter-repo --replace-text <(echo '<CLIENT_API_TOKEN>==>***REMOVED***')
+#   git filter-repo --replace-text <(echo '<BRIDGE_SECRET>==>***REMOVED***')
+#   git filter-repo --replace-text <(echo '<CLIENT_API_KEY>==>***REMOVED***')
 # Known-leaked values were `hermes-392e…d0e` and `gemini-bridge-5ee2…1240`.
 git push --force --mirror   # requires force-push rights; coordinate with collaborators
 # then ask GitHub Support to purge dangling refs / cached views.
@@ -148,7 +148,7 @@ git push --force --mirror   # requires force-push rights; coordinate with collab
   `hermes-*` / `gemini-bridge-*` value reappears **anywhere in the repo**
   (repo-wide `git ls-files` sweep, not just the extension dir), **inside any
   `.zip` archive** (members are inflated with `node:zlib` and scanned), if the
-  extension defaults stop being `__BRIDGE_AUTH_TOKEN__` / `__CLIENT_API_TOKEN__`
+  extension defaults stop being `__BRIDGE_SECRET__` / `__CLIENT_API_KEY__`
   placeholders, or if a `wrangler*.toml` assigns a secret as a plain var.
 - `cloudflare-worker/tests/extension-secrets.test.mjs` also asserts **no build
   artifacts are tracked** (`*.zip`, `*.tar*`, `dist/`, `release/`, …), so the
@@ -161,7 +161,7 @@ git push --force --mirror   # requires force-push rights; coordinate with collab
   since gitleaks' default config knows nothing about them; wired into the
   `security-scan` job, which now also runs on pull requests.
 - `cloudflare-worker/wrangler.staging.toml` — the guessable
-  `BRIDGE_AUTH_TOKEN = "staging-token-change-me"` plain var was removed; the
+  `BRIDGE_SECRET = "staging-token-change-me"` plain var was removed; the
   worker now fails closed (401) until `wrangler secret put` is used.
 - `release/` and `.env` remain gitignored (never committed).
 

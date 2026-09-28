@@ -732,8 +732,8 @@ flowchart TD
 
 | Secret | ใช้สำหรับ | ตั้งค่าผ่าน |
 |:-------|:---------|:-----------|
-| `BRIDGE_AUTH_TOKEN` | Extension ↔ Worker WSS auth | `wrangler secret put BRIDGE_AUTH_TOKEN` |
-| `CLIENT_API_TOKEN` | Client → Worker API auth | `wrangler secret put CLIENT_API_TOKEN` |
+| `BRIDGE_SECRET` | Extension ↔ Worker WSS auth | `wrangler secret put BRIDGE_SECRET` |
+| `CLIENT_API_KEY` | Client → Worker API auth | `wrangler secret put CLIENT_API_KEY` |
 | `WEBHOOK_URL` (ใหม่ #3) | Health notification webhook | `wrangler secret put WEBHOOK_URL` |
 
 ---

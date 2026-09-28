@@ -97,8 +97,8 @@ function mockSocket() {
 /** Create a DO instance with scopeRouter wired up for testing */
 function createBridge() {
   const b = new GeminiBridgeDO(makeCtx(), {
-    CLIENT_API_TOKEN: 'test-token',
-    BRIDGE_AUTH_TOKEN: 'bridge-secret',
+    CLIENT_API_KEY: 'test-token',
+    BRIDGE_SECRET: 'bridge-secret',
   });
   b.currentTokens = { sessionReady: true };
   b.lastNotebookScope = 'notebook:test-nb-id';

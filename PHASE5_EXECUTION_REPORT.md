@@ -127,4 +127,4 @@ Not relevant for Phase 5 — these require Phase 4 scopeSessions Map implementat
 
 2. **DO alarm API fix** — The `setInterval` → `alarm` migration is a non-behavioral change (the keepalive and cleanup logic is identical, just scheduled differently). Low risk for canary.
 
-3. **Token handling** — Integration tests now use `CLIENT_API_TOKEN` (for `/v1/*`) and `BRIDGE_AUTH_TOKEN` (for `/bridge*`) correctly, matching the worker's auth implementation.
+3. **Token handling** — Integration tests now use `CLIENT_API_KEY` (for `/v1/*`) and `BRIDGE_SECRET` (for `/bridge*`) correctly, matching the worker's auth implementation.

@@ -14,33 +14,33 @@ Chrome Extension MV3 that bridges an authenticated Gemini web session to the Clo
    - Enable Developer mode
    - Click "Load unpacked" → select `dist/extension/`
 
-3. Open extension options → enter `BRIDGE_AUTH_TOKEN` → click "Test Connection"
+3. Open extension options → enter `BRIDGE_SECRET` → click "Test Connection"
 
 ## Build System
 
 Source files use placeholders:
 
 ```javascript
-const DEFAULT_BRIDGE_SECRET = "__BRIDGE_AUTH_TOKEN__";
-const DEFAULT_CLIENT_API_TOKEN = "__CLIENT_API_TOKEN__";
+const DEFAULT_BRIDGE_SECRET = "__BRIDGE_SECRET__";
+const DEFAULT_CLIENT_API_KEY = "__CLIENT_API_KEY__";
 ```
 
 The `scripts/build-extension.py` script:
 
 1. Fetches secrets from Doppler (`gemini-web-bridge/prd_worker`)
 2. Copies source to `dist/extension/`
-3. Replaces `__BRIDGE_AUTH_TOKEN__` → real `BRIDGE_AUTH_TOKEN`
-4. Replaces `__CLIENT_API_TOKEN__` → real `CLIENT_API_TOKEN`
+3. Replaces `__BRIDGE_SECRET__` → real `BRIDGE_SECRET`
+4. Replaces `__CLIENT_API_KEY__` → real `CLIENT_API_KEY`
 5. Adds `.gitignore` to prevent accidental commit of built files
 
 ## Environment Variables
 
 Secret is sourced from:
 
-1. Doppler CLI (`doppler secrets get BRIDGE_AUTH_TOKEN ...`)
-2. Environment variable `BRIDGE_AUTH_TOKEN`
+1. Doppler CLI (`doppler secrets get BRIDGE_SECRET ...`)
+2. Environment variable `BRIDGE_SECRET`
 
-Same for `CLIENT_API_TOKEN`.
+Same for `CLIENT_API_KEY`.
 
 ## File Structure
 

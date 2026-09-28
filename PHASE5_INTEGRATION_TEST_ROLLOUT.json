@@ -761,7 +761,7 @@
     "prerequisites": [
       "Cloudflare Wrangler CLI installed and authenticated (wrangler --version)",
       "Access to staging worker via Cloudflare dashboard or wrangler",
-      "Staging BRIDGE_AUTH_TOKEN configured (currently: 'staging-token-change-me' in wrangler.staging.toml)",
+      "Staging BRIDGE_SECRET configured (currently: 'staging-token-change-me' in wrangler.staging.toml)",
       "Durable Object migration applied (v1-staging tag)"
     ],
     "deployment_steps": [
@@ -1482,7 +1482,7 @@
         "ScopeRouter + handleScopeSwitchFromExtension + requestScopeSwitch implemented in index.js",
         "Extension built with PROTOCOL_VERSION 3 (background.js imports protocol-messages.js v3)",
         "Staging worker deployed with Phase 1-3 changes (baseline)",
-        "Staging BRIDGE_AUTH_TOKEN configured",
+        "Staging BRIDGE_SECRET configured",
         "Wrangler CLI authenticated",
         "Chrome extension test environment available (chrome://extensions with developer mode)"
       ],

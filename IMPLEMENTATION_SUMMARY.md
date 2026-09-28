@@ -9,7 +9,7 @@
 | Redteam audit | ✅ | No `taijustarrett417` traces found (git, blobs, GitHub API, code) |
 | Old repo deletion | ✅ | `taijustarrett417-lgtm/gemini-web-bridge` deleted (manual confirm) |
 | Secrets migration | ✅ | GitHub Actions Secrets (5) + Doppler (project: gemini-web-bridge, config: prd_worker) |
-| Secret masking | ✅ | 34 hardcoded secrets → `${CLIENT_API_TOKEN}` / placeholder tokens |
+| Secret masking | ✅ | 34 hardcoded secrets → `${CLIENT_API_KEY}` / placeholder tokens |
 | CI/CD Security Scan | ✅ | Gitleaks added to pipeline (lint → test → security → deploy) |
 | README rewrite | ✅ | EN/ZH/TH multilingual + author branding + LinkedIn + Star/Fork CTA |
 | Production URL revert | ✅ | Reverted all `pphothidaen.workers.dev` → `pansakorn-pho.workers.dev` |
@@ -30,7 +30,7 @@
 Secrets were exposed in the old repo (`taijustarrett417-lgtm`) **and** committed
 verbatim to this public repo's history (commits `078824b` → `4f6cced`, still
 retrievable with `git log -S`). Audit on 2026-09-26 confirmed
-`CLIENT_API_TOKEN` is **still accepted by production** (`GET /v1/models` → 200),
+`CLIENT_API_KEY` is **still accepted by production** (`GET /v1/models` → 200),
 so rotation is mandatory, not hardening.
 
 **This is not history-only.** A second audit found the exposure was *worse* than
@@ -47,8 +47,8 @@ Both are now removed/redacted, but **neither invalidated the credential.** Only
 rotation does that, which is why this item remains 🔴 REQUIRED rather than
 closed:
 
-- `BRIDGE_AUTH_TOKEN` (Gemini Bridge secret)
-- `CLIENT_API_TOKEN` (Bearer token)
+- `BRIDGE_SECRET` (Gemini Bridge secret)
+- `CLIENT_API_KEY` (Bearer token)
 - `CLOUDFLARE_API_TOKEN` (Cloudflare API token)
 
 **Action:** Follow [`docs/SECURITY_TOKEN_ROTATION.md`](docs/SECURITY_TOKEN_ROTATION.md)
@@ -101,6 +101,6 @@ Check the actual deployed worker version matches expectations.
 | **Author** | Pansakorn Phothidaen — linkedin.com/in/pansakorn |
 | **Doppler project** | gemini-web-bridge |
 | **Doppler config** | prd_worker |
-| **GitHub Secrets** | BRIDGE_AUTH_TOKEN, CLIENT_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, CF_TOKEN |
+| **GitHub Secrets** | BRIDGE_SECRET, CLIENT_API_KEY, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, CF_TOKEN |
 | **CI/CD status** | All jobs passing |
 | **Worker version** | v4.3.4 (live) / v4.3.4 (GitHub) |

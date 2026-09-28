@@ -19,8 +19,8 @@ its own execution validation and permission controls.
 Configure secrets before deployment (the old plaintext defaults were removed):
 
 ```sh
-npx wrangler secret put BRIDGE_AUTH_TOKEN
-npx wrangler secret put CLIENT_API_TOKEN
+npx wrangler secret put BRIDGE_SECRET
+npx wrangler secret put CLIENT_API_KEY
 ```
 
 Set matching credentials in the extension and Hermes. No deployment is performed

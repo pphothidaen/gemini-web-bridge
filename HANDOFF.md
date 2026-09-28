@@ -64,7 +64,7 @@
 │                                   AI Clients Tier                                      │
 │         Hermes Agent · Cursor · Cline · Claude Code · Python SDK · cURL Requests       │
 └───────────────────────────────────────────┬────────────────────────────────────────────┘
-                                            │ HTTPS (Bearer Auth: CLIENT_API_TOKEN)
+                                            │ HTTPS (Bearer Auth: CLIENT_API_KEY)
                                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.4.3)              │
@@ -307,7 +307,7 @@ Remote Model Context Protocol (MCP) ให้บริการที่ Endpoin
 #### ตัวอย่าง 1: ตรวจสอบ Ping และ Scope ปัจจุบัน (`ping`)
 ```bash
 curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
-  -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
+  -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -347,7 +347,7 @@ HoroConsultant project (`.env`) กำหนดค่าให้ใช้งา
 |---|---|---|
 | `GEMINI_WEB_BRIDGE_ENABLED` | `true` | เปิดใช้งาน bridge route |
 | `GEMINI_WEB_BRIDGE_URL` | `gemini-web-bridge.pansakorn-pho.workers.dev` | Cloudflare Worker endpoint |
-| `GEMINI_WEB_BRIDGE_TOKEN` | 46 chars | Bearer token (CLIENT_API_TOKEN) |
+| `GEMINI_WEB_BRIDGE_TOKEN` | 46 chars | Bearer token (CLIENT_API_KEY) |
 | `GEMINI_WEB_BRIDGE_SCOPE` | `notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0` | เลือก NotebookLM channel |
 | `GEMINI_WEB_BRIDGE_TOOL` | `horo_consult` | MCP tool name |
 | `GEMINI_WEB_BRIDGE_TIMEOUT_S` | `90` | หน่วย timeout |
@@ -359,7 +359,7 @@ HoroConsultant project (`.env`) กำหนดค่าให้ใช้งา
 #### ตัวอย่าง 2: กำหนด Scope ไปยัง NotebookLM (`set_bridge_scope`)
 ```bash
 curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
-  -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
+  -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -377,7 +377,7 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
 #### ตัวอย่าง 3: สั่งวิเคราะห์สถาปัตยกรรมภายใต้ Scope ของ NotebookLM (`sdlc_solution_architect`)
 ```bash
 curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
-  -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
+  -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -569,7 +569,7 @@ CREATE TABLE tool_executions (
 4. เลือกโฟลเดอร์โครงการ: `/Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare`
 5. คลิกที่ไอคอนส่วนขยายเพื่อเปิดหน้า **Options (ตั้งค่า)**:
    * **Worker URL:** `https://gemini-web-bridge.pansakorn-pho.workers.dev`
-   * **Bridge Token:** ใส่ Token ให้ตรงกับ Secret `BRIDGE_AUTH_TOKEN` (เช่น `REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN`)
+   * **Bridge Token:** ใส่ Token ให้ตรงกับ Secret `BRIDGE_SECRET` (เช่น `REPLACE_WITH_GITHUB_SECRET_CLIENT_API_KEY`)
    * **Enforcement Mode:** เลือก `Strict Verified`
 6. เปิดแท็บ `https://gemini.google.com/app` ล็อกอินบัญชี Google ให้เรียบร้อย จะเห็นไฟแสดงสถานะที่มุมล่างขวาขึ้นเป็น **สีเขียว (Bridge: Connected)**
 
@@ -586,8 +586,8 @@ HOME=/Users/kimlenglim npx wrangler whoami
 
 # 2. ตั้งค่า Environment Secrets (หากยังไม่ได้ตั้งค่า)
 cd cloudflare-worker
-HOME=/Users/kimlenglim npx wrangler secret put CLIENT_API_TOKEN
-HOME=/Users/kimlenglim npx wrangler secret put BRIDGE_AUTH_TOKEN
+HOME=/Users/kimlenglim npx wrangler secret put CLIENT_API_KEY
+HOME=/Users/kimlenglim npx wrangler secret put BRIDGE_SECRET
 HOME=/Users/kimlenglim npx wrangler secret put GEMINI_API_KEY
 
 # 3. Deploy โค้ดทั้งหมดขึ้น Production
@@ -629,19 +629,19 @@ curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/health | jq .
 
 # 2. ทดสอบ Ping ผ่าน MCP Tool
 curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
-  -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
+  -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{}}}' | jq .
 
 # 3. ตรวจสอบรายชื่อโมเดลจริงที่เบราว์เซอร์เปิดใช้งาน
 curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
-  -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
+  -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_bridge_models","arguments":{}}}' | jq .
 
 # 4. ทดสอบยิง OpenAI Chat Completion แบบ Real SSE Streaming
 curl -N -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions \
-  -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
+  -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gemini-web-thinking",
@@ -651,7 +651,7 @@ curl -N -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/c
 
 # 5. สลับ Scope ไปยัง NotebookLM
 curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
-  -H "Authorization: Bearer ${CLIENT_API_TOKEN}" \
+  -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc":"2.0","id":5,"method":"tools/call",
@@ -678,7 +678,7 @@ cd cloudflare-worker && HOME=/Users/kimlenglim npx wrangler tail
 | อาการที่พบ (Symptoms) | สาเหตุที่เป็นไปได้ (Root Cause) | วิธีการตรวจสอบและแก้ไข (Remediation) |
 |:---|:---|:---|
 | **Extension Disconnected (Code 1001/1006)** | แท็บเบราว์เซอร์ถูกปิด หรือ Service Worker ขาดการเชื่อมต่อ | 1. ตรวจสอบว่าเปิดแท็บ `gemini.google.com` ไว้อย่างน้อย 1 แท็บ<br/>2. ไปที่ `chrome://serviceworker-internals` แล้วคลิก Start ที่ Background Service Worker<br/>3. ตรวจสอบ Keep-Alive Alarm ใน `chrome://alarms` |
-| **HTTP 401 / 403 Unauthorized** | Token ไม่ตรงกันระหว่าง Client, Worker, หรือ Extension | 1. ตรวจสอบค่า `CLIENT_API_TOKEN` และ `BRIDGE_AUTH_TOKEN` ใน Wrangler Secrets<br/>2. ตรวจสอบในหน้า Extension Options ว่า Token ตรงกันหรือไม่<br/>3. หากมีการ Redeploy เปลี่ยน Secret ให้เปิดหน้า Options แล้วกด Save ใหม่อีกครั้ง |
+| **HTTP 401 / 403 Unauthorized** | Token ไม่ตรงกันระหว่าง Client, Worker, หรือ Extension | 1. ตรวจสอบค่า `CLIENT_API_KEY` และ `BRIDGE_SECRET` ใน Wrangler Secrets<br/>2. ตรวจสอบในหน้า Extension Options ว่า Token ตรงกันหรือไม่<br/>3. หากมีการ Redeploy เปลี่ยน Secret ให้เปิดหน้า Options แล้วกด Save ใหม่อีกครั้ง |
 | **HTTP 503 Extension Offline (GCP Fallback ไม่ทำงาน)** | Extension ออฟไลน์ และยังไม่ได้กำหนด `GEMINI_API_KEY` | กำหนด Secret `GEMINI_API_KEY` ใน Cloudflare Workers ผ่านคำสั่ง `wrangler secret put GEMINI_API_KEY` เพื่อให้ระบบสลับสายอัตโนมัติ |
 | **Scope Mismatch Error** | แท็บที่เปิดอยู่ไม่ตรงกับ URL ของ NotebookLM ที่ระบุ | 1. ตรวจสอบว่าใน Chrome ได้เปิดแท็บ NotebookLM หรือล็อกอินเข้าถึง Notebook นั้นได้จริง<br/>2. เรียกใช้ MCP Tool `set_bridge_scope` โดยระบุ URL เต็มของ Notebook ให้ถูกต้อง |
 | **HTTP 429 Rate Limit จาก Google Web** | มีการยิงคำขอถี่เกินไป หรือบัญชี Google ติด Quota | ระบบจะส่งสัญญาณ Error กลับมา และจะสลับไปใช้ GCP Hybrid Fallback โดยอัตโนมัติพร้อมแนบ Header `X-Provider: google-cloud-fallback` |
@@ -689,8 +689,8 @@ cd cloudflare-worker && HOME=/Users/kimlenglim npx wrangler tail
 
 | ชื่อตัวแปร / Secret | ระดับความสำคัญ | หน้าที่และขอบเขตการใช้งาน | วิธีการตั้งค่า |
 |:---|:---:|:---|:---|
-| `CLIENT_API_TOKEN` | **จำเป็นยิ่งยวด (Mandatory)** | ใช้ตรวจสอบ Bearer Token ของ AI Client ที่เรียกเข้ามายัง `/v1/*` และ `/mcp` | `wrangler secret put CLIENT_API_TOKEN` |
-| `BRIDGE_AUTH_TOKEN` | **จำเป็นยิ่งยวด (Mandatory)** | ใช้ยืนยันตัวตนตอน Chrome Extension เปิดการเชื่อมต่อ WSS เข้ามาที่ `/bridge` | `wrangler secret put BRIDGE_AUTH_TOKEN` |
+| `CLIENT_API_KEY` | **จำเป็นยิ่งยวด (Mandatory)** | ใช้ตรวจสอบ Bearer Token ของ AI Client ที่เรียกเข้ามายัง `/v1/*` และ `/mcp` | `wrangler secret put CLIENT_API_KEY` |
+| `BRIDGE_SECRET` | **จำเป็นยิ่งยวด (Mandatory)** | ใช้ยืนยันตัวตนตอน Chrome Extension เปิดการเชื่อมต่อ WSS เข้ามาที่ `/bridge` | `wrangler secret put BRIDGE_SECRET` |
 | `GEMINI_API_KEY` | **แนะนำอย่างสูง (Recommended)** | ใช้สำหรับ **GCP Hybrid Fallback** สลับไปเรียก Gemini 2.0 Flash/Pro ทางการเมื่อเบราว์เซอร์ออฟไลน์ | `wrangler secret put GEMINI_API_KEY` |
 | `WEBHOOK_URL` | *ตัวเลือก (Sprint 1)* | URL สำหรับยิงแจ้งเตือนสถานะขัดข้องเข้า Discord หรือ Slack Channel | `wrangler secret put WEBHOOK_URL` |
 
@@ -716,8 +716,8 @@ cd cloudflare-worker && HOME=/Users/kimlenglim npx wrangler tail
 
 ```bash
 # cloudflare-worker/.env (DO NOT commit — อยู่ใน .gitignore)
-CLIENT_API_TOKEN=your-client-api-token
-BRIDGE_AUTH_TOKEN=your-bridge-auth-token
+CLIENT_API_KEY=your-client-api-token
+BRIDGE_SECRET=your-bridge-auth-token
 GEMINI_API_KEY=your-gemini-api-key
 WEBHOOK_URL=https://discord.com/api/webhooks/xxx
 ```

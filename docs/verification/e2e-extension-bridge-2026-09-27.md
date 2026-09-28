@@ -98,7 +98,7 @@ The worker is named `prod` because a workers.dev hostname is
 deploy produced the doubled, confusing
 `gemini-web-bridge.gemini-web-bridge.workers.dev`.
 
-`BRIDGE_AUTH_TOKEN` and `CLIENT_API_TOKEN` were re-created on the new worker
+`BRIDGE_SECRET` and `CLIENT_API_KEY` were re-created on the new worker
 with **identical values**, so clients only needed a hostname change — no token
 rotation, no re-issuing credentials to any consumer.
 
@@ -239,7 +239,7 @@ CD run `36308246945` was parked on the `production` environment gate
 | Step | Result |
 |---|---|
 | Secrets from Doppler | success |
-| `BRIDGE_AUTH_TOKEN`, `CLIENT_API_TOKEN` uploaded | success |
+| `BRIDGE_SECRET`, `CLIENT_API_KEY` uploaded | success |
 | `Uploaded prod` (2.33 s) | KV `400bc54565de455689ece92f8351bcb9` |
 | Version ID | `0d2f38a9-c2a8-49d0-9680-abaf16cf6023` |
 | Verify production deployment | success |

@@ -3,7 +3,7 @@ clients:
   - type: openai
     name: gemini-bridge
     api_base: https://prod.gemini-web-bridge.workers.dev/v1
-    api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN
+    api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_KEY
     models:
       - name: gemini-web-thinking
         max_input_tokens: 1000000

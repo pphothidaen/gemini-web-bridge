@@ -116,7 +116,7 @@ const INSTANCE_A = '4e2b3729-f87d-43da-8ad4-6f88f1864bce';
 const NOTEBOOK = 'b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0';
 
 function createBridge() {
-  return new GeminiBridgeDO(makeCtx(), { BRIDGE_AUTH_TOKEN: BRIDGE_TOKEN, CLIENT_API_TOKEN: 'client-token' });
+  return new GeminiBridgeDO(makeCtx(), { BRIDGE_SECRET: BRIDGE_TOKEN, CLIENT_API_KEY: 'client-token' });
 }
 
 function wsRequest(instanceId) {

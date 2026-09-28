@@ -44,8 +44,8 @@ npx wrangler deploy
 Configure required secrets:
 
 ```bash
-npx wrangler secret put BRIDGE_AUTH_TOKEN
-npx wrangler secret put CLIENT_API_TOKEN
+npx wrangler secret put BRIDGE_SECRET
+npx wrangler secret put CLIENT_API_KEY
 npx wrangler secret put GEMINI_API_KEY      # Optional: For GCP Hybrid Fallback
 ```
 
@@ -66,20 +66,20 @@ model:
   default: gemini-web-thinking
   provider: gemini-web-bridge
   base_url: https://prod.gemini-web-bridge.workers.dev/v1
-  api_key: ${CLIENT_API_TOKEN}
+  api_key: ${CLIENT_API_KEY}
 
 providers:
   gemini-web-bridge:
     type: custom
     name: gemini-web-bridge
     base_url: https://prod.gemini-web-bridge.workers.dev/v1
-    api_key: ${CLIENT_API_TOKEN}
+    api_key: ${CLIENT_API_KEY}
 
 mcp_servers:
   gemini-web-bridge:
     url: https://prod.gemini-web-bridge.workers.dev/mcp
     headers:
-      Authorization: "Bearer ${CLIENT_API_TOKEN}"
+      Authorization: "Bearer ${CLIENT_API_KEY}"
 ```
 
 **Python (OpenAI SDK):**
@@ -89,7 +89,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="https://prod.gemini-web-bridge.workers.dev/v1",
-    api_key="YOUR_CLIENT_API_TOKEN",
+    api_key="YOUR_CLIENT_API_KEY",
 )
 
 response = client.chat.completions.create(
@@ -133,8 +133,8 @@ npx wrangler deploy
 ตั้งค่า Environment Secrets:
 
 ```bash
-npx wrangler secret put BRIDGE_AUTH_TOKEN
-npx wrangler secret put CLIENT_API_TOKEN
+npx wrangler secret put BRIDGE_SECRET
+npx wrangler secret put CLIENT_API_KEY
 npx wrangler secret put GEMINI_API_KEY      # ทางเลือก: สำหรับ GCP Hybrid Fallback
 ```
 
@@ -183,8 +183,8 @@ npx wrangler deploy
 配置必要密钥：
 
 ```bash
-npx wrangler secret put BRIDGE_AUTH_TOKEN
-npx wrangler secret put CLIENT_API_TOKEN
+npx wrangler secret put BRIDGE_SECRET
+npx wrangler secret put CLIENT_API_KEY
 ```
 
 #### 2. 安装 Chrome 扩展
@@ -222,7 +222,7 @@ Gemini Web Bridge provides a complete suite of remote MCP tools via `POST /mcp` 
 │                                   AI Clients Tier                                      │
 │         Hermes Agent · Cursor · Cline · Claude Code · Python SDK · cURL Requests       │
 └───────────────────────────────────────────┬────────────────────────────────────────────┘
-                                            │ HTTPS (Bearer Auth: CLIENT_API_TOKEN)
+                                            │ HTTPS (Bearer Auth: CLIENT_API_KEY)
                                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.4.3)              │

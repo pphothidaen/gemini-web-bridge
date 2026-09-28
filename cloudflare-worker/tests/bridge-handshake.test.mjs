@@ -134,7 +134,7 @@ function createBridge(DOClass = GeminiBridgeDO) {
   // call is ctx.storage.setAlarm(), so a ctx with storage is now required.
   // This file loads the DO through vm rather than importing it, so it needed
   // its own migration and was not covered by the other nine call sites.
-  return new DOClass(makeCtx(), { BRIDGE_AUTH_TOKEN: BRIDGE_TOKEN, CLIENT_API_TOKEN: CLIENT_TOKEN });
+  return new DOClass(makeCtx(), { BRIDGE_SECRET: BRIDGE_TOKEN, CLIENT_API_KEY: CLIENT_TOKEN });
 }
 
 function wsRequest(instanceId, { token = BRIDGE_TOKEN, upgrade = 'websocket' } = {}) {

@@ -103,7 +103,7 @@ jobs:
         # this step under `bash -e`, which does not imply pipefail.
         #
         # The live-server tokens are supplied so integration.test.mjs actually
-        # runs instead of skipping. CLIENT_API_TOKEN is the one those tests
+        # runs instead of skipping. CLIENT_API_KEY is the one those tests
         # authenticate with — CF_TOKEN is a different credential and the
         # worker rejects it on /v1/models with 401.
         #
@@ -124,8 +124,8 @@ jobs:
         # the lease to be FREE, and skips with a reason when a live extension
         # holds it, so it is safe to run from CI.
         env:
-          CLIENT_API_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
-          BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
+          CLIENT_API_KEY: ${{ secrets.CLIENT_API_KEY }}
+          BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
         run: |
           set -o pipefail
           node --test 'tests/**/*.test.mjs' 2>&1 | tee test-results.txt
@@ -213,7 +213,7 @@ jobs:
 
   # ─── Job 5: Build & Package Extension ──────────────────────────
   # RULE: Extension MUST be built via build-extension.py before zipping.
-  # Never zip extension-cloudflare/ directly — it contains __BRIDGE_AUTH_TOKEN__ placeholder.
+  # Never zip extension-cloudflare/ directly — it contains __BRIDGE_SECRET__ placeholder.
   # Load unpacked from dist/extension/ OR download the CI artifact.
   package-extension:
     name: Build & Package Extension
@@ -307,8 +307,8 @@ jobs:
 
       - name: Build extension (inject secrets + version bump)
         env:
-          BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
-          CLIENT_API_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
+          BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
+          CLIENT_API_KEY: ${{ secrets.CLIENT_API_KEY }}
           WORKER_URL: ${{ secrets.WORKER_URL || 'https://prod.gemini-web-bridge.workers.dev' }}
           MCP_ENDPOINT: ${{ secrets.MCP_ENDPOINT || 'https://prod.gemini-web-bridge.workers.dev/mcp' }}
         run: |
@@ -323,8 +323,8 @@ jobs:
         run: |
           echo "=== Scanning for unresolved placeholders ==="
           PLACEHOLDERS=(
-            "__BRIDGE_AUTH_TOKEN__"
-            "__CLIENT_API_TOKEN__"
+            "__BRIDGE_SECRET__"
+            "__CLIENT_API_KEY__"
             "__WORKER_URL__"
             "__MCP_ENDPOINT__"
             "__WSS_ENDPOINT__"
@@ -586,10 +586,10 @@ jobs:
     steps:
       - name: Token validation (auth-only probes, no hardcoded secrets)
         env:
-          OLD_CLIENT_TOKEN: ${{ secrets.OLD_CLIENT_API_TOKEN }}
-          CURRENT_CLIENT_TOKEN: ${{ secrets.CLIENT_API_TOKEN }}
-          OLD_BRIDGE_TOKEN: ${{ secrets.OLD_BRIDGE_AUTH_TOKEN }}
-          CURRENT_BRIDGE_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
+          OLD_CLIENT_TOKEN: ${{ secrets.OLD_CLIENT_API_KEY }}
+          CURRENT_CLIENT_TOKEN: ${{ secrets.CLIENT_API_KEY }}
+          OLD_BRIDGE_TOKEN: ${{ secrets.OLD_BRIDGE_SECRET }}
+          CURRENT_BRIDGE_TOKEN: ${{ secrets.BRIDGE_SECRET }}
           BASE_URL: ${{ vars.PROD_BASE_URL || 'https://prod.gemini-web-bridge.workers.dev' }}
         run: |
           echo "## 🔴 Redteam — Token Validation" >> $GITHUB_STEP_SUMMARY
@@ -674,13 +674,13 @@ jobs:
           }
 
           # Live credentials must work.
-          run_check assert_valid "Current CLIENT_API_TOKEN"  "$BASE_URL/v1/models"         "Authorization: Bearer $CURRENT_CLIENT_TOKEN"
-          run_check assert_valid "Current BRIDGE_AUTH_TOKEN" "$BASE_URL/bridge/auth-check" "x-bridge-token: $CURRENT_BRIDGE_TOKEN"
+          run_check assert_valid "Current CLIENT_API_KEY"  "$BASE_URL/v1/models"         "Authorization: Bearer $CURRENT_CLIENT_TOKEN"
+          run_check assert_valid "Current BRIDGE_SECRET" "$BASE_URL/bridge/auth-check" "x-bridge-token: $CURRENT_BRIDGE_TOKEN"
 
           # Retired credentials must NOT work. These are the assertions that
           # went red on 3e46a0f: both tokens were still live in production.
-          run_check assert_revoked "Old CLIENT_API_TOKEN"  "$BASE_URL/v1/models"         "Authorization: Bearer $OLD_CLIENT_TOKEN"
-          run_check assert_revoked "Old BRIDGE_AUTH_TOKEN" "$BASE_URL/bridge/auth-check" "x-bridge-token: $OLD_BRIDGE_TOKEN"
+          run_check assert_revoked "Old CLIENT_API_KEY"  "$BASE_URL/v1/models"         "Authorization: Bearer $OLD_CLIENT_TOKEN"
+          run_check assert_revoked "Old BRIDGE_SECRET" "$BASE_URL/bridge/auth-check" "x-bridge-token: $OLD_BRIDGE_TOKEN"
 
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "$TRANSIENT" = "1" ]; then

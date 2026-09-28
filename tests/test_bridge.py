@@ -19,7 +19,7 @@ def _get_api_key():
                 return k
         except Exception:
             pass
-    return "REPLACE_WITH_GITHUB_SECRET_CLIENT_API_TOKEN"
+    return "REPLACE_WITH_GITHUB_SECRET_CLIENT_API_KEY"
 
 API_KEY = _get_api_key()
 

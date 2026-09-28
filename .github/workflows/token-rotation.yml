@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       rotate_all:
-        description: 'Rotate all tokens (BRIDGE_AUTH_TOKEN + CLIENT_API_TOKEN)'
+        description: 'Rotate all tokens (BRIDGE_SECRET + CLIENT_API_KEY)'
         required: false
         type: boolean
         default: false
@@ -16,7 +16,7 @@ on:
         required: false
         type: choice
         default: 'all'
-        options: [BRIDGE_AUTH_TOKEN, CLIENT_API_TOKEN, all]
+        options: [BRIDGE_SECRET, CLIENT_API_KEY, all]
       dry_run:
         description: 'Only preview, do not rotate (output new token to logs)'
         required: false
@@ -63,68 +63,68 @@ jobs:
         id: targets
         run: |
           MODEL="${{ inputs.model_to_rotate }}"
-          if [ "$MODEL" = "all" ] || [ "$MODEL" = "BRIDGE_AUTH_TOKEN" ]; then
+          if [ "$MODEL" = "all" ] || [ "$MODEL" = "BRIDGE_SECRET" ]; then
             echo "rotate_bridge=true" >> $GITHUB_OUTPUT
           fi
-          if [ "$MODEL" = "all" ] || [ "$MODEL" = "CLIENT_API_TOKEN" ]; then
+          if [ "$MODEL" = "all" ] || [ "$MODEL" = "CLIENT_API_KEY" ]; then
             echo "rotate_client=true" >> $GITHUB_OUTPUT
           fi
           echo "dry_run=${{ inputs.dry_run }}" >> $GITHUB_OUTPUT
           echo "notes=${{ inputs.notes }}" >> $GITHUB_OUTPUT
 
-      - name: Rotate BRIDGE_AUTH_TOKEN
+      - name: Rotate BRIDGE_SECRET
         if: steps.targets.outputs.rotate_bridge == 'true'
         env:
           DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          OLD_TOKEN: ${{ secrets.OLD_BRIDGE_AUTH_TOKEN }}
+          OLD_TOKEN: ${{ secrets.OLD_BRIDGE_SECRET }}
         run: |
-          echo "## 🔑 Token Rotation: BRIDGE_AUTH_TOKEN" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔑 Token Rotation: BRIDGE_SECRET" >> $GITHUB_STEP_SUMMARY
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "⚠️ Dry run — no rotation performed" >> $GITHUB_STEP_SUMMARY
           else
             NEW_TOKEN=$(openssl rand -hex 24 | sed 's/^/gemini-bridge-/')
             # Save to Doppler (primary)
-            echo "$NEW_TOKEN" | doppler secrets set BRIDGE_AUTH_TOKEN --
+            echo "$NEW_TOKEN" | doppler secrets set BRIDGE_SECRET --
             # Update Cloudflare Worker secret
-            echo "$NEW_TOKEN" | npx wrangler secret put BRIDGE_AUTH_TOKEN
+            echo "$NEW_TOKEN" | npx wrangler secret put BRIDGE_SECRET
             # Update GitHub Secret
-            echo "NEW_BRIDGE_AUTH_TOKEN=$NEW_TOKEN" >> $GITHUB_ENV
-            echo "Rotated BRIDGE_AUTH_TOKEN: $(echo "$NEW_TOKEN" | head -c 20)…" >> $GITHUB_STEP_SUMMARY
+            echo "NEW_BRIDGE_SECRET=$NEW_TOKEN" >> $GITHUB_ENV
+            echo "Rotated BRIDGE_SECRET: $(echo "$NEW_TOKEN" | head -c 20)…" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Rotate CLIENT_API_TOKEN
+      - name: Rotate CLIENT_API_KEY
         if: steps.targets.outputs.rotate_client == 'true'
         env:
           DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          echo "## 🔑 Token Rotation: CLIENT_API_TOKEN" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔑 Token Rotation: CLIENT_API_KEY" >> $GITHUB_STEP_SUMMARY
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "⚠️ Dry run — no rotation performed" >> $GITHUB_STEP_SUMMARY
           else
             NEW_TOKEN=$(openssl rand -hex 24)
             # Save to Doppler (primary)
-            echo "$NEW_TOKEN" | doppler secrets set CLIENT_API_TOKEN --
+            echo "$NEW_TOKEN" | doppler secrets set CLIENT_API_KEY --
             # Update Cloudflare Worker secret
-            echo "$NEW_TOKEN" | npx wrangler secret put CLIENT_API_TOKEN
+            echo "$NEW_TOKEN" | npx wrangler secret put CLIENT_API_KEY
             # Update GitHub Secret
-            echo "NEW_CLIENT_API_TOKEN=$NEW_TOKEN" >> $GITHUB_ENV
-            echo "Rotated CLIENT_API_TOKEN: $(echo "$NEW_TOKEN" | head -c 20)…" >> $GITHUB_STEP_SUMMARY
+            echo "NEW_CLIENT_API_KEY=$NEW_TOKEN" >> $GITHUB_ENV
+            echo "Rotated CLIENT_API_KEY: $(echo "$NEW_TOKEN" | head -c 20)…" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Verify — Old tokens rejected (401)
         if: steps.targets.outputs.dry_run == 'false'
         env:
-          OLD_BRIDGE_TOKEN: ${{ secrets.OLD_BRIDGE_AUTH_TOKEN }}
-          OLD_CLIENT_TOKEN: ${{ secrets.OLD_CLIENT_API_TOKEN }}
+          OLD_BRIDGE_TOKEN: ${{ secrets.OLD_BRIDGE_SECRET }}
+          OLD_CLIENT_TOKEN: ${{ secrets.OLD_CLIENT_API_KEY }}
         run: |
           if [ -n "$OLD_BRIDGE_TOKEN" ]; then
             BRIDGE_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.PROD_URL }}/bridge/auth-check" -H "x-bridge-token: $OLD_BRIDGE_TOKEN")
             if [ "$BRIDGE_CODE" = "401" ]; then
-              echo "✅ Old BRIDGE_AUTH_TOKEN rejected (401)" >> $GITHUB_STEP_SUMMARY
+              echo "✅ Old BRIDGE_SECRET rejected (401)" >> $GITHUB_STEP_SUMMARY
             else
               echo "❌ SECURITY ISSUE: Old bridge token returned $BRIDGE_CODE (expected 401)" >> $GITHUB_STEP_SUMMARY
               exit 1
@@ -137,7 +137,7 @@ jobs:
             CLIENT_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.PROD_URL }}/v1/models" \
               -H "Authorization: Bearer $OLD_CLIENT_TOKEN")
             if [ "$CLIENT_CODE" = "401" ]; then
-              echo "✅ Old CLIENT_API_TOKEN rejected (401)" >> $GITHUB_STEP_SUMMARY
+              echo "✅ Old CLIENT_API_KEY rejected (401)" >> $GITHUB_STEP_SUMMARY
             else
               echo "❌ SECURITY ISSUE: Old client token returned $CLIENT_CODE (expected 401)" >> $GITHUB_STEP_SUMMARY
               exit 1
@@ -147,31 +147,31 @@ jobs:
       - name: Verify — New tokens accepted
         if: steps.targets.outputs.dry_run == 'false'
         env:
-          NEW_BRIDGE_AUTH_TOKEN: ${{ env.NEW_BRIDGE_AUTH_TOKEN }}
-          NEW_CLIENT_API_TOKEN: ${{ env.NEW_CLIENT_API_TOKEN }}
+          NEW_BRIDGE_SECRET: ${{ env.NEW_BRIDGE_SECRET }}
+          NEW_CLIENT_API_KEY: ${{ env.NEW_CLIENT_API_KEY }}
         run: |
           # Auth-only probes, same rationale as ci.yml's redteam job:
           # /v1/models and /bridge/auth-check are decided purely by the token.
           # POST /v1/chat/completions additionally depends on the model
           # catalogue and on a live browser extension, so it cannot distinguish
           # "token rejected" from "model retired" or "extension asleep".
-          if [ -n "$NEW_BRIDGE_AUTH_TOKEN" ]; then
+          if [ -n "$NEW_BRIDGE_SECRET" ]; then
             BCODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.PROD_URL }}/bridge/auth-check" \
-              -H "x-bridge-token: $NEW_BRIDGE_AUTH_TOKEN")
+              -H "x-bridge-token: $NEW_BRIDGE_SECRET")
             if [ "$BCODE" = "200" ]; then
-              echo "✅ New BRIDGE_AUTH_TOKEN accepted (HTTP 200)" >> $GITHUB_STEP_SUMMARY
+              echo "✅ New BRIDGE_SECRET accepted (HTTP 200)" >> $GITHUB_STEP_SUMMARY
             else
-              echo "❌ New BRIDGE_AUTH_TOKEN rejected (HTTP $BCODE)" >> $GITHUB_STEP_SUMMARY
+              echo "❌ New BRIDGE_SECRET rejected (HTTP $BCODE)" >> $GITHUB_STEP_SUMMARY
               exit 1
             fi
           fi
-          if [ -n "$NEW_CLIENT_API_TOKEN" ]; then
+          if [ -n "$NEW_CLIENT_API_KEY" ]; then
             CCODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.PROD_URL }}/v1/models" \
-              -H "Authorization: Bearer $NEW_CLIENT_API_TOKEN")
+              -H "Authorization: Bearer $NEW_CLIENT_API_KEY")
             if [ "$CCODE" = "200" ]; then
-              echo "✅ New CLIENT_API_TOKEN accepted (HTTP 200)" >> $GITHUB_STEP_SUMMARY
+              echo "✅ New CLIENT_API_KEY accepted (HTTP 200)" >> $GITHUB_STEP_SUMMARY
             else
-              echo "❌ New CLIENT_API_TOKEN rejected (HTTP $CCODE)" >> $GITHUB_STEP_SUMMARY
+              echo "❌ New CLIENT_API_KEY rejected (HTTP $CCODE)" >> $GITHUB_STEP_SUMMARY
               exit 1
             fi
           fi
@@ -188,8 +188,8 @@ jobs:
           echo "Doppler (gemini-web-bridge/prd_worker) and the Cloudflare Worker secrets were updated by this run." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> ⚠️ STILL REQUIRED (this workflow cannot write repo secrets):" >> $GITHUB_STEP_SUMMARY
-          echo "> 1. \`gh secret set BRIDGE_AUTH_TOKEN\` / \`gh secret set CLIENT_API_TOKEN\`" >> $GITHUB_STEP_SUMMARY
-          echo "> 2. \`gh secret set OLD_BRIDGE_AUTH_TOKEN\` / \`gh secret set OLD_CLIENT_API_TOKEN\` (previous values)" >> $GITHUB_STEP_SUMMARY
+          echo "> 1. \`gh secret set BRIDGE_SECRET\` / \`gh secret set CLIENT_API_KEY\`" >> $GITHUB_STEP_SUMMARY
+          echo "> 2. \`gh secret set OLD_BRIDGE_SECRET\` / \`gh secret set OLD_CLIENT_API_KEY\` (previous values)" >> $GITHUB_STEP_SUMMARY
           echo "> 3. Rebuild + repackage the extension (\`build-extension.py\` then \`zip-extension.py\`) and reinstall it — the packaged zip bakes the token in." >> $GITHUB_STEP_SUMMARY
           echo "> 4. Re-enter the bridge token on the extension options page." >> $GITHUB_STEP_SUMMARY
 
