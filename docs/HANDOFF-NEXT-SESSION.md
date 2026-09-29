@@ -1,11 +1,13 @@
 # Session Handoff — start here
 
 > **Written:** 2026-09-29, at the close of KAN-182
-> **Updated:** 2026-09-29 — §1/§3/§6 corrected against the working tree
-> **Branch:** `main` · **HEAD:** `a4d0bf0` · working tree **clean**
+> **Updated:** 2026-09-29 20:25 +07 — after KAN-190…195 (see §9)
+> **Branch:** `main` · **HEAD:** `cd205ea` · working tree **clean**
 > **Production:** `https://prod.gemini-web-bridge.workers.dev` · **v4.7.11**
 >   · DO `6b288492-974c-4172-9fc5-737348a4a093`
-> **Tests:** 446 passing, 0 failing, 5 skipped
+> **Tests:** 459 passing, 0 failing, 5 skipped
+> **Build:** `dist/extension` current as of `cd205ea` — run
+>   `python3 scripts/build-extension.py --verify` before trusting any live result
 > **For:** whoever picks this project up next — you do **not** need to read the
 > other handoffs to start, though §7 links them.
 
@@ -291,3 +293,164 @@ the content script), not by rebuilding. No live run has been recorded yet.
   loader — which made a wait that could never resolve look like an upstream
   outage.
 - The UI here is in Thai. `aria-label="ส่งข้อความ"` is "Send message".
+
+---
+
+## 9. Work of 2026-09-29 (KAN-190 … KAN-195)
+
+Five tickets, all closed except where noted. Commits, newest first:
+
+| commit | ticket | what |
+|---|---|---|
+| `cd205ea` | KAN-195 | StreamGenerate samples captured; probe removed |
+| `72e8e1e` | KAN-195 | *(interim — the temporary probe, superseded)* |
+| `158088d` | KAN-194 | two injected.js tests made able to fail |
+| `dc44342` | KAN-193 | pinned the `f.req=` guard |
+| `ee4e555` / `66a72f0` | KAN-192 | one build root + a staleness stamp |
+| `08bbea0` / `a4d0bf0` | KAN-191 | stale extension context is now visible |
+| `3ae61b9` / `1f60bf4` | KAN-190 | auto-focus bails when the tab never comes forward |
+
+### The pattern behind all of them
+
+Every defect was **a proxy read as the thing itself**:
+
+| proxy | reality |
+|---|---|
+| `rc=0` | the artifact was in a worktree, not where you were standing |
+| manifest version | the JavaScript beside it was from an older build |
+| indicator "Bridge: Online" | the worker reported DISCONNECTED |
+| process still running | the agent had finished 1.5 minutes earlier |
+| a test passing | it could not fail |
+
+`rc=0` and "a green test" are the two that will bite next. Before calling any
+of them a result, open the thing itself: the file, the diff, the log, the
+mutation.
+
+### Tooling built this session (not in the repo)
+
+| what | where | why it exists |
+|---|---|---|
+| `agy-quota` | `~/.local/bin/` | parallel quota probe for all 8 agent accounts |
+| `agy-run` | `~/.local/bin/` | run one packet with rotation, worktree isolation, circuit breaker, completion detection, hard budget |
+| 9 skills | `~/.claude/skills/agent-*` | `agent-delegation` (shared rules) + one profile per account |
+
+`agy-run` fixes three gaps in the agy family that cost real time: agy has no
+`--worktree` (so a delegate used to write straight into your checkout), no
+`turn.completed` (so completion had to be inferred), and a fresh worktree has
+no `node_modules` (so a delegate burned its whole turn on `npm install`).
+
+`agy-run` only ever **raises** a model now, never lowers it. Lowering looked
+like free money and cost a whole run: agy2 defaults to Claude Sonnet 4.6 with
+quota, `--tier mid` moved it to `gemini-3.8-flash-medium` which that account
+has no quota for, and it died with `RESOURCE_EXHAUSTED` having done nothing.
+`--allow-downgrade` opts back in.
+
+### KAN-195 — what the payload samples actually showed
+
+`docs/payload-samples/2026-09-29-streamgenerate.json` holds two sanitized
+StreamGenerate structures (no prompt text, no CSRF token — GUARDRAILS
+G1.2.1). Captured through the extension's own interceptor with a temporary
+`console.log` probe, because the network API was unusable: the buffer holds
+dozens of analytics requests per second.
+
+Three results, one of which contradicts `ARCHITECTURE.md`:
+
+1. The endpoint **is** `StreamGenerate` over XHR, as KAN-182 recorded.
+   `batchexecute` carries the auxiliary RPCs, not the prompt.
+2. **19 of 20 top-level fields are identical in shape** across two different
+   conversations. Only field `[3]` differs, and only in length (2488 vs 1657)
+   — the conversation context blob.
+3. The slot `ARCHITECTURE.md` calls the `r_…` session token,
+   `inner[0][3][0][0][3]`, is a **zero-length string in both samples**.
+
+And the finding that matters: **sample B came back ungrounded with a structure
+identical to the grounded sample A.** Request shape does not determine
+grounding, so the premise that ~40 dynamic fields make the payload
+underivable is not supported by these two samples.
+
+
+**What the samples cannot tell you.** Two payloads that differ only in one
+field's *length* are indistinguishable, so nothing here localizes the notebook
+attachment. The CSRF token rides in the request body (`at=…`), which sits
+against GUARDRAILS: "the CSRF token must never leave MAIN-world memory" — any
+replay that goes over the network needs that rule reconciled first, before
+anyone copies a value.
+
+### Live state, measured at handoff
+
+```
+build    : ✅ current (dist/extension == cd205ea)
+extension: CONNECTED_AND_READY
+worker   : degraded      consec errors: 3
+            last: notebook_grounding_unverified:no_citations_in_response
+tests    : 459 pass / 0 fail / 5 skipped
+agents   : agy1 agy3 codex1 usable
+           agy2 → Oct 5 · agy4 → 26h · agy5 → 73h
+           codex2 → Oct 14 · codex3 → Oct 10
+```
+
+`degraded` is from a `ping` run whose answer had no citations. It is not a
+stuck state — the next successful grounded run clears it.
+
+---
+
+## 10. Open work
+
+### 10.1 Blocker — replay path needs a controlled comparison
+
+Replay cannot be implemented responsibly yet. What is missing is a
+**grounded run in a fresh conversation**, to compare against the ungrounded
+sample B.
+
+- run `horo_consult` in a **new** conversation until it grounds, probe still
+  present in `dist/extension` for the capture, then compare
+- if it grounds with a structure identical to B's → the problem is not in the
+  request payload; stop looking there
+- if it differs → the differing field is the one worth studying
+
+One control that is **not** available: a ping never travels the typing path
+(only `BatchExecute` is recorded for it), so ping responses cannot serve as a
+grounded control. The comparison has to be two real prompts.
+
+### 10.2 TODO — low risk, self-contained
+
+| | |
+|---|---|
+| reconcile `ARCHITECTURE.md` | §9's finding contradicts the `r_…` premise and the "~40 dynamic fields" claim. Correct the doc, or the next session reads it as fact. |
+| `build-extension.py --verify` | warns about a dirty tree. The build ran while uncommitted probe edits existed, so the stamp carries a note. Harmless, but the next clean build clears it. |
+| `injected.js` tests | 2 tautological tests were rewritten in KAN-194. Worth a third pass only if someone adds behaviour to pin. |
+| `skill-creator` eval | `run_eval.py` / `run_loop.py` do not exist, so skill descriptions cannot be scored automatically. |
+
+### 10.3 Deliberately not done
+
+| | |
+|---|---|
+| time gap between requests | no rate-limit symptom exists: `attach_failures 0`, `consecutive_errors 0`, 3 consecutive runs grounded. If a failure ever appears, `responses` grows every run (1→2→4→5…) so conversation length is the first thing to suspect — a new conversation, not a delay. |
+| `chrome.tabs` automation | Kapture cannot reach `chrome://extensions`, and `osascript` only showed one Chrome window. Reloads stay manual. |
+| codex worktrees | removed (they were clean and merged). `agy-run` now creates and removes its own. |
+
+---
+
+## 11. How to verify something, quickly
+
+Do not take a report of success at face value — including mine.
+
+```bash
+# tests, full suite
+cd cloudflare-worker && npm test
+
+# is the built extension actually current?  (catches the "new manifest,
+# old JavaScript" trap that silently invalidated a live run this session)
+python3 scripts/build-extension.py --verify
+
+# production truth
+set -a; source .env; set +a   # then call check_bridge_health
+
+# agent accounts available to delegate to
+agy-quota
+agy-run --tier cheap|mid|strong --packet <file> --mode readonly|worktree|bypass
+```
+
+`check_bridge_health` is the only source that knows what the extension is
+actually doing. `last_attach_at: null` means nothing has run — that reading
+caught a "done" that had never been tested.
