@@ -1,6 +1,6 @@
 // Cloudflare Worker: Stateful Gemini Web-Bridge Edge Hub
 // Architecture: Cloudflare Durable Objects (Unified WSS + HTTP Stateful Coordinator)
-// Version: 4.7.11 (see WORKER_VERSION below — this comment is informational only)
+// Version: 4.7.12 (see WORKER_VERSION below — this comment is informational only)
 
 import { normalizeModels, recommendedModel } from "./model-catalog.js";
 import { PONG_GRACE_MS, isKeepaliveMissed, isEvictable } from "./liveness.js";
@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.11";
+const WORKER_VERSION = "4.7.12";
 
 // ─── Verbose logging gate ────────────────────────────────────────
 // console.log is not free in Workers: each call formats its arguments,

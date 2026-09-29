@@ -2,6 +2,44 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.7.12] - 2026-09-29
+
+### Added
+- **Sanitized payload strings carry a shape class.** A sanitized structure
+  recorded every string as `{type, length}`, and a length cannot be
+  attributed: two different values can share one, so "this field changed
+  size" is equally consistent with a notebook reference appearing, vanishing,
+  or never having been there. That is what left the replay-path question
+  unanswerable — KAN-195's two samples differed in exactly one field's length
+  and nothing else. Each string now also carries `cls` from a closed set of
+  protocol shapes (`notebook_ref`, `url`, `uuid`, `build_label`, `json_blob`,
+  `opaque`), so the question becomes "does any field carry a notebook
+  reference" — one bit per field, decided by the protocol rather than by the
+  person typing. No prefix, substring, hash or first-N of any string is
+  recorded, so a prompt lands in `opaque` with nothing kept (GUARDRAILS
+  G1.2.1).
+- **A payload probe that ships switched off.** It reads the sanitized
+  structures above and writes them to the page console — the only sink that
+  cannot persist anything. Toggled at runtime rather than hand-inserted, so a
+  later capture costs one message instead of a commit, a build and a reload,
+  and a debugging aid cannot be left enabled in a build that goes out.
+
+### Fixed
+- **The canary that checks the guardrail did not detect a leak.** Its first
+  version asserted that the whole prompt and the tokens `lesson4` and
+  `FORTUNE` were absent from the sanitized output — all three sit past the
+  eighth character, so `prefix: val.slice(0, 8)` passed it. The canary now
+  sweeps every 6-character window of the prompt and fails under that
+  mutation. A leak detector that only looks where the leak is not is the same
+  defect this project has now met at four different layers.
+
+### Notes
+- The version line is unified: worker, npm package, lockfile and extension
+  manifest ship as one version, and `version-consistency.test.mjs` makes a
+  partial bump a hard failure rather than a production surprise.
+- Not deployed. The worker still runs 4.7.11; `wrangler deploy` is left to the
+  operator. The change is extension-side only, so the probe works without it.
+
 ## [4.7.11] - 2026-09-29
 
 ### Fixed
