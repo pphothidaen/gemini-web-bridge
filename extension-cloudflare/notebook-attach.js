@@ -61,7 +61,13 @@
     notebookTitle: '[data-test-id="notebook-item-title"]',
     addButton: '[data-test-id="add-button"]',
     cancelButton: '[data-test-id="cancel-button"]',
-    attachedChip: "input-area-v2 uploader-file-preview"
+    attachedChip: "input-area-v2 uploader-file-preview",
+
+    // KAN-182. Grounding is verified from the answer, never from the input
+    // area: a chip there says only what WILL be attached to the next
+    // message. These two locate the evidence in the rendered reply.
+    modelResponse: "model-response",
+    sourceChip: "source-inline-chip"
   };
 
   const STEP_TIMEOUT_MS = 6000;
@@ -255,7 +261,7 @@
    * @param {Function} [opts.sleep]
    * @param {Function} [opts.log]           receives progress lines
    * @returns {Promise<{ok: boolean, reason?: string, step?: string,
-   *                    attached?: string[], alreadyAttached?: boolean}>}
+   *                    attached?: string[]}>}
    */
   async function attachNotebook(opts = {}) {
     const {
@@ -273,15 +279,29 @@
       return { ok: false, reason: "no_notebook_name", step: "validate" };
     }
 
-    // Idempotency: the whole flow is a UI round trip, so skip it when
-    // the notebook is already on the conversation.
+    // KAN-182: the notebook is attached to ONE message, not to the
+    // conversation. Measured from real StreamGenerate payloads:
+    //
+    //   attach -> send        payload HAS notebook://…/sources/…
+    //   send again, no attach payload has NO notebook reference at all
+    //
+    // The chip in the input area is what WILL be sent with the next
+    // message, and Gemini consumes it on send — which is why the chip
+    // disappears afterwards and the dialog reports the notebook as
+    // aria-selected="false" on reopen.
+    //
+    // The previous version returned early here ("alreadyAttached") and
+    // reported ok:true. From the second call onward that meant an
+    // ungrounded BaZi answer reported as grounded — the caller had no
+    // way to tell. So a stale chip is now cleared and the flow always
+    // runs, guaranteeing exactly one fresh reference per submitted
+    // prompt.
     if (isNotebookAttached(name, doc)) {
-      log(`notebook "${name}" already attached; skipping`);
-      return {
-        ok: true,
-        alreadyAttached: true,
-        attached: readAttachedNotebooks(doc)
-      };
+      log(`[attach] step=reset_chip removing stale "${name}" chip before a fresh attach`);
+      detachNotebook({ notebookName: name, doc });
+      // The chip's removal is rendered asynchronously; attaching in the
+      // same tick would race it and could re-add the old reference.
+      await sleepFn(600);
     }
 
     // A dialog left open by a previous attempt would swallow the next
@@ -438,6 +458,68 @@
     return false;
   }
 
+  /**
+   * Read the citations out of the NEWEST rendered answer (KAN-182).
+   *
+   * Why this exists
+   * ---------------
+   * Attaching a notebook proves only that the UI accepted the chip. It
+   * says nothing about whether the request Gemini actually sent carried a
+   * `notebook://…/sources/…` reference — and the captured payloads show
+   * it does not, when the chip was consumed by an earlier message.
+   *
+   * So `attached` and `grounded` are different claims, and only the
+   * second one answers the caller's actual question: was THIS answer
+   * written from the notebook?
+   *
+   * Scoped to the last `model-response` on purpose
+   * --------------------------------------------
+   * `source-inline-chip` elements from earlier replies stay in the DOM
+   * for the life of the conversation. A document-wide count therefore
+   * reports citations for a grounded answer three turns ago and would
+   * mark a completely ungrounded reply as grounded. Only the newest
+   * response can belong to the request just sent.
+   *
+   * @param {object} [opts]
+   * @param {Document} [opts.doc]  injected for tests
+   * @returns {{verified: boolean, reason: string, chipCount: number,
+   *            sources: string[]}}
+   */
+  function readGroundingEvidence(opts = {}) {
+    const { doc = document } = opts;
+
+    const responses = doc.querySelectorAll(SELECTORS.modelResponse);
+    if (!responses || responses.length === 0) {
+      return { verified: false, reason: "no_response_rendered", chipCount: 0, sources: [] };
+    }
+
+    const latest = responses[responses.length - 1];
+    const chips = latest.querySelectorAll(SELECTORS.sourceChip);
+    const sources = Array.from(chips)
+      .map((c) => (c.innerText || c.textContent || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    // A citation marker in the answer text is the second, independent
+    // signal. Either one is enough to call the answer grounded; both are
+    // reported so a partial render (chips present, text still streaming)
+    // is visible in the health report rather than looking like a clean
+    // negative.
+    const citeMarkers = ((latest.innerText || "").match(/\[cite:\s*\d+\]/g) || []).length;
+    const chipCount = sources.length;
+
+    if (chipCount === 0 && citeMarkers === 0) {
+      return {
+        verified: false,
+        reason: "no_citations_in_response",
+        chipCount: 0,
+        citeMarkers: 0,
+        sources: []
+      };
+    }
+
+    return { verified: true, reason: "", chipCount, citeMarkers, sources };
+  }
+
   const api = {
     SELECTORS,
     findPlusButton,
@@ -451,6 +533,7 @@
     dismissDialog,
     attachNotebook,
     detachNotebook,
+    readGroundingEvidence,
     waitFor
   };
 

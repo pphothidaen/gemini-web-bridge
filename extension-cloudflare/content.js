@@ -615,11 +615,32 @@
         if (isLeaderTab) handleNativeRetry(msg);
         break;
 
+      // KAN-182: type the prompt into Gemini's own input box and submit it.
+      // The fallback when the replay path's assembled StreamGenerate payload
+      // is rejected, so the question never leaves the browser.
+      case "TYPE_PROMPT":
+        if (isLeaderTab) handleTypePrompt(msg);
+        break;
+
+      // KAN-182: after a typed prompt is submitted, the PAGE streams the
+      // answer itself, so the bridge reads it back out of the DOM instead of
+      // parsing a network stream.
+      case "COLLECT_ANSWER":
+        if (isLeaderTab) handleCollectAnswer(msg);
+        break;
+
       // KAN-177: attach a NotebookLM notebook to the live conversation
       // instead of navigating to /notebook/<id>, which is not a chat
       // surface and moves the tab out from under the bridge.
       case "ATTACH_NOTEBOOK":
         if (isLeaderTab) handleAttachNotebook(msg);
+        break;
+
+      // KAN-182: check whether the answer that just came back is actually
+      // grounded. A separate round trip because the answer does not exist
+      // at attach time — see handleVerifyGrounding.
+      case "VERIFY_GROUNDING":
+        if (isLeaderTab) handleVerifyGrounding(msg);
         break;
 
       case "CANCEL_REQUEST":
@@ -1415,8 +1436,295 @@
       ok: outcome.ok,
       reason: outcome.reason,
       step: outcome.step,
-      alreadyAttached: outcome.alreadyAttached,
+      // KAN-182: `alreadyAttached` is gone. It reported ok:true for a
+      // conversation where the notebook had already been consumed by an
+      // earlier message, so the caller saw "grounded" for an ungrounded
+      // answer. `attached` now always describes a fresh attach.
       attached
+    });
+  }
+
+  /**
+   * Handles VERIFY_GROUNDING from the Worker (KAN-182).
+   *
+   * Runs after the answer has streamed, and answers the question the
+   * caller actually has: was THIS answer written from the notebook?
+   *
+   * A successful attach cannot answer that, because the attachment is
+   * per-message. The captured StreamGenerate payloads show it directly —
+   * a prompt sent without a fresh chip carries no `notebook://…/sources/…`
+   * reference at all, and the answer is then written from general
+   * knowledge while still looking like a notebook answer.
+   *
+   * Deliberately scoped to the newest `model-response`: citation chips
+   * from earlier replies stay in the DOM for the life of the
+   * conversation, so a document-wide search would find citations belonging
+   * to a grounded answer from an earlier turn and mark this ungrounded
+   * reply as grounded. Verified live 2026-09-29.
+   */
+  async function handleVerifyGrounding(msg) {
+    const { requestId, timeoutMs = 20000 } = msg;
+    console.log(`[Bridge] ✅ VERIFY_GROUNDING (${requestId})`);
+
+    const Attach = (typeof globalThis !== "undefined" && globalThis.NotebookAttach) || null;
+    if (!Attach) {
+      sendToWorker({
+        type: "GROUNDING_RESULT",
+        requestId,
+        ok: false,
+        verified: false,
+        reason: "attach_unavailable"
+      });
+      return;
+    }
+
+    // KAN-182: WAIT for the citations before judging them.
+    //
+    // A grounded answer streams its citations in with the text, and they land
+    // after it — so a single immediate read reports `no_citations_in_response`
+    // on an answer that ends up carrying nine. Measured live on 2026-09-29: the
+    // verdict was a false negative, and the settled response cited
+    // "PDF: FORTUNE_original_lesson4.pdf" from the attached notebook.
+    //
+    // So poll until citations appear, and only give up once the response stops
+    // changing — an unchanged response is a finished one, and reporting that as
+    // ungrounded is a real answer rather than a guess.
+    const deadline = Date.now() + Math.max(timeoutMs - 2000, 8000);
+    let evidence = null;
+    let lastSignature = null;
+    let stableSamples = 0;
+
+    while (Date.now() < deadline) {
+      try {
+        evidence = Attach.readGroundingEvidence({ doc: document });
+      } catch (err) {
+        sendToWorker({
+          type: "GROUNDING_RESULT",
+          requestId,
+          ok: false,
+          verified: false,
+          reason: err?.message || "grounding_check_failed"
+        });
+        return;
+      }
+
+      if (evidence.verified) break;
+
+      // Settled means the newest response is neither gaining citations nor
+      // changing shape, so there is nothing left to wait for.
+      const signature = `${evidence.chipCount || 0}:${evidence.citeMarkers || 0}`;
+      if (signature === lastSignature) {
+        stableSamples += 1;
+        if (stableSamples >= 3) break;
+      } else {
+        stableSamples = 0;
+        lastSignature = signature;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+
+    console.log(
+      `[Bridge] ✅ VERIFY_GROUNDING ${evidence?.verified ? "grounded" : "NOT grounded"} ` +
+      `(reason=${evidence?.reason || "none"}, chips=${evidence?.chipCount || 0}, ` +
+      `cites=${evidence?.citeMarkers || 0})`
+    );
+
+    sendToWorker({
+      type: "GROUNDING_RESULT",
+      requestId,
+      ok: true,
+      verified: Boolean(evidence?.verified),
+      reason: evidence?.reason || "",
+      chipCount: evidence?.chipCount || 0,
+      citeMarkers: evidence?.citeMarkers || 0,
+      sources: Array.isArray(evidence?.sources) ? evidence.sources : []
+    });
+  }
+
+  /**
+   * Handles TYPE_PROMPT from the Worker.
+   *
+   * KAN-182. The replay path POSTs an assembled `StreamGenerate` payload and
+   * Google now rejects it, so the question never leaves the browser at all:
+   * the symptom is a 60s timeout with 0 user-queries rendered. Typing the
+   * prompt into Gemini's own input box makes the PAGE build the request, so
+   * the stale schema is bypassed.
+   *
+   * It is also the only path that can repair the primary one. A page-initiated
+   * request is a NATIVE call, so `injected.js` records it as real evidence —
+   * `internalBridgeCalls` excludes only the bridge's own calls. Every fallback
+   * therefore teaches the evidence registry what a current request looks like.
+   *
+   * The prompt is read from the message and typed; it is never stored or
+   * logged, preserving the registry's no-prompt-persistence invariant.
+   */
+  async function handleTypePrompt(msg) {
+    const { requestId, prompt, timeoutMs = 20000 } = msg;
+    console.log(`[Bridge] ⌨️ TYPE_PROMPT (${requestId})`);
+
+    const Typing = (typeof globalThis !== "undefined" && globalThis.PromptTyping) || null;
+    if (!Typing) {
+      sendToWorker({
+        type: "TYPE_PROMPT_RESULT",
+        requestId,
+        ok: false,
+        reason: "typing_unavailable",
+        step: "load"
+      });
+      return;
+    }
+
+    createOrUpdateIndicator("connected", "Bridge: Typing into Gemini's input...");
+
+    let outcome;
+    try {
+      outcome = await Typing.typeAndSend({
+        prompt,
+        timeoutMs,
+        log: (line) => console.log(`[Bridge] ${line}`)
+      });
+    } catch (err) {
+      outcome = { ok: false, reason: err?.message || "typing_failed", step: "unknown" };
+    }
+
+    console.log(
+      `[Bridge] ⌨️ TYPE_PROMPT ${outcome.ok ? "submitted" : "failed"} ` +
+      `(step=${outcome.step || "n/a"}, reason=${outcome.reason || "none"})`
+    );
+
+    createOrUpdateIndicator(
+      "connected",
+      outcome.ok ? "Bridge: Prompt sent" : "Bridge: Prompt typing failed"
+    );
+
+    sendToWorker({
+      type: "TYPE_PROMPT_RESULT",
+      requestId,
+      ok: outcome.ok,
+      reason: outcome.reason,
+      step: outcome.step,
+      // KAN-182: the response count sampled BEFORE the send, so the collector
+      // can insist on an answer that is newer than the request rather than
+      // one it has already missed.
+      responsesBefore: outcome.responsesBefore
+    });
+  }
+
+  /**
+   * Handles COLLECT_ANSWER from the Worker (KAN-182).
+   *
+   * After a typed prompt is submitted, Gemini streams the answer in the page
+   * and the bridge is not on the wire for it. The answer is therefore read
+   * back out of the DOM.
+   *
+   * Two signals, both verified against a live tab, and the choice between
+   * them is not arbitrary:
+   *   · a stop/loading control INSIDE the newest `model-response` means
+   *     still generating;
+   *   · text that stops changing across consecutive samples means done.
+   *
+   * The old document-wide spinner selector is deliberately NOT used: it also
+   * matches the sidenav's permanent chat-history loader, so it reads
+   * "generating" forever and the wait can never end. That bug cost 13-21s
+   * per call and looked like an upstream outage.
+   *
+   * The "Gemini บอกว่า" label is excluded — Gemini renders it before the real
+   * text, so returning it would hand the caller 13 characters of nothing.
+   */
+  async function handleCollectAnswer(msg) {
+    const { requestId, timeoutMs = 120000 } = msg;
+    console.log(`[Bridge] 📥 COLLECT_ANSWER (${requestId})`);
+
+    const Recovery = (typeof globalThis !== "undefined" && globalThis.NativeRecovery) || null;
+    if (!Recovery) {
+      sendToWorker({ type: "COLLECT_ANSWER_RESULT", requestId, ok: false, reason: "recovery_unavailable", text: "" });
+      return;
+    }
+
+    let outcome;
+    try {
+      const responses = document.querySelectorAll("model-response");
+      const last = responses.length ? responses[responses.length - 1] : null;
+      const previous = last ? (last.innerText || "").trim() : "";
+      // KAN-182: the snapshot count is the attribution. A conversation keeps
+      // every earlier reply, so when the prompt never reached Gemini the
+      // newest `model-response` is still the previous turn's answer — stable,
+      // non-placeholder, and different from `previous` if anything re-rendered
+      // in between. A text-only wait accepted it twice on 2026-09-29 and
+      // reported it as this call's answer. Only a response NEWER than this
+      // count can belong to the request just sent.
+      // KAN-182: prefer the count sampled BEFORE the prompt was sent. A count
+      // taken on arrival is already looking at the answer we are waiting for,
+      // because Gemini can render it before the worker asks for it — that race
+      // reported a good third turn as `no_answer_rendered` on 2026-09-29.
+      const before = Number.isFinite(msg.responsesBefore)
+        ? msg.responsesBefore
+        : (Recovery.countModelResponses ? Recovery.countModelResponses(document) : responses.length);
+
+      // Wait for a response that is not just the placeholder label.
+      const settled = await Recovery.waitForResponseChange({
+        previousText: previous,
+        minResponses: before,
+        timeoutMs,
+        doc: document
+      });
+      let text = settled.text || "";
+
+      // If it is still streaming, wait for the in-response signal to clear.
+      if (Recovery.isGenerating(document)) {
+        await new Promise((resolve) => {
+          const started = Date.now();
+          const poll = () => {
+            if (!Recovery.isGenerating(document) || Date.now() - started >= timeoutMs) {
+              resolve();
+              return;
+            }
+            setTimeout(poll, 400);
+          };
+          poll();
+        });
+        const after = document.querySelectorAll("model-response");
+        const final = after.length ? after[after.length - 1] : null;
+        text = (final?.innerText || "").trim();
+      }
+
+      // Re-check freshness after the streaming wait: the settle loop can run
+      // long enough that the DOM changed underneath us, and the attribution
+      // must hold for the text actually being returned.
+      const afterCount = Recovery.countModelResponses
+        ? Recovery.countModelResponses(document)
+        : document.querySelectorAll("model-response").length;
+      if (afterCount <= before) {
+        outcome = {
+          ok: false,
+          text: "",
+          reason: "no_new_response_rendered",
+          responses: afterCount
+        };
+      } else {
+        const substantive = text && !Recovery.isPlaceholderOnly(text);
+        outcome = substantive
+          ? { ok: true, text, reason: "", responses: afterCount }
+          : { ok: false, text, reason: text ? "placeholder_only" : "no_answer_rendered", responses: afterCount };
+      }
+    } catch (err) {
+      outcome = { ok: false, text: "", reason: err?.message || "collect_failed" };
+    }
+
+    console.log(
+      `[Bridge] 📥 COLLECT_ANSWER ${outcome.ok ? "answered" : "failed"} ` +
+      `(reason=${outcome.reason || "none"}, chars=${(outcome.text || "").length}, ` +
+      `responses=${outcome.responses ?? "?"})`
+    );
+
+    sendToWorker({
+      type: "COLLECT_ANSWER_RESULT",
+      requestId,
+      ok: outcome.ok,
+      reason: outcome.reason,
+      text: outcome.text,
+      responses: outcome.responses
     });
   }
 

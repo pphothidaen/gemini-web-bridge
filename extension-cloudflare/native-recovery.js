@@ -89,29 +89,72 @@
   }
 
   /**
-   * Wait until the newest model response settles on a real answer.
+   * How many `model-response` elements the conversation holds.
    *
-   * Waiting for the text merely to *change* is not enough: Gemini clears the
-   * old answer and briefly renders its "Gemini บอกว่า" label, so a change
-   * detector resolves on the placeholder and the caller receives 13 characters
-   * of label instead of the answer. This waits for the text to stop changing
-   * (two consecutive identical samples) and to be non-placeholder.
-   *
-   * @param {string} previousText
-   * @param {number} timeoutMs
-   * @param {Document} doc  injected so tests need no global `document`
-   * @param {Function} now  injectable clock, for tests
-   * @param {Function} setT  injectable timer, for tests
-   * @returns {Promise<{changed: boolean, text: string}>}
+   * The count is what makes an answer attributable to a request. Text alone
+   * cannot: a conversation holds every earlier reply, so a "newest response"
+   * read may be one the caller never asked for.
    */
-  function waitForResponseChange(previousText, timeoutMs = 30000, doc = document, now = Date.now, setT = setTimeout) {
+  function countModelResponses(doc = document) {
+    try {
+      const all = doc.querySelectorAll("model-response");
+      return all ? all.length : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /**
+   * Wait until a model response NEWER than `minResponses` settles.
+   *
+   * Waiting for the text merely to *change* is not enough, and neither is
+   * waiting for a stable non-placeholder string. Two independent reasons,
+   * both hit live on 2026-09-29:
+   *
+   *   1. Gemini clears the old answer and briefly renders its "Gemini บอกว่า"
+   *      label, so a change detector resolves on the placeholder and hands
+   *      the caller 13 characters of label instead of the answer.
+   *   2. A conversation keeps every earlier reply. When the prompt never
+   *      reached Gemini, the newest `model-response` is still the PREVIOUS
+   *      turn's answer — which is stable, non-placeholder, and different
+   *      from whatever text happened to be on screen when the wait began.
+   *      A text-only check accepted it and reported it as this call's
+   *      answer, twice.
+   *
+   * So the response must be strictly newer than `minResponses`. That is a
+   * fact about the request, not about the text, which is the only thing
+   * that can distinguish "the answer to my question" from "an answer that
+   * happens to be on screen".
+   *
+   * @param {object} opts
+   * @param {string} opts.previousText        text present before the wait
+   * @param {number} [opts.minResponses]      reject responses at or below this count
+   * @param {number} opts.timeoutMs
+   * @param {Document} opts.doc               injected so tests need no global `document`
+   * @param {Function} [opts.now]             injectable clock, for tests
+   * @param {Function} [opts.setT]            injectable timer, for tests
+   * @returns {Promise<{changed: boolean, text: string, responses: number}>}
+   */
+  function waitForResponseChange(opts = {}) {
+    const {
+      previousText = "",
+      minResponses = 0,
+      timeoutMs = 30000,
+      doc = document,
+      now = Date.now,
+      setT = setTimeout
+    } = opts;
+
     return new Promise((resolve) => {
       const startedAt = now();
       let lastSeen = null;
       let stableCount = 0;
       const poll = () => {
+        const count = countModelResponses(doc);
         const text = readLastResponseText(doc);
-        const substantive = text && text !== previousText && !isPlaceholderOnly(text);
+        // Newer than the snapshot, genuinely different, and not the label.
+        const fresh = count > minResponses;
+        const substantive = fresh && text && text !== previousText && !isPlaceholderOnly(text);
 
         if (substantive) {
           // Require two identical samples: the first can still be mid-stream.
@@ -122,7 +165,7 @@
             lastSeen = text;
           }
           if (stableCount >= 1) {
-            resolve({ changed: true, text });
+            resolve({ changed: true, text, responses: count });
             return;
           }
         } else {
@@ -131,7 +174,11 @@
         }
 
         if (now() - startedAt >= timeoutMs) {
-          resolve({ changed: false, text });
+          // KAN-182: on a timeout there is no new answer. Returning whatever
+          // the last `model-response` happens to hold means returning the
+          // PREVIOUS turn's reply, which the caller then reports as the
+          // answer to its own question. Say so instead of inventing one.
+          resolve({ changed: false, text: "", responses: count });
           return;
         }
         setT(poll, 400);
@@ -349,7 +396,13 @@
     }
 
     // Phase 3: let the finished DOM settle so we read the complete answer.
-    const result = await waitForResponseChange(before, 4000, doc);
+    //
+    // `minResponses: 0` on purpose: clicking regenerate re-renders the SAME
+    // `model-response` element rather than appending a new one, so the count
+    // does not grow and must not be used as the freshness test here. The
+    // `before` text comparison is the right signal for this path, and the
+    // fallback below re-reads the DOM when the settle window is too short.
+    const result = await waitForResponseChange({ previousText: before, minResponses: 0, timeoutMs: 4000, doc, now, setT });
     if (!result.changed) {
       const finalText = readLastResponseText(doc);
       if (finalText && finalText !== before && !isPlaceholderOnly(finalText)) {
@@ -370,6 +423,7 @@
     isGenerating,
     generatingSignal,
     waitForResponseChange,
+    countModelResponses,
     retryViaUi
   };
 

@@ -2,6 +2,67 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.7.9] - 2026-09-29
+
+### Fixed
+- **The collector could never see the answer it was waiting for.** Live run 6: `horo_consult` returned 1/1 `answered` with `last_grounding_status = grounded` on the first call, but the second consecutive call failed with `no_answer_rendered, responses on screen=3` — while the DOM showed a third `user-query` carrying the notebook, so the prompt had in fact been sent. The baseline was sampled in `handleCollectAnswer`, i.e. when the worker asked for the answer, and Gemini can render a response *before* that request arrives; the collector was therefore already looking at the answer it was waiting for and correctly, but uselessly, concluding that nothing newer existed. The count is now sampled in `typeAndSend` **before** the send button is clicked and carried through `TYPE_PROMPT_RESULT` → `collectTypedAnswer` → `COLLECT_ANSWER` as `responsesBefore`, so the baseline predates the request it attributes. This is the same lesson as 4.7.8 — a measurement taken too late is not evidence — and the acceptance condition for KAN-182 is two *consecutive* grounded calls, which is exactly the case the old ordering could not express.
+
+## [4.7.8] - 2026-09-29
+
+### Fixed
+- **A correctly grounded answer was reported as ungrounded.** Live run 5 on 4.7.7 was the first to reach the end of the chain: the notebook attached, the typed prompt landed, a new conversation was created (`/app` → `/app/c717b39dd73233a4`), a `user-query` rendered, and the answer streamed. The verdict was still `no_citations_in_response` — but the settled response carried **nine** `source-inline-chip` elements citing *"PDF: FORTUNE_original_lesson4.pdf"*, a file from the Horo notebook. A grounded answer streams its citations in *after* its text, and the check read once, immediately, so it judged a still-streaming response. `handleVerifyGrounding` now polls until the citations appear and only concludes "ungrounded" once three consecutive samples show the newest response unchanged — an unchanged response is a finished one, so that verdict is a real answer rather than a guess. The worker's budget was raised to 35s to cover the wait.
+
+## [4.7.7] - 2026-09-29
+
+### Fixed
+- **A notebook-grounded answer was being produced by a path that cannot ground.** Live run 4 captured the request on the wire: the `StreamGenerate` POST went out as `resourceType: "fetch"` (the page's own calls are `xhr`) with no `f.sid`/`hl=th`, and the decoded body was `f.req=[null,"[[\"Act as ซินแส AI …\",0,null,…],…]"]` — the bare prompt, **no `notebook://…/sources/…` reference at all**. So the replay path had started working, was returning a perfectly good answer, and was rendering nothing in the page. Two consequences: the answer was written from general knowledge by construction, and the grounding check had no `model-response` to read, which is why 4.7.6 reported `no_response_rendered` with zero queries and zero responses on screen. Replay is not a neutral fallback — it cannot carry a notebook attachment, because the attachment only exists in the request the **page** builds. `executeThroughExtension` now takes `requireGrounding`, set for a default-scoped `horo_consult`, and skips replay entirely in favour of the typed path. This is the first version where the notebook attach and the answer come from the same request.
+
+## [4.7.6] - 2026-09-29
+
+### Fixed
+- **The prompt write was reported as successful on a value Angular had already reverted** (live run 3 on 4.7.5 showed the MAIN-world relay being reached, yet the editor returning to `ql-blank`): the relay read the editor back *immediately* after `quill.setText`, which is a transient value, and treated it as proof. It now waits for a change-detection turn and reports the **settled** state, and settledness is read from the `ql-blank` class rather than the text — that class is precisely what Angular restores, so it distinguishes "landed and I looked too early" from "rejected outright". Retries are bounded and only re-apply while the editor is still blank.
+- **The write is now pushed into Angular's model, which is what makes it persist**: `quill.setText(t, "user")` does emit Quill's `text-change`, but from a MAIN-world script it runs outside `NgZone`, so the `ControlValueAccessor`'s `onChange` never reaches the `FormControl`. The form value stays `""` and the next change-detection pass calls `writeValue("")`, resetting the editor. `syncAngularModel()` uses the Angular debug API (`ng.getComponent` / `ng.getDirectives` / `ng.applyChanges`, trying `formControl`/`control`/`model`/`value`) to set the bound value, and an `input` event is dispatched first so Zone.js has a native event to hook. Both are best-effort: the result reports `ngSynced` so a live run says whether the debug API was reachable, which is what distinguishes "retry longer" from "only a trusted event can get through".
+
+### Not unit tested
+The MAIN-world typing logic in `injected.js` is a side-effecting IIFE (it installs
+a `message` listener and patches `fetch` on load) and cannot be `require`d in the
+Node test environment — `ReferenceError: window is not defined`. The 4.7.6 settle
+and Angular-sync behaviour is therefore **verified by live run only**, not by
+unit tests. Writing tests for it needs a `window`/`document` harness, which is
+follow-up work; do not assume it is covered.
+
+## [4.7.5] - 2026-09-29
+
+### Fixed
+- **The prompt could not be typed at all, for an architectural reason** (the root cause behind 4.7.3's failed live run): content scripts run in Chrome's ISOLATED world, which shares the DOM with the page but **not JavaScript expandos**. The `__quill` property Angular sets on `rich-textarea` lives in the page's own context, so `getQuill()` in the content script returns `null` no matter how the lookup is written — and every isolated-world write (`textContent`, a synthetic `InputEvent`, `execCommand`) is reconciled away by Angular, leaving the editor `ql-blank` with no prompt ever sent. Typing is now relayed to `injected.js`, which already runs in the MAIN world via `world: "MAIN"`, over the existing `postMessage` bridge (`TYPE_PROMPT_INTO_EDITOR` → `PROMPT_TYPED`). It drives `quill.setText(text, "user")` from the world that owns the instance, and replies with the editor's actual text so the isolated side verifies rather than assumes. The DOM writes remain as a last resort for a page where the MAIN world never answers, which now times out after 5s and falls back instead of hanging. No `chrome.debugger` permission is required.
+- **A missing `InputEvent` could discard a write that had already landed**: the fallback wrapped the `textContent` assignment and the event dispatch in one `try`, so an environment without `InputEvent` reported failure for a write that had in fact succeeded. They are guarded separately now, and the mandatory read-back decides.
+
+## [4.7.4] - 2026-09-29
+
+### Fixed
+- **An answer could not be attributed to the request that asked for it** (surfaced by running 4.7.3 live, where `collectTypedAnswer` reported success while the `user-query` count never moved): `waitForResponseChange()` compared the newest response's *text* against the text captured at the start. A conversation keeps every earlier reply, so when the prompt never reached Gemini the newest response was still the previous turn's answer — stable, non-placeholder, and different from the start snapshot if anything re-rendered mid-wait. Text cannot tell "the answer to my question" from "an answer that happens to be on screen"; the response **count** can. The wait now takes a `minResponses` floor and requires a strictly newer response, and `handleCollectAnswer` re-checks it after the streaming settle. `retryViaUi` passes `minResponses: 0` because regenerate re-renders in place rather than appending. The failing reason is now `no_new_response_rendered` and reports how many responses the page held, instead of the misleading `no_citations_in_response` from grading a response the caller never asked for.
+
+## [4.7.3] - 2026-09-29
+
+### Fixed
+- **The typed prompt was never actually typed** (found by running 4.7.2 live): `setPromptText()` required a `__quill` JS property on `rich-textarea`, which was not reachable on the live tab. With no Quill instance the old fallback assigned `textContent` and dispatched a synthetic `InputEvent`, and Angular reconciled the editor straight back to `ql-blank` — the prompt was never sent, and combined with the 4.7.2 stale-answer bug the tool reported the previous turn's text. `getQuill()` now also checks the inner `.ql-editor` and is treated as best-effort; the primary path is `execCommand('insertText')` on the focused editor, which emits the real `beforeinput`/`input` pair Quill's own listeners react to. Verified live: real input events clear `ql-blank`, surface the send button, and submit — a 9th `user-query` appeared. No `chrome.debugger` permission needed, and `textContent` alone is still never the primary path (it doubles the text when it works at all).
+
+## [4.7.2] - 2026-09-29
+
+### Fixed
+- **Stale answers were returned as if they were this call's own** (surfaced by the 4.7.1 grounding check on its first live run): `waitForResponseChange()` resolved `{changed:false, text:<the last model-response>}` on timeout, and `executeThroughExtension` adopted that text unconditionally — `text = collected.text`, with the `ok` flag ignored. When a typed prompt failed to land, `horo_consult` answered with the **previous** turn's text and then failed grounding on it, reporting `no_citations_in_response` and pointing the operator at the notebook when no question had been asked at all. Two different faults, one misleading symptom. A timeout now returns empty text, and an unreadable answer raises its own error instead of being graded as an ungrounded one.
+
+## [4.7.1] - 2026-09-29
+
+### Fixed
+- **`horo_consult` reported ungrounded answers as grounded (the notebook attaches per MESSAGE, not per conversation)**: `notebook-attach.js` short-circuited the attach whenever a chip was already in the input area and returned `{ok:true, alreadyAttached:true}`. Grounding is consumed per message — measured from real `StreamGenerate` payloads on 2026-09-29, a prompt sent after the chip was spent carries **no** `notebook://…/sources/…` reference at all — so from the second `horo_consult` call onward the answer was written from general knowledge while the tool reported it as grounded, and nothing in the returned text let the caller tell. A leftover chip is now cleared and the full attach flow always runs, guaranteeing exactly one fresh reference per submitted prompt. Re-attaching does not stack: the payload carries exactly one set of references.
+- **Grounding is now verified, not assumed**: `attached` and `verified` are separate claims. `notebookGrounding.verified` is decided *after* the answer streams, from the citations in that answer, and an unverified answer returns JSON-RPC `-32000` rather than a plausible-looking ungrounded reading. `check_bridge_health.notebook` reports `last_grounding_status` separately from `last_attach_status`, because an attach can succeed while every answer that follows is ungrounded — reading only the attach status called that healthy.
+
+### Added
+- **`VERIFY_GROUNDING` / `GROUNDING_RESULT` protocol messages** and `NotebookAttach.readGroundingEvidence()`, which reads citations from the **newest** `model-response` only. Scoped deliberately: `source-inline-chip` elements from earlier replies stay in the DOM for the life of the conversation, so a document-wide scan finds citations belonging to a grounded answer several turns back. Confirmed against the live DOM — a 7-response conversation held 2 chips in the 5th response while the newest 2 responses had none.
+- **Prompt typing fallback (`prompt-typing.js`, KAN-182)**: asks through Gemini's own input box when the replay path produces no chunk. The bridge's assembled `StreamGenerate` payload is refused by a schema change on Google's side, so the question never leaves the browser (0 `user-query` / 0 `model-response` rendered, 60s timeout). Text is set through `quill.setText(text, "user")` — `'api'` renders the text but never surfaces the send button, and `textContent` lands the prompt twice. No `chrome.debugger` permission is required.
+- **`TYPE_PROMPT` / `COLLECT_ANSWER` protocol messages** so the worker can read an answer back out of the page after a typed submit.
+
 ## [4.4.3] - 2026-09-26
 
 ### Fixed

@@ -21,6 +21,243 @@
   // Current canonical model ID tracked from DOM/UI selector state
   let currentCanonicalModelId = null;
 
+  // ─── 0. Prompt typing in the MAIN world (KAN-182) ───
+  //
+  // Kept here rather than in prompt-typing.js because of where the Quill
+  // instance lives. Content scripts run in the ISOLATED world, which shares
+  // the DOM but not JavaScript expandos: a `__quill` property that Angular
+  // sets on `rich-textarea` in the page's own context is invisible to the
+  // isolated world. That is why the isolated-side lookups always came back
+  // null, and why every DOM-level fallback was reconciled away.
+  //
+  // Selectors are the same ones verified live in the isolated world, since
+  // the DOM is genuinely shared. Localization-proof: no aria-label, no text.
+  const PROMPT_EDITOR_SELECTORS = {
+    richTextarea: "input-area-v2 rich-textarea",
+    editor: 'input-area-v2 .ql-editor[contenteditable="true"]'
+  };
+
+  /**
+   * The Quill instance backing Gemini's prompt box, from the world that owns it.
+   *
+   * Checks the host first, then the inner editor: different Gemini builds hang
+   * the instance off different elements, and guessing wrong is silent.
+   */
+  function findQuillInMainWorld(doc = document) {
+    const host = doc.querySelector(PROMPT_EDITOR_SELECTORS.richTextarea);
+    if (!host) return null;
+    if (host.__quill) return host.__quill;
+    const editor = host.querySelector(PROMPT_EDITOR_SELECTORS.editor);
+    if (editor && editor.__quill) return editor.__quill;
+    return null;
+  }
+
+  /**
+   * Put `text` in the prompt box and report what the editor actually holds.
+   *
+   * Order matters and each step is verified, because the failure modes all
+   * look like success from the outside:
+   *
+   *   1. `quill.setText(t, 'user')` — the only form that makes Angular aware
+   *      of the content, so the send button appears. `'api'` writes the text
+   *      but no button ever shows up; `'silent'` likewise.
+   *   2. `execCommand('insertText')` on the focused editor — for a build with
+   *      no reachable Quill instance.
+   *   3. `textContent` — last resort only. It is known to double the text when
+   *      it works, and the read-back below is what catches that.
+   *
+   * The returned text is read from the DOM, never assumed from the write.
+   */
+  /**
+   * Push the value into Angular's own model, when Angular exposes its debug
+   * API. This is what makes a Quill write persist.
+   *
+   * Why it is needed: `quill.setText(t, "user")` does emit Quill's
+   * `text-change`, but it runs outside `NgZone` when called from a MAIN-world
+   * script, so the wrapper's `onChange` never reaches the `FormControl`. The
+   * form value stays `""`, and the next change-detection pass calls
+   * `ControlValueAccessor.writeValue("")` — which resets the editor. Retrying
+   * the write alone just flickers against that loop; syncing the model is what
+   * stops it.
+   *
+   * Best-effort: `window.ng` is absent in some production builds, in which case
+   * this returns false and the caller keeps the other strategies.
+   */
+  function syncAngularModel(host, value) {
+    try {
+      const ng = (typeof window !== "undefined" && window.ng) || null;
+      if (!ng) return false;
+      let comp = null;
+      if (typeof ng.getComponent === "function") comp = ng.getComponent(host);
+      if (!comp && typeof ng.getDirectives === "function") {
+        const dirs = ng.getDirectives(host);
+        comp = (Array.isArray(dirs) && dirs[0]) || null;
+      }
+      if (!comp) return false;
+
+      // The binding name differs per wrapper, so try the common ones rather
+      // than guessing one and failing silently.
+      for (const key of ["formControl", "control", "model", "value"]) {
+        const target = comp[key];
+        if (target && typeof target.setValue === "function") {
+          target.setValue(value);
+          if (typeof ng.applyChanges === "function") ng.applyChanges(comp);
+          return true;
+        }
+      }
+      if (typeof ng.applyChanges === "function") {
+        ng.applyChanges(comp);
+        return true;
+      }
+    } catch (e) {
+      // Debug API shape differs by build; treat any failure as "unavailable".
+    }
+    return false;
+  }
+
+  /**
+   * Put `text` in the prompt box and report what the editor ACTUALLY holds
+   * after Angular has had a chance to reconcile.
+   *
+   * Why this is async and why it re-reads
+   * --------------------------------------
+   * The synchronous version read the editor back immediately and reported
+   * success, and that was wrong. Live on 2026-09-29: `setText` wrote the text,
+   * the immediate read-back returned it, and milliseconds later Angular
+   * reconciled the editor back to `ql-blank`. The read-back was reporting a
+   * transient value — a false positive of exactly the kind this ticket has
+   * been about at every layer.
+   *
+   * Settledness is read from the `ql-blank` class rather than from the text,
+   * because that class IS the state Angular restores, so it is the honest
+   * signal that a write survived rather than one that merely looked fine for a
+   * frame.
+   *
+   * The retry is bounded, and only re-applies while the editor is still blank.
+   */
+  async function typePromptInMainWorld(text, opts = {}) {
+    const {
+      settleMs = 250,
+      maxAttempts = 3,
+      setT = setTimeout,
+      doc = document
+    } = opts;
+
+    const value = typeof text === "string" ? text : "";
+    if (!value.trim()) {
+      return { ok: false, reason: "empty_prompt", text: "", attempts: 0 };
+    }
+
+    const sleep = (ms) => new Promise((resolve) => setT(resolve, ms));
+    const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
+    const editorSel = PROMPT_EDITOR_SELECTORS.editor;
+    const wanted = norm(value);
+
+    const readEditor = () => {
+      const el = doc.querySelector(editorSel);
+      return el ? (el.innerText || el.textContent || "") : "";
+    };
+
+    // `ql-blank` is what Angular puts back when it reverts, so it is the
+    // signal that actually answers "did this survive?" — the text can be
+    // present for a frame and gone by the next, and a text-only read-back
+    // cannot tell those apart.
+    const isBlank = () => {
+      const el = doc.querySelector(editorSel);
+      if (!el) return true;
+      const cls = el.className;
+      if (typeof cls === "string" && cls.indexOf("ql-blank") !== -1) return true;
+      return norm(el.innerText || el.textContent || "") === "";
+    };
+
+    let attempts = 0;
+    let lastSeen = "";
+    let ngSynced = false;
+
+    for (; attempts < Math.max(1, maxAttempts); attempts++) {
+      const editor = doc.querySelector(editorSel);
+      if (!editor) {
+        return { ok: false, reason: "editor_not_found", text: "", attempts };
+      }
+      const host = doc.querySelector(hostSel);
+
+      const quill = findQuillInMainWorld(doc);
+      if (quill && typeof quill.setText === "function") {
+        quill.setText(value, "user");
+        if (typeof quill.setSelection === "function") {
+          try {
+            quill.setSelection(quill.getLength(), quill.getLength(), "silent");
+          } catch (e) {
+            // Selection is cosmetic; the text is already in the model.
+          }
+        }
+        // Zone.js hooks native events, so give it one to enqueue an Angular tick.
+        try {
+          editor.dispatchEvent(new InputEvent("input", {
+            bubbles: true, inputType: "insertText", data: value
+          }));
+        } catch (e) {
+          // The settled read below is still the verdict.
+        }
+        // The part that makes it persist: get the value into the form model.
+        if (host) ngSynced = syncAngularModel(host, value) || ngSynced;
+      } else {
+        // No Quill reachable. Focus first — execCommand does nothing on a
+        // blurred editable, indistinguishable from a broken selector.
+        try {
+          editor.focus();
+        } catch (e) {
+          // Fall through; the write below still reports what happened.
+        }
+        let inserted = false;
+        try {
+          inserted = doc.execCommand("insertText", false, value);
+        } catch (e) {
+          inserted = false;
+        }
+        if (!inserted) {
+          editor.textContent = value;
+          try {
+            editor.dispatchEvent(new InputEvent("input", {
+              bubbles: true, inputType: "insertText", data: value
+            }));
+          } catch (e) {
+            // The settled read-back below is the real verdict.
+          }
+        }
+      }
+
+      // Let change detection run, then read what survived. Reading now would
+      // only see the transient value and would report a false success.
+      await sleep(settleMs);
+      lastSeen = readEditor();
+
+      if (!isBlank() && norm(lastSeen).indexOf(wanted) !== -1) {
+        return {
+          ok: true,
+          reason: "",
+          text: lastSeen,
+          attempts: attempts + 1,
+          settled: true,
+          ngSynced
+        };
+      }
+    }
+
+    // Every attempt was reverted. Say so plainly, and report whether the
+    // Angular model was reachable, because that decides the next step: no `ng`
+    // plus a persistent revert means the write is being rejected outright and
+    // only a trusted input event can get through.
+    return {
+      ok: false,
+      reason: isBlank() ? "text_reverted_after_settle" : "text_mismatch",
+      text: lastSeen,
+      attempts,
+      settled: true,
+      ngSynced
+    };
+  }
+
   // ─── 1. Token & Session Extraction (MAIN World Memory Only) ─
   function inspectWizGlobalData() {
     try {
@@ -290,6 +527,45 @@
     // Synchronize Canonical Model ID from UI selection
     if (type === "CANONICAL_MODEL_UPDATED") {
       currentCanonicalModelId = payload?.modelId || null;
+      return;
+    }
+
+    // KAN-182: type a prompt into Gemini's own input box.
+    //
+    // This has to run HERE, in the MAIN world, and that is the whole point.
+    // The content script lives in the ISOLATED world, which shares the DOM but
+    // not JavaScript expandos: `rich-textarea.__quill`, which Angular sets in
+    // the page's own context, is simply not visible from there. So
+    // `getQuill()` in prompt-typing.js returns null no matter how it looks,
+    // and the isolated-world fallbacks (`textContent`, a synthetic
+    // InputEvent, `execCommand`) all get reconciled away by Angular —
+    // measured live on 2026-09-29: the editor stayed `ql-blank`, no prompt was
+    // ever sent, and the call reported the previous turn's answer.
+    //
+    // Driving Quill's own API from the world that owns the instance produces a
+    // real model update, which is what makes the send button appear. The
+    // reply carries the read-back text so the isolated side verifies rather
+    // than assumes.
+    if (type === "TYPE_PROMPT_INTO_EDITOR") {
+      const requestId = payload?.requestId || requestId || null;
+      const text = typeof payload?.text === "string" ? payload.text : "";
+      // Awaited: the write now settles before reporting, so the reply carries
+      // the value that survived change detection rather than the transient one.
+      let outcome;
+      try {
+        outcome = await typePromptInMainWorld(text);
+      } catch (err) {
+        outcome = { ok: false, reason: err?.message || "main_world_type_failed", text: "", attempts: 0 };
+      }
+      window.postMessage({
+        source: "GEMINI_INJECTED",
+        type: "PROMPT_TYPED",
+        requestId,
+        ok: Boolean(outcome.ok),
+        reason: outcome.reason || "",
+        text: outcome.text || "",
+        attempts: outcome.attempts || 0
+      }, "*");
       return;
     }
 

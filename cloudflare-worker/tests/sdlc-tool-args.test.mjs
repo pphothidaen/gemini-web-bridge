@@ -200,6 +200,7 @@ test('horo_consult: a valid query still reaches Gemini (the required-arg guard d
   // prepareScope is stubbed too, for the explicit-scope path.
   b.prepareScope = async (scope) => ({ scope });
   b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
+  b.verifyNotebookGrounding = async () => ({ ok: true, verified: true, reason: '', chipCount: 1, citeMarkers: 1, sources: ['Horo'] });
   let prompt = null;
   b.executeThroughExtension = async (messages) => { prompt = messages[0].content; return 'หัวใจ: น้ำ ดิน ไฟ'; };
 

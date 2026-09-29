@@ -325,6 +325,7 @@ test('check_bridge_health: notebook status becomes "ok" only after a real attach
   const b = createBridge();
   b.activeSocket = { readyState: 1, send: () => {} };
   b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
+  b.verifyNotebookGrounding = async () => ({ ok: true, verified: true, reason: '', chipCount: 1, citeMarkers: 1, sources: ['Horo'] });
   b.executeThroughExtension = async () => 'answer';
 
   const call = async () => {
@@ -883,6 +884,7 @@ test('horo_consult: attaches the notebook in place instead of switching scope; p
   b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
   const attaches = [];
   b.runNotebookAttach = async ({ notebookName }) => { attaches.push(notebookName); return { ok: true, attached: [notebookName] }; };
+  b.verifyNotebookGrounding = async () => ({ ok: true, verified: true, reason: '', chipCount: 1, citeMarkers: 1, sources: ['Horo'] });
   let capturedPrompt = null;
   b.executeThroughExtension = async (messages) => { capturedPrompt = messages[0].content; return 'คำตอบทดสอบจาก Notebook'; };
 
@@ -913,8 +915,17 @@ test('horo_consult: attaches the notebook in place instead of switching scope; p
 
   // Proof of grounding travels with the result so a caller can tell a
   // notebook-grounded answer from a general-knowledge one.
+  //
+  // KAN-182: `attached` and `verified` are separate claims. `attached` says
+  // the UI accepted the chip; `verified` says THIS answer cites the notebook.
+  // Only the second one survives a second call, because the attachment is
+  // consumed per message.
   assert.equal(data.result.notebookGrounding.attached, true);
+  assert.equal(data.result.notebookGrounding.verified, true);
   assert.deepEqual(data.result.notebookGrounding.attachedNames, ['Horo']);
+  // The unsafe field is gone, so nothing can read "skipped the attach" as
+  // "grounded" any more.
+  assert.equal(data.result.notebookGrounding.alreadyAttached, undefined);
 
   // Prompt construction. The template is prose, not a "[Role: ...] / Birth
   // Context: ... / User Question: ..." spec sheet — see src/prompt-templates.js.
@@ -948,6 +959,62 @@ test('horo_consult: a failed notebook attach is an explicit error, not an ungrou
   assert.equal(executed, false, 'must not ask Gemini without the notebook attached');
 });
 
+// KAN-182: a successful attach is NOT a successful grounding. The attachment
+// is consumed per message, so a call that reuses a chip the previous message
+// already spent gets a fluent answer written from general knowledge — and
+// nothing in that text tells the caller. Returning it as a grounded
+// horo_consult reading is the failure this test exists to prevent.
+test('horo_consult: an attached but uncited answer is an error, not a grounded reading', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
+  b.verifyNotebookGrounding = async () => ({
+    ok: true, verified: false, reason: 'no_citations_in_response', chipCount: 0, citeMarkers: 0, sources: []
+  });
+  b.executeThroughExtension = async () => 'หมี่เข้ากับการเงิน มีแนวโน้มดี…';
+
+  const res = await postMcp(b, {
+    jsonrpc: '2.0', id: 65, method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q' } }
+  });
+
+  const data = await res.json();
+  assert.ok(data.error, 'an ungrounded answer must not be returned as a result');
+  assert.match(data.error.message, /no citations from it/);
+  assert.match(data.error.message, /no_citations_in_response/, 'the reason must survive for triage');
+  // The ungrounded text must not leak through the error path either.
+  assert.equal(JSON.stringify(data).includes('แนวโน้มดี'), false);
+});
+
+// KAN-182: health must track grounding separately from the attach, because an
+// attach can succeed while every answer that follows is ungrounded.
+test('check_bridge_health: reports grounding separately from the attach', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
+  b.verifyNotebookGrounding = async () => ({
+    ok: true, verified: false, reason: 'no_citations_in_response', chipCount: 0, citeMarkers: 0, sources: []
+  });
+  b.executeThroughExtension = async () => 'an answer with no citations';
+
+  await postMcp(b, {
+    jsonrpc: '2.0', id: 66, method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q' } }
+  });
+
+  const healthRes = await postMcp(b, {
+    jsonrpc: '2.0', id: 67, method: 'tools/call',
+    params: { name: 'check_bridge_health' }
+  });
+  const nb = JSON.parse((await healthRes.json()).result.content[0].text).notebook;
+
+  // The attach worked…
+  assert.equal(nb.last_attach_status, 'ok');
+  // …and the answer was still ungrounded, which the old report could not say.
+  assert.equal(nb.last_grounding_status, 'ungrounded');
+  assert.equal(nb.last_grounding_reason, 'no_citations_in_response');
+});
+
 test('horo_consult: explicit args.scope overrides the default notebook scope', async () => {
   const b = createBridge();
   b.activeSocket = { readyState: 1, send: () => {} };
@@ -977,6 +1044,7 @@ test('horo_consult: leaves the session scope untouched when attaching in place (
   const preparedScopes = [];
   b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
   b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
+  b.verifyNotebookGrounding = async () => ({ ok: true, verified: true, reason: '', chipCount: 1, citeMarkers: 1, sources: ['Horo'] });
   let scopeDuringExecution = null;
   b.executeThroughExtension = async () => { scopeDuringExecution = b.currentScope; return 'answer'; };
 
@@ -1065,6 +1133,7 @@ test('horo_consult: does not move the session when execution fails after a succe
   const preparedScopes = [];
   b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
   b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
+  b.verifyNotebookGrounding = async () => ({ ok: true, verified: true, reason: '', chipCount: 1, citeMarkers: 1, sources: ['Horo'] });
   b.executeThroughExtension = async () => { throw new Error('boom'); };
 
   const res = await postMcp(b, {
@@ -1115,6 +1184,7 @@ test('horo_consult: response_format=pdf stores artifact in KV with 1h TTL and re
   // this stub the real runNotebookAttach waits out its 45s timeout, which
   // turns this KV assertion into a slow, misleading failure.
   b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
+  b.verifyNotebookGrounding = async () => ({ ok: true, verified: true, reason: '', chipCount: 1, citeMarkers: 1, sources: ['Horo'] });
   b.executeThroughExtension = async () => 'Horo Consultation Report\n\n- Section 1: ดวงชะตา (sanitized in PDF)';
   const kv = mockArtifactKv();
   b.env.ARTIFACT_KV = kv;
@@ -1162,6 +1232,7 @@ test('horo_consult: PDF generation failure degrades gracefully to text without c
   // KAN-177: stub the notebook attach so this asserts PDF degradation rather
   // than the attach timeout.
   b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
+  b.verifyNotebookGrounding = async () => ({ ok: true, verified: true, reason: '', chipCount: 1, citeMarkers: 1, sources: ['Horo'] });
   b.executeThroughExtension = async () => 'answer text';
   b.env.ARTIFACT_KV = { put: async () => { throw new Error('kv down'); }, get: async () => null };
 

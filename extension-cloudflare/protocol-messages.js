@@ -621,6 +621,22 @@ export const MessageTypes = Object.freeze({
   ATTACH_NOTEBOOK: 'ATTACH_NOTEBOOK',
   NOTEBOOK_ATTACH_RESULT: 'NOTEBOOK_ATTACH_RESULT',
 
+  // KAN-182: read the citations out of the newest rendered answer.
+  // Separate from ATTACH_NOTEBOOK because "the chip was accepted" and
+  // "this answer came from the notebook" are different claims — only
+  // the second one is evidence, and it is only knowable after the
+  // answer has streamed.
+  VERIFY_GROUNDING: 'VERIFY_GROUNDING',
+  GROUNDING_RESULT: 'GROUNDING_RESULT',
+
+  // KAN-182: ask through Gemini's own input box. The fallback for the
+  // replay path, whose assembled StreamGenerate payload Google rejects —
+  // so the question never leaves the browser at all.
+  TYPE_PROMPT: 'TYPE_PROMPT',
+  TYPE_PROMPT_RESULT: 'TYPE_PROMPT_RESULT',
+  COLLECT_ANSWER: 'COLLECT_ANSWER',
+  COLLECT_ANSWER_RESULT: 'COLLECT_ANSWER_RESULT',
+
   // Control
   CANCEL_REQUEST: 'CANCEL_REQUEST',
   REFRESH_MODELS: 'REFRESH_MODELS',

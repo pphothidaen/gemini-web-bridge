@@ -1,6 +1,6 @@
 // Cloudflare Worker: Stateful Gemini Web-Bridge Edge Hub
 // Architecture: Cloudflare Durable Objects (Unified WSS + HTTP Stateful Coordinator)
-// Version: 4.7.0 (see WORKER_VERSION below — this comment is informational only)
+// Version: 4.7.9 (see WORKER_VERSION below — this comment is informational only)
 
 import { normalizeModels, recommendedModel } from "./model-catalog.js";
 import { PONG_GRACE_MS, isKeepaliveMissed, isEvictable } from "./liveness.js";
@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.0";
+const WORKER_VERSION = "4.7.9";
 
 // ─── Verbose logging gate ────────────────────────────────────────
 // console.log is not free in Workers: each call formats its arguments,
@@ -282,11 +282,21 @@ export class GeminiBridgeDO extends DurableObject {
     // check_bridge_health. Starts "unknown" rather than "ok" so a health
     // report can never imply grounding was verified when no attach has ever
     // been attempted.
+    //
+    // KAN-182: `groundingStatus` is tracked separately from `status`, because
+    // the two answer different questions. "The chip was accepted" is a UI
+    // fact; "the answer came from the notebook" is the one that decides
+    // whether a horo_consult result is worth anything. Reporting one under
+    // the other's label is how an ungrounded answer came back marked
+    // `attached: true`.
     this.notebookAttachState = {
       status: "unknown",
       at: null,
       reason: null,
-      failures: 0
+      failures: 0,
+      groundingStatus: "unknown",
+      groundingAt: null,
+      groundingReason: null
     };
 
     // ─── Phase 3: Per-instance-id Tracking + Epoch Counter ───
@@ -1643,7 +1653,25 @@ export class GeminiBridgeDO extends DurableObject {
     return text;
   }
 
-  async executeThroughExtension(messages, onChunk, model = "") {
+  async executeThroughExtension(messages, onChunk, model = "", opts = {}) {
+    // KAN-182: `requireGrounding` forces the typing path and skips replay.
+    //
+    // Replay is NOT a neutral fallback — it is architecturally incapable of
+    // grounding. It POSTs `f.req=[null,"[[\"<prompt>\",0,…]]"]` with no
+    // `notebook://…/sources/…` reference, confirmed on the wire 2026-09-29:
+    // the request went out as `fetch` (not the page's own `xhr`), carried the
+    // bare prompt, and returned a perfectly good answer. So a replayed answer
+    // is written from general knowledge by construction, and — because the
+    // page never renders it — there is no `model-response` for the grounding
+    // check to read either.
+    //
+    // For a tool whose whole purpose is a notebook-grounded answer, replay can
+    // therefore only produce a wrong result, and it would bypass the attach the
+    // caller just paid for. The typed path is not a fallback there; it is the
+    // only path in which the PAGE builds the request, and the page is what
+    // carries the attachment.
+    const { requireGrounding = false } = opts;
+
     if (!this.isExtensionReady()) {
       const err = new Error("Extension not connected");
       err.code = "extension_disconnected";
@@ -1657,7 +1685,73 @@ export class GeminiBridgeDO extends DurableObject {
 
     // Stage 1: the replay attempt. If Gemini answers with a refusal or an
     // upstream error, escalate to the native retry button below.
-    let text = await this.runReplayAttempt({ requestId, encodedReq, model, onChunk });
+    //
+    // KAN-182: if the replay never receives a chunk at all, the question never
+    // left the browser — Google rejects the assembled payload outright. A
+    // timeout is the signature of that, and it is a hard failure rather than a
+    // refusal, so the typing fallback runs before the retry button (clicking
+    // "regenerate" on a conversation that has no answer does nothing).
+    let text;
+    // KAN-182: when the answer must be notebook-grounded, go straight to the
+    // typed path. Replay is skipped rather than tried-then-fallen-back-from,
+    // because a replayed answer can never be grounded (see `requireGrounding`
+    // above) — so attempting it first would spend the attach and still return
+    // an ungrounded result.
+    const useTypedOnly = requireGrounding;
+    try {
+      if (useTypedOnly) {
+        vlog(`[Bridge DO] Grounding required; using the typed path (replay cannot carry a notebook reference).`);
+        throw Object.assign(new Error("replay_skipped_for_grounding"), { __typedOnly: true });
+      }
+      text = await this.runReplayAttempt({ requestId, encodedReq, model, onChunk });
+    } catch (replayErr) {
+      const forced = replayErr?.__typedOnly === true;
+      const timedOut = /no response chunk|Timeout/i.test(replayErr?.message || "");
+      if (!forced && !timedOut) throw replayErr;
+
+      const prompt = messages?.[0]?.content || "";
+      vlog(forced
+        ? `[Bridge DO] Grounding required; typing into Gemini's input (KAN-182).`
+        : `[Bridge DO] Replay produced no chunk; falling back to typing into Gemini's input (KAN-182).`);
+      const typed = await this.typePromptThroughUi({
+        requestId: `${requestId}:typed`,
+        prompt
+      });
+      if (!typed.ok) {
+        this.recordHealthError(`type_prompt_failed:${typed.reason}@${typed.step}`);
+        throw new Error(
+          `${forced ? "Grounding requires the typed path" : "Replay produced no response chunk"} and the typed path failed ` +
+          `(step=${typed.step || "unknown"}, reason=${typed.reason || "unknown"}). ` +
+          `The Gemini tab must be in the foreground for a typed prompt to be submitted.`
+        );
+      }
+      // The page now renders the answer itself; read it back from the DOM via
+      // the native path, which is already proven to work.
+      //
+      // KAN-182: the `ok` flag was ignored here, so a collection that failed —
+      // or that timed out and returned the PREVIOUS response's text — was
+      // adopted as this call's answer. Live on 2026-09-29: the typed prompt
+      // never landed (editor empty, chip unconsumed), yet horo_consult
+      // answered with the text of the test prompt from the previous turn and
+      // then failed grounding on it. An unreadable answer must not be
+      // reported as an ungrounded one — the two need different fixes.
+      const collected = await this.collectTypedAnswer({
+        requestId,
+        timeoutMs: 120000,
+        responsesBefore: typed.responsesBefore
+      });
+      if (!collected.ok) {
+        this.recordHealthError(`collect_answer_failed:${collected.reason}`);
+        throw new Error(
+          `The prompt was submitted but no new answer was rendered for it ` +
+          `(reason=${collected.reason || "unknown"}, responses on screen=${collected.responses}). ` +
+          `This means Gemini never produced a reply to THIS question — the text already on ` +
+          `screen belongs to an earlier turn and is deliberately not reused. ` +
+          `Check the Gemini tab is still open and in the foreground.`
+        );
+      }
+      text = collected.text;
+    }
 
     // Stage 1 escalation: re-ask through Gemini's own retry control.
     // Our assembled StreamGenerate payload is rejected by a schema change on
@@ -1768,7 +1862,10 @@ export class GeminiBridgeDO extends DurableObject {
           ok: Boolean(msg.ok),
           reason: msg.reason || "",
           step: msg.step || "",
-          alreadyAttached: Boolean(msg.alreadyAttached),
+          // KAN-182: `alreadyAttached` is no longer sent. The extension now
+          // always performs a fresh attach, because grounding is
+          // per-message and a chip left over from an earlier turn is gone
+          // from the request by the time the next one is sent.
           attached: Array.isArray(msg.attached) ? msg.attached : []
         });
       });
@@ -1784,6 +1881,185 @@ export class GeminiBridgeDO extends DurableObject {
         clearTimeout(timer);
         this.activeStreams.delete(requestId);
         resolve({ ok: false, reason: "notebook_attach_send_failed", step: "send", attached: [] });
+      }
+    });
+  }
+
+  /**
+   * Ask the extension whether the answer that just streamed is actually
+   * grounded in the notebook (KAN-182).
+   *
+   * Why this cannot be folded into the attach
+   * -----------------------------------------
+   * A successful attach proves only that Gemini's UI accepted the chip. It
+   * says nothing about the request that was ultimately sent, because the
+   * attachment is consumed per message. Measured from real
+   * `StreamGenerate` payloads on 2026-09-29:
+   *
+   *   attach -> send            payload HAS notebook://…/sources/…
+   *   send again, no re-attach  payload has NO notebook reference
+   *
+   * The second case produces a fluent, plausible, entirely ungrounded
+   * BaZi answer. Nothing in the returned text distinguishes it from a
+   * grounded one, so the caller cannot detect the failure — which is why
+   * this is a first-class result rather than a log line.
+   *
+   * The check is scoped by the extension to the NEWEST `model-response`,
+   * so citation chips left in the DOM by earlier replies cannot stand in
+   * for this one.
+   *
+   * Resolves {ok:false} rather than throwing: a failed check is reported
+   * as unverified, never as a transport error, so the caller still gets
+   * the answer text and decides what to do with it.
+   */
+  verifyNotebookGrounding({ requestId, timeoutMs = 35000 }) {
+    // KAN-182: the extension now polls until the response stops changing,
+    // because a grounded answer's citations arrive after its text. The budget
+    // has to cover that wait, or a correctly grounded answer is reported as
+    // ungrounded — which is exactly the false negative seen live on 2026-09-29
+    // (nine citations present, verdict `no_citations_in_response`).
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.activeStreams.delete(requestId);
+        resolve({
+          ok: false,
+          verified: false,
+          reason: "grounding_check_timeout",
+          chipCount: 0,
+          citeMarkers: 0,
+          sources: []
+        });
+      }, timeoutMs);
+
+      this.activeStreams.set(requestId, (msg) => {
+        if (msg.type !== "GROUNDING_RESULT") return;
+        clearTimeout(timer);
+        this.activeStreams.delete(requestId);
+        resolve({
+          ok: Boolean(msg.ok),
+          verified: Boolean(msg.verified),
+          reason: msg.reason || "",
+          chipCount: Number(msg.chipCount) || 0,
+          citeMarkers: Number(msg.citeMarkers) || 0,
+          sources: Array.isArray(msg.sources) ? msg.sources : []
+        });
+      });
+
+      try {
+        this.activeSocket.send(JSON.stringify({
+          type: "VERIFY_GROUNDING",
+          requestId,
+          timeoutMs: Math.min(timeoutMs - 2000, 15000)
+        }));
+      } catch (err) {
+        clearTimeout(timer);
+        this.activeStreams.delete(requestId);
+        resolve({
+          ok: false,
+          verified: false,
+          reason: "grounding_check_send_failed",
+          chipCount: 0,
+          citeMarkers: 0,
+          sources: []
+        });
+      }
+    });
+  }
+
+  /**
+   * Ask through Gemini's own input box and wait for the extension to confirm
+   * the prompt was submitted.
+   *
+   * KAN-182. The replay path POSTs an assembled `StreamGenerate` payload that
+   * Google now rejects, so the question never leaves the browser: the caller
+   * sees a 60s timeout with 0 user-queries rendered. Typing the prompt makes
+   * the page build the request itself, so the stale schema is bypassed.
+   *
+   * Resolves {ok:false} rather than throwing, so a failed submit degrades into
+   * a reportable state instead of an opaque error.
+   */
+  typePromptThroughUi({ requestId, prompt, timeoutMs = 60000 }) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.activeStreams.delete(requestId);
+        resolve({ ok: false, reason: "type_prompt_timeout", step: "timeout" });
+      }, timeoutMs);
+
+      this.activeStreams.set(requestId, (msg) => {
+        if (msg.type !== "TYPE_PROMPT_RESULT") return;
+        clearTimeout(timer);
+        this.activeStreams.delete(requestId);
+        resolve({
+          ok: Boolean(msg.ok),
+          reason: msg.reason || "",
+          step: msg.step || "",
+          // KAN-182: response count from BEFORE the send, carried into the
+          // collect step so it can demand an answer newer than the request.
+          responsesBefore: Number.isFinite(msg.responsesBefore) ? msg.responsesBefore : null
+        });
+      });
+
+      try {
+        this.activeSocket.send(JSON.stringify({
+          type: "TYPE_PROMPT",
+          requestId,
+          prompt,
+          timeoutMs: Math.min(timeoutMs - 5000, 40000)
+        }));
+      } catch (err) {
+        clearTimeout(timer);
+        this.activeStreams.delete(requestId);
+        resolve({ ok: false, reason: "type_prompt_send_failed", step: "send" });
+      }
+    });
+  }
+
+  /**
+   * Read the answer back out of the page after a typed prompt (KAN-182).
+   *
+   * Once the prompt is submitted through Gemini's own input box, the PAGE
+   * streams the answer and the bridge is not on the wire for it, so there is
+   * no chunk stream to read. The extension polls the rendered
+   * `model-response` instead.
+   *
+   * Resolves {ok:false} rather than throwing, so the caller keeps whatever
+   * text it already has instead of losing everything to a collection error.
+   */
+  collectTypedAnswer({ requestId, timeoutMs = 120000, responsesBefore = null }) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.activeStreams.delete(requestId);
+        resolve({ ok: false, reason: "collect_answer_timeout", text: "" });
+      }, timeoutMs);
+
+      this.activeStreams.set(requestId, (msg) => {
+        if (msg.type !== "COLLECT_ANSWER_RESULT") return;
+        clearTimeout(timer);
+        this.activeStreams.delete(requestId);
+        resolve({
+          ok: Boolean(msg.ok),
+          reason: msg.reason || "",
+          text: typeof msg.text === "string" ? msg.text : "",
+          // KAN-182: how many responses the page held when the wait ended.
+          // Carried so `no_new_response_rendered` can say "still N" instead of
+          // leaving the operator to guess whether a reply was ever produced.
+          responses: Number(msg.responses) || 0
+        });
+      });
+
+      try {
+        this.activeSocket.send(JSON.stringify({
+          type: "COLLECT_ANSWER",
+          requestId,
+          timeoutMs: Math.max(timeoutMs - 5000, 10000),
+          // KAN-182: the pre-send baseline. Without it the extension snapshots
+          // on arrival, which can already include the answer being waited for.
+          responsesBefore
+        }));
+      } catch (err) {
+        clearTimeout(timer);
+        this.activeStreams.delete(requestId);
+        resolve({ ok: false, reason: "collect_answer_send_failed", text: "" });
       }
     });
   }
@@ -3004,7 +3280,15 @@ export class GeminiBridgeDO extends DurableObject {
                 last_attach_status: this.notebookAttachState.status,
                 last_attach_at: this.notebookAttachState.at,
                 last_attach_reason: this.notebookAttachState.reason,
-                attach_failures: this.notebookAttachState.failures
+                attach_failures: this.notebookAttachState.failures,
+
+                // KAN-182. Grounding is the number that matters: an attach can
+                // succeed while the answer that follows is ungrounded, because
+                // the attachment is consumed per message. Reading only
+                // `last_attach_status` would call that healthy.
+                last_grounding_status: this.notebookAttachState.groundingStatus,
+                last_grounding_at: this.notebookAttachState.groundingAt,
+                last_grounding_reason: this.notebookAttachState.groundingReason
               }
             };
 
@@ -3282,10 +3566,15 @@ export class GeminiBridgeDO extends DurableObject {
                 notebookGrounding = {
                   requested: HORO_CONSULT_NOTEBOOK_NAME,
                   attached: attach.ok,
-                  alreadyAttached: attach.alreadyAttached,
                   attachedNames: attach.attached,
                   step: attach.step || null,
-                  reason: attach.reason || null
+                  reason: attach.reason || null,
+                  // KAN-182: `verified` is decided AFTER the answer
+                  // streams, from the citations in that answer. Until
+                  // then an attach is only a UI success, so it is left
+                  // explicitly unknown rather than reported as grounded.
+                  verified: null,
+                  verifiedReason: null
                 };
                 // KAN-177: record the outcome so check_bridge_health can
                 // answer "is notebook grounding working?" without spending a
@@ -3293,6 +3582,10 @@ export class GeminiBridgeDO extends DurableObject {
                 // though the call then returns an error — that is precisely
                 // the case an operator needs to see.
                 this.notebookAttachState = {
+                  // Spread first: this assignment used to replace the whole
+                  // object, which would silently reset KAN-182's grounding
+                  // fields to undefined on every attach.
+                  ...this.notebookAttachState,
                   status: attach.ok ? "ok" : "failed",
                   at: new Date().toISOString(),
                   reason: attach.ok ? null : (attach.reason || attach.step || "unknown"),
@@ -3321,7 +3614,16 @@ export class GeminiBridgeDO extends DurableObject {
               }
 
               const targetModel = recommendedModel(this.dynamicModels) || this.activeBrowserModel || (this.dynamicModels[0]?.id) || "gemini-3.8-flash";
-              let resultText = await this.executeThroughExtension([{ role: "user", content: prompt }], null, targetModel);
+              // KAN-182: a notebook-grounded answer must come from the page, so
+              // replay is skipped for it — see `requireGrounding`. Attempting
+              // replay first would spend the attach and still return an
+              // ungrounded answer.
+              let resultText = await this.executeThroughExtension(
+                [{ role: "user", content: prompt }],
+                null,
+                targetModel,
+                { requireGrounding: Boolean(notebookGrounding) }
+              );
 
               // Never hand an empty/blank answer back to the MCP client. Gemini
               // answers that are entirely LMDX components or an empty model
@@ -3359,6 +3661,58 @@ export class GeminiBridgeDO extends DurableObject {
                 };
               }
               resultText = usableText;
+
+              // KAN-182: now that the answer exists, check whether it is
+              // actually grounded. This cannot be skipped for a default-scoped
+              // horo_consult, because "the chip was accepted" and "this answer
+              // came from the notebook" are different claims: the attachment is
+              // consumed per message, so a call that reused a stale chip sends a
+              // request with no notebook reference and gets a fluent,
+              // ungrounded answer that the caller cannot detect from the text.
+              if (notebookGrounding && notebookGrounding.attached) {
+                const grounding = await this.verifyNotebookGrounding({
+                  requestId: `${id}:grounding`
+                });
+                notebookGrounding.verified = Boolean(grounding.verified);
+                notebookGrounding.verifiedReason = grounding.reason || null;
+                notebookGrounding.citationCount = grounding.chipCount;
+                notebookGrounding.citeMarkers = grounding.citeMarkers;
+                notebookGrounding.citedSources = grounding.sources;
+
+                // KAN-177 recorded the attach outcome; the grounding outcome is
+                // the one that actually decides answer quality, so health
+                // tracks it separately rather than inheriting the attach's "ok".
+                this.notebookAttachState = {
+                  ...this.notebookAttachState,
+                  groundingStatus: grounding.verified ? "grounded" : "ungrounded",
+                  groundingAt: new Date().toISOString(),
+                  groundingReason: grounding.verified ? null : (grounding.reason || "unknown")
+                };
+
+                if (!grounding.verified) {
+                  this.recordHealthError(`notebook_grounding_unverified:${grounding.reason}`);
+                  console.warn(
+                    `[Bridge DO] Answer for '${toolName}' carries no notebook citations ` +
+                    `(reason=${grounding.reason}); refusing to return it as a grounded horo_consult answer.`
+                  );
+                  return {
+                    response: {
+                      jsonrpc: "2.0",
+                      id,
+                      error: {
+                        code: -32000,
+                        message:
+                          `horo_consult attached the "${HORO_CONSULT_NOTEBOOK_NAME}" notebook, but the answer ` +
+                          `came back with no citations from it (reason=${grounding.reason || "unknown"}). ` +
+                          `That means the question was answered from general knowledge rather than the notebook, ` +
+                          `and horo_consult will not present that as a grounded reading. ` +
+                          `Start a fresh conversation and retry — the attachment is consumed per message, so a ` +
+                          `conversation that has already used the notebook cannot ground the next question in it.`
+                      }
+                    }
+                  };
+                }
+              }
 
               // horo_consult PDF artifact: render the full answer into a PDF and
               // expose a temporary (1h) unguessable download link.

@@ -430,6 +430,7 @@ test('RED TEAM: horo_consult response object never contains CLIENT_API_KEY or BR
   // KAN-177: the default-scoped path attaches the notebook first; stubbed so
   // this security assertion does not wait out the real 45s attach timeout.
   doHub.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
+  doHub.verifyNotebookGrounding = async () => ({ ok: true, verified: true, reason: '', chipCount: 1, citeMarkers: 1, sources: ['Horo'] });
   doHub.executeThroughExtension = async () => 'คำตอบทดสอบจาก bridge';
 
   const res = await doHub.fetch(new Request('https://edge.test/mcp', {
