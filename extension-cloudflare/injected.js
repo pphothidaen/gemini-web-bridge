@@ -445,6 +445,28 @@
       const modelIdAtRequestTime = currentCanonicalModelId;
       const requestStructure = decodeAndSanitizePayload(requestInit.body);
 
+      // ── TEMPORARY PAYLOAD PROBE (KAN-195) ──────────────────────────────
+      // Dumps the SANITIZED request structure so it can be captured from the
+      // page console. `requestStructure` comes from decodeAndSanitizePayload,
+      // which replaces every string with {type,length} — so this cannot leak
+      // the user's prompt (GUARDRAILS G1.2.1) and carries no CSRF token.
+      // Remove this block once the samples are collected.
+      if (requestStructure && typeof console !== "undefined") {
+        try {
+          console.log(
+            "PAYLOAD_PROBE " + JSON.stringify({
+              endpoint: matched.endpoint,
+              rpcid: (matched.canonicalPath.match(/rpcids=([^&]+)/) || [])[1] || null,
+              buildLabel: matched.buildLabel || activeBuildLabel,
+              sessionEpoch: currentSessionEpoch,
+              canonicalModelId: modelIdAtRequestTime,
+              structure: requestStructure
+            })
+          );
+        } catch (e) {}
+      }
+      // ── END TEMPORARY PAYLOAD PROBE ────────────────────────────────────
+
       const response = await originalFetch.apply(this, arguments);
 
       // Only qualify successful responses (HTTP 200) with valid Gemini envelope
@@ -502,6 +524,27 @@
 
       const modelIdAtRequestTime = currentCanonicalModelId;
       const requestStructure = decodeAndSanitizePayload(body);
+
+      // ── TEMPORARY PAYLOAD PROBE (KAN-195) ──────────────────────────────
+      // Same sanitized-structure dump as the fetch path above. The prompt
+      // travels over XHR, so the fetch probe alone never sees it. Structure
+      // only — no prompt text, no CSRF token (GUARDRAILS G1.2.1).
+      if (requestStructure && typeof console !== "undefined") {
+        try {
+          console.log(
+            "PAYLOAD_PROBE " + JSON.stringify({
+              endpoint: matched.endpoint,
+              transport: "xhr",
+              rpcid: (matched.canonicalPath.match(/rpcids=([^&]+)/) || [])[1] || null,
+              buildLabel: matched.buildLabel || activeBuildLabel,
+              sessionEpoch: currentSessionEpoch,
+              canonicalModelId: modelIdAtRequestTime,
+              structure: requestStructure
+            })
+          );
+        } catch (e) {}
+      }
+      // ── END TEMPORARY PAYLOAD PROBE ────────────────────────────────────
 
       this.addEventListener("loadend", () => {
         if (this.status === 200 && requestStructure) {
