@@ -14,22 +14,172 @@ const require = createRequire(import.meta.url);
 const Injected = require('../../extension-cloudflare/injected.js');
 
 test('injected.js exports all essential MAIN-world helpers', () => {
-  assert.equal(typeof Injected.findQuillInMainWorld, 'function');
-  assert.equal(typeof Injected.syncAngularModel, 'function');
-  assert.equal(typeof Injected.typePromptInMainWorld, 'function');
-  assert.equal(typeof Injected.inspectWizGlobalData, 'function');
-  assert.equal(typeof Injected.broadcastSessionState, 'function');
-  assert.equal(typeof Injected.matchRecognizedEndpoint, 'function');
-  assert.equal(typeof Injected.decodeAndSanitizePayload, 'function');
-  assert.ok(Injected.PROMPT_EDITOR_SELECTORS);
+  const expectedContract = {
+    findQuillInMainWorld: 'function',
+    syncAngularModel: 'function',
+    typePromptInMainWorld: 'function',
+    inspectWizGlobalData: 'function',
+    broadcastSessionState: 'function',
+    matchRecognizedEndpoint: 'function',
+    decodeAndSanitizePayload: 'function',
+    PROMPT_EDITOR_SELECTORS: 'object'
+  };
+
+  // Verify MAIN-world global attachment: in Chrome MAIN world, module.exports is undefined
+  // so callers rely on globalThis.GeminiInjected (and the __GeminiBridgeMain alias).
+  assert.ok(globalThis.GeminiInjected, 'must attach GeminiInjected to global root in MAIN world');
+  assert.equal(globalThis.GeminiInjected, Injected, 'global GeminiInjected must match exported API');
+  assert.equal(globalThis.__GeminiBridgeMain, Injected, 'global __GeminiBridgeMain must match exported API');
+
+  // Verify all contract members are present with the expected types on both exports and global
+  for (const [name, expectedType] of Object.entries(expectedContract)) {
+    assert.equal(
+      typeof Injected[name],
+      expectedType,
+      `Injected.${name} must be exported as ${expectedType}`
+    );
+    assert.equal(
+      typeof globalThis.GeminiInjected[name],
+      expectedType,
+      `globalThis.GeminiInjected.${name} must be exported as ${expectedType}`
+    );
+  }
+
+  // Verify the export surface strictly matches the expected contract (no dropped, renamed, or uncontracted exports)
+  assert.deepEqual(
+    Object.keys(Injected).sort(),
+    Object.keys(expectedContract).sort(),
+    'exported surface must exactly match the expected contract'
+  );
 });
 
 test('PROMPT_EDITOR_SELECTORS uses localization-proof selectors', () => {
   const S = Injected.PROMPT_EDITOR_SELECTORS;
-  assert.equal(S.richTextarea, 'input-area-v2 rich-textarea');
-  assert.equal(S.editor, 'input-area-v2 .ql-editor[contenteditable="true"]');
-  assert.ok(!S.editor.includes('ส่ง'));
-  assert.ok(!S.editor.toLowerCase().includes('send'));
+
+  // Realistic DOM tree modeling Gemini's active input area under a non-English locale (e.g. Thai),
+  // where UI labels and placeholders are localized but custom element tags, Quill classes,
+  // and contenteditable attributes remain invariant.
+  const editorEl = {
+    tagName: 'DIV',
+    className: 'ql-editor ql-blank textarea new-input-ui',
+    attributes: {
+      class: 'ql-editor ql-blank textarea new-input-ui',
+      contenteditable: 'true',
+      'aria-label': 'ป้อนข้อความแจ้งเตือนที่นี่',
+      placeholder: 'ถาม Gemini'
+    },
+    children: [],
+    getAttribute(name) { return this.attributes[name] ?? null; }
+  };
+
+  const richTextareaEl = {
+    tagName: 'RICH-TEXTAREA',
+    className: '',
+    attributes: {},
+    children: [editorEl],
+    getAttribute(name) { return this.attributes[name] ?? null; }
+  };
+
+  const inputAreaEl = {
+    tagName: 'INPUT-AREA-V2',
+    className: '',
+    attributes: {},
+    children: [richTextareaEl],
+    getAttribute(name) { return this.attributes[name] ?? null; }
+  };
+
+  function matchesCompound(el, token) {
+    let rest = token.trim();
+    if (!rest) return false;
+    const tagMatch = rest.match(/^[a-zA-Z0-9_-]+/);
+    if (tagMatch) {
+      if (el.tagName.toLowerCase() !== tagMatch[0].toLowerCase()) return false;
+      rest = rest.slice(tagMatch[0].length);
+    }
+    while (rest.length > 0) {
+      if (rest.startsWith('.')) {
+        const clsMatch = rest.match(/^\.([a-zA-Z0-9_-]+)/);
+        if (!clsMatch) return false;
+        const classes = (el.className || '').split(/\s+/);
+        if (!classes.includes(clsMatch[1])) return false;
+        rest = rest.slice(clsMatch[0].length);
+      } else if (rest.startsWith('[')) {
+        const attrMatch = rest.match(/^\[([a-zA-Z0-9_-]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]*)))?\]/);
+        if (!attrMatch) return false;
+        const attrName = attrMatch[1];
+        const expectedVal = attrMatch[2] ?? attrMatch[3] ?? attrMatch[4];
+        const actualVal = el.getAttribute(attrName);
+        if (expectedVal !== undefined) {
+          if (actualVal !== expectedVal) return false;
+        } else {
+          if (actualVal === null) return false;
+        }
+        rest = rest.slice(attrMatch[0].length);
+      } else {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function findElement(rootNode, selector) {
+    const tokens = selector.trim().split(/\s+/);
+    if (tokens.length === 0) return null;
+
+    function searchDescendants(node, remainingTokens) {
+      const currentToken = remainingTokens[0];
+      const isLast = remainingTokens.length === 1;
+
+      for (const child of node.children || []) {
+        if (matchesCompound(child, currentToken)) {
+          if (isLast) return child;
+          const match = searchDescendants(child, remainingTokens.slice(1));
+          if (match) return match;
+        }
+        const deepMatch = searchDescendants(child, remainingTokens);
+        if (deepMatch) return deepMatch;
+      }
+      return null;
+    }
+
+    if (matchesCompound(rootNode, tokens[0])) {
+      if (tokens.length === 1) return rootNode;
+      return searchDescendants(rootNode, tokens.slice(1));
+    }
+    return searchDescendants(rootNode, tokens);
+  }
+
+  const doc = {
+    querySelector: (sel) => findElement(inputAreaEl, sel)
+  };
+
+  const resolvedHost = doc.querySelector(S.richTextarea);
+  assert.ok(resolvedHost, 'S.richTextarea must match the rich-textarea element in the DOM');
+  assert.equal(resolvedHost, richTextareaEl, 'S.richTextarea must resolve to richTextareaEl');
+
+  const resolvedEditor = doc.querySelector(S.editor);
+  assert.ok(resolvedEditor, 'S.editor must match the contenteditable editor in the DOM');
+  assert.equal(resolvedEditor, editorEl, 'S.editor must resolve to editorEl');
+  assert.equal(resolvedEditor.getAttribute('contenteditable'), 'true');
+
+  // Must not match an inactive editor where contenteditable is false
+  const inactiveEditorEl = {
+    ...editorEl,
+    attributes: { ...editorEl.attributes, contenteditable: 'false' },
+    getAttribute(name) { return this.attributes[name] ?? null; }
+  };
+  const inactiveDoc = {
+    querySelector: (sel) => findElement({
+      ...inputAreaEl,
+      children: [{ ...richTextareaEl, children: [inactiveEditorEl] }]
+    }, sel)
+  };
+  assert.equal(inactiveDoc.querySelector(S.editor), null, 'S.editor must reject non-editable container');
+
+  // Verify localization-proof: must not rely on language-specific UI text or aria-labels
+  assert.ok(!/send|ส่ง|prompt|ข้อความ/i.test(S.editor), 'S.editor must not rely on localized UI text');
+  assert.ok(!/aria-label/i.test(S.editor), 'S.editor must not rely on aria-label which changes with UI language');
+  assert.ok(!/aria-label/i.test(S.richTextarea), 'S.richTextarea must not rely on aria-label');
 });
 
 test('findQuillInMainWorld finds Quill on host or editor', () => {
