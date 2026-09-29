@@ -301,6 +301,32 @@
       )) {
         return { active: true, source: "response_stop_button" };
       }
+
+      // Class-based signal observed 2026-09-29 on the live DOM:
+      // `structured-content-container.processing-state-visible` and
+      // `structured-content-container.has-thoughts` are present on a
+      // descendant element while Gemini is still generating.
+      //
+      // IMPORTANT: these classes are also present on FINISHED responses, so
+      // the check MUST be scoped to the newest response. A document-wide
+      // querySelector for either class would fire forever, producing the same
+      // "generating: 1" wedge that motivated the sidenav guard above.
+      // querySelectorAll may be absent on minimal DOM stubs (tests); treat that
+      // as "not found" rather than throwing. Likewise, elements returned by
+      // querySelectorAll may lack className on some stubs — guard it.
+      if (typeof response.querySelectorAll === "function") {
+        const candidates = response.querySelectorAll("*");
+        for (let i = 0; i < candidates.length; i++) {
+          const cls = candidates[i].className;
+          if (typeof cls !== "string") continue;
+          if (cls.includes("processing-state-visible")) {
+            return { active: true, source: "processing_state_class" };
+          }
+          if (cls.includes("has-thoughts")) {
+            return { active: true, source: "thoughts_class" };
+          }
+        }
+      }
     }
 
     // Document-wide match: only report it as a real signal if it is NOT
