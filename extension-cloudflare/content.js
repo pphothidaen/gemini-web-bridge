@@ -352,6 +352,10 @@
       dotColor = "#64748b"; // Slate
     } else if (status === "error" || status === "disconnected") {
       dotColor = "#ef4444"; // Red
+    } else if (status === "stale") {
+      // The extension context is gone but the page still holds this script.
+      // It cannot reconnect on its own — only a tab reload can.
+      dotColor = "#a855f7"; // Purple
     }
 
     indicatorEl.innerHTML = `
@@ -521,6 +525,27 @@
     }
   }
 
+  /**
+   * Surface a dead extension context to the user, once.
+   *
+   * Guarded so the indicator is not rewritten on every reconnect attempt, and
+   * tolerant of running before the indicator exists (early init). Declared
+   * above its callers because the reconnect paths below can run before the
+   * rest of this IIFE has finished evaluating.
+   */
+  function markExtensionStale(err) {
+    if (staleNoticeShown) return;
+    staleNoticeShown = true;
+    const detail = (err && err.message) || "extension reloaded";
+    console.warn(`[Bridge] Extension context is gone (${detail}). Reload this tab to reconnect.`);
+    try {
+      createOrUpdateIndicator("stale", "Bridge: Reload this tab (extension reloaded)");
+    } catch (e) {
+      // Indicator is cosmetic; never let it break the reconnect path.
+    }
+  }
+  let staleNoticeShown = false;
+
   function initBridgePort() {
     if (typeof chrome === "undefined" || !chrome.runtime?.connect) return false;
     try {
@@ -550,6 +575,7 @@
           setTimeout(initBridgePort, 1000);
         } else {
           console.warn("[Bridge] Background bridge port disconnected; falling back to direct WebSocket.");
+          markExtensionStale();
           useBackgroundBridge = false;
           connectWebSocket();
         }
@@ -562,6 +588,14 @@
         setTimeout(initBridgePort, 2000);
         return false;
       }
+      // No runtime.id means the extension was reloaded or uninstalled while
+      // this content script was still alive. Every chrome.* call from here on
+      // throws, so the direct-WebSocket fallback is the only thing left that
+      // can work — and it usually cannot, because the coordinator on the other
+      // end is gone too. Say so on the indicator instead of leaving it reading
+      // "Online": a stale script that still claims to be connected is what
+      // makes this look healthy while the worker reports DISCONNECTED.
+      markExtensionStale(e);
       console.warn("[Bridge] Background bridge unavailable, using direct WebSocket:", e);
       useBackgroundBridge = false;
       return false;
@@ -809,6 +843,7 @@
           if (typeof chrome !== "undefined" && Boolean(chrome.runtime?.id)) {
             setTimeout(initBridgePort, 1000);
           } else {
+            markExtensionStale(e);
             useBackgroundBridge = false;
           }
         }
@@ -1959,10 +1994,23 @@
           }
           stopLeaderHeartbeat();
           if (isInBfcache) return; // page is frozen; pageshow rebuilds instead
-          console.warn("[Bridge] Coordinator port disconnected. Attempting reconnect...");
-          setTimeout(initCentralCoordinator, 1000);
+          if (typeof chrome !== "undefined" && Boolean(chrome.runtime?.id)) {
+            console.warn("[Bridge] Coordinator port disconnected. Attempting reconnect...");
+            setTimeout(initCentralCoordinator, 1000);
+          } else {
+            // Extension gone. Retrying here would loop forever against a
+            // runtime that no longer exists, so stop and say why.
+            markExtensionStale();
+            console.warn("[Bridge] Coordinator port disconnected and the extension context is gone; not retrying. Reload this tab.");
+          }
         });
       } catch (e) {
+        // The usual cause: chrome.runtime.connect() throws once the extension
+        // has been reloaded. Without this branch the tab retries silently and
+        // the indicator keeps claiming "Online" while the worker is dark.
+        if (typeof chrome === "undefined" || !chrome.runtime?.id) {
+          markExtensionStale(e);
+        }
         console.warn("[Bridge] Could not connect to background coordinator:", e);
       }
     }

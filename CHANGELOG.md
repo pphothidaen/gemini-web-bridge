@@ -2,6 +2,36 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.7.11] - 2026-09-29
+
+### Fixed
+- **A dead extension context looked healthy.** Reloading the extension at
+  `chrome://extensions` invalidates every live content script:
+  `chrome.runtime.id` becomes undefined and later `chrome.*` calls throw. The
+  page keeps the old script and it cannot re-inject itself, so the only
+  remedy is a tab reload — but nothing said so. Observed live: the worker
+  reported `extension_status: DISCONNECTED` while the on-page indicator still
+  read "Bridge: Online" in healthy green, because the stale script never
+  receives a disconnect notice and simply renders the last state it was told.
+  Anyone checking the UI concluded the bridge was fine. Meanwhile
+  `initCentralCoordinator` retried `chrome.runtime.connect()` every second
+  against a runtime that no longer existed, emitting an endless stream of
+  identical "Attempting reconnect..." warnings that all said the same
+  unactionable thing.
+
+  All four reconnect sites now check `chrome.runtime.id` first. A missing
+  runtime calls `markExtensionStale()`, which puts the indicator into a
+  distinct `stale` state — purple `#a855f7`, no pulse — reading "Reload this
+  tab (extension reloaded)". The remedy names the tab, not the extension,
+  because reloading the extension is what caused the state. The notice is
+  latched so reconnects cannot flicker it, and its indicator write is wrapped
+  in try/catch so a cosmetic failure cannot break recovery.
+
+  `tests/extension-stale-context.test.mjs` pins the detection on every retry
+  site, the distinct colour, the actionable text, the latch, and the
+  declaration order of the flag (a `let` read from a path that can run during
+  init would be a temporal-dead-zone crash).
+
 ## [4.7.10] - 2026-09-29
 
 ### Fixed
