@@ -66,6 +66,58 @@ export const DOM_SIGNALS = [
     }
   },
   {
+    // The signal that decides grounded vs not. Load-bearing: if this
+    // selector is wrong, every grounded answer is reported ungrounded and
+    // the tool refuses to answer at all.
+    //
+    // Evidence is a count, not a capture. chips=7 and chips=8 were logged
+    // on grounded runs on 2026-09-29, so the selector demonstrably matches.
+    // A capture of what the element looks like is T3 in KAN-200 and is the
+    // one thing here that cannot be transcribed from existing evidence.
+    id: 'grounding.source_chip',
+    file: 'extension-cloudflare/notebook-attach.js',
+    selector: 'source-inline-chip',
+    scope: 'newest-response',
+    states: { generating: null, settled: null },
+    observed: true,
+    evidenceKind: 'count-only',
+    unobservedBecause:
+      'Observed working by count only: chips=7 and chips=8 on grounded runs ' +
+      '(2026-09-29). The element itself has not been captured, so no state is ' +
+      'claimed and the contract checks nothing here yet. T3 in KAN-200.',
+    measured: {
+      date: '2026-09-29',
+      fixture: 'generating-signal.json',
+      method: 'Counted 7-8 matches per grounded response. Not a DOM capture; recorded as count-only rather than dressed up as one.'
+    }
+  },
+  {
+    // The second grounding signal, and it has never fired once. Every
+    // recorded grounded run logged chips=7 cites=0 or chips=8 cites=0.
+    //
+    // It is declared here so the record says plainly that the grounding
+    // check rests on ONE signal, not two. A branch that cannot be taken is
+    // not a second opinion; it is decoration that made the check look
+    // stronger than it was.
+    id: 'grounding.cite_marker',
+    file: 'extension-cloudflare/notebook-attach.js',
+    selector: 'text:/\\[cite:\\s*\\d+\\]/',
+    scope: 'text-content',
+    states: { generating: null, settled: null },
+    observed: false,
+    unobservedBecause:
+      'Never matched. cites=0 on every grounded run recorded 2026-09-29 ' +
+      'while chips was 7-8, so the chip selector is carrying the whole ' +
+      'decision alone. Kept in the code because the worker error path and ' +
+      'the health report both carry the field, and a renderer that does emit ' +
+      'inline markers would otherwise be invisible.',
+    measured: {
+      date: '2026-09-29',
+      fixture: 'generating-signal.json',
+      method: 'Regex over response innerText on every grounded run; zero matches each time. Counts, not a capture.'
+    }
+  },
+  {
     id: 'response.spinner',
     file: 'extension-cloudflare/native-recovery.js',
     selector: SPINNER,

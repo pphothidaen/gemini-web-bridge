@@ -1,0 +1,117 @@
+{
+  "captured": "2026-09-29",
+  "scope": "surface",
+  "note": "Live console output from real runs on this build, transcribed. NOT a DOM capture: these are the selector strings Gemini's own console proved were matched, recorded as a string and the step that proved it. No text content, no tokens. A true DOM capture of the attach flow and prompt box is T3 in KAN-200; this is the evidence that already exists, put somewhere a test can read it.",
+  "method": "Each entry names a step from the bridge's own instrumentation, logged during horo_consult runs that reached a grounded answer. A step logging 'ok' means the selector resolved to a live element - the same evidence that made a wrong selector obvious in KAN-197.",
+  "surfaces": {
+    "attach": {
+      "proved_by_run": "horo_consult, ATTACH_NOTEBOOK ok (attached=[\"Horo\"])",
+      "selectors": [
+        {
+          "selector": "input-area-v2 mat-icon[data-mat-icon-name=\"plus\"]",
+          "step": "open_plus",
+          "result": "ok (clicked=true)"
+        },
+        {
+          "selector": "button.more-upload-button[cdkoverlayorigin]",
+          "step": "more_uploads",
+          "result": "ok"
+        },
+        {
+          "selector": "[data-test-id=\"notebooks-import-button\"]",
+          "step": "notebooks",
+          "result": "ok"
+        },
+        {
+          "selector": "mat-dialog-container",
+          "step": "dialog",
+          "result": "ok"
+        },
+        {
+          "selector": "[data-test-id=\"notebook-item-title\"]",
+          "step": "select_row",
+          "result": "ok (notebook=\"Horo\")"
+        },
+        {
+          "selector": "[data-test-id=\"add-button\"]",
+          "step": "confirm",
+          "result": "ok"
+        },
+        {
+          "selector": "input-area-v2 uploader-file-preview",
+          "step": "verify",
+          "result": "ok"
+        }
+      ]
+    },
+    "typing": {
+      "proved_by_run": "horo_consult, TYPE_PROMPT submitted (step=fill ok chars=349)",
+      "selectors": [
+        {
+          "selector": "input-area-v2 .ql-editor[contenteditable=\"true\"]",
+          "step": "fill",
+          "result": "ok (chars=349)"
+        },
+        {
+          "selector": "input-area-v2 button:has(mat-icon[data-mat-icon-name=\"arrow_upward\"])",
+          "step": "send_button",
+          "result": "ok"
+        },
+        {
+          "selector": "input-area-v2 rich-textarea",
+          "step": "quill_host",
+          "result": "ok (Quill instance reachable)"
+        }
+      ]
+    },
+    "grounding": {
+      "proved_by_run": "horo_consult, VERIFY_GROUNDING grounded (chips=7, cites=0) and (chips=8, cites=0)",
+      "selectors": [
+        {
+          "selector": "model-response",
+          "step": "scope",
+          "result": "ok (newest reply located, 19 uses across the extension)"
+        },
+        {
+          "selector": "source-inline-chip",
+          "step": "grounding",
+          "result": "ok (7-8 per grounded answer)"
+        }
+      ],
+      "absent": [
+        {
+          "selector": "text:/\\[cite:\\s*\\d+\\]/",
+          "result": "0 matches on every grounded run - the branch has never been taken"
+        }
+      ]
+    },
+    "generating": {
+      "proved_by_run": "DOM sampled across one whole generation; see generating-signal.json",
+      "selectors": [
+        {
+          "selector": "[aria-busy=\"true\"]",
+          "step": "generating",
+          "result": "present while streaming, absent once settled"
+        }
+      ],
+      "absent": [
+        {
+          "selector": "div.loading-content-spinner-container",
+          "result": "zero elements, both states"
+        },
+        {
+          "selector": "mat-progress-spinner.mat-mdc-progress-spinner",
+          "result": "zero elements, both states"
+        },
+        {
+          "selector": "button[aria-label*=\"Stop generating\"]",
+          "result": "zero elements, both states"
+        },
+        {
+          "selector": "clipPath[id^=\"__lottie_element\"]",
+          "result": "zero elements, both states"
+        }
+      ]
+    }
+  }
+}

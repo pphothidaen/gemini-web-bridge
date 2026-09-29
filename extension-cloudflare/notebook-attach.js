@@ -499,11 +499,23 @@
       .map((c) => (c.innerText || c.textContent || "").replace(/\s+/g, " ").trim())
       .filter(Boolean);
 
-    // A citation marker in the answer text is the second, independent
-    // signal. Either one is enough to call the answer grounded; both are
-    // reported so a partial render (chips present, text still streaming)
-    // is visible in the health report rather than looking like a clean
-    // negative.
+    // A citation marker in the answer text is the second signal, and either
+    // one is enough to call the answer grounded.
+    //
+    // It has never fired. On every grounded run recorded on 2026-09-29 the
+    // chip count was 7 or 8 and this count was 0 — chips=7 cites=0,
+    // chips=8 cites=0. So `[cite: N]` is not a second opinion on this
+    // build; it is a branch that cannot be taken, and reporting it as an
+    // independent signal made the check look stronger than it was.
+    //
+    // It is kept, and reported as zero, rather than deleted, for two
+    // reasons: the worker's error path and the health report both carry the
+    // field, and a renderer that does emit inline markers would otherwise
+    // become invisible. What changes is the claim — see the comment at the
+    // declaration in tests/helpers/dom-signal.mjs, where this is recorded as
+    // declared-and-unobserved with the counts that establish it. If a future
+    // capture shows markers, the contract starts checking them and this
+    // comment goes.
     const citeMarkers = ((latest.innerText || "").match(/\[cite:\s*\d+\]/g) || []).length;
     const chipCount = sources.length;
 

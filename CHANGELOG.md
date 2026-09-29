@@ -2,6 +2,39 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.7.16] - 2026-09-29
+
+### Fixed
+- **The grounding check claimed two independent signals and had one.**
+  `readGroundingEvidence` counts `source-inline-chip` elements and
+  `[cite: N]` markers, and the comment called them independent: either was
+  enough to call an answer grounded. On every grounded run recorded
+  2026-09-29 the chip count was 7 or 8 and the marker count was 0 - so the
+  marker branch has never been taken, and the chip selector has been
+  carrying the entire decision alone. A branch that cannot fire is not a
+  second opinion; it is decoration that made a weaker check look stronger.
+  Both signals are now declared in the DOM signal contract with the counts
+  that establish this, and a test fails if either claim is quietly upgraded.
+
+### Added
+- **A sweep that ends the open-endedness.** Fixing did not terminate because
+  each fix exposed the next unverified selector, and the contract covered
+  four of roughly twenty. Every load-bearing selector the extension reads is
+  now either confirmed working by live console evidence or confirmed absent
+  on this build, recorded in `tests/fixtures/observed-selectors.json`. A test
+  walks the load-bearing list and fails on any selector with no evidence, so
+  a new selector added without a measurement is caught here rather than in
+  production.
+
+  The fixture is counts and step results, not a DOM capture, and says so
+  plainly. Presenting it as a capture would repeat the mistake it fixes.
+  A true DOM capture of the attach flow and prompt box remains open as the
+  one measurement that cannot be transcribed.
+
+### Notes
+- Not deployed. The worker still runs 4.7.11; `wrangler deploy` is left to the
+  operator.
+
 ## [4.7.15] - 2026-09-29
 
 ### Added

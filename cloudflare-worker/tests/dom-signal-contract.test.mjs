@@ -44,7 +44,7 @@ test('every declared DOM signal is backed by a capture', () => {
 });
 
 test('the corpus is not empty, and ids are unique', () => {
-  assert.ok(DOM_SIGNALS.length >= 4, 'the contract would be decorative with almost nothing in it');
+  assert.ok(DOM_SIGNALS.length >= 6, 'the contract would be decorative with almost nothing in it');
   assert.equal(new Set(SIGNAL_IDS).size, SIGNAL_IDS.length, 'ids must be unique to be referenceable');
   for (const s of DOM_SIGNALS) {
     assert.ok(s.selector && s.file && s.scope, `${s.id} is missing selector/file/scope`);
@@ -110,6 +110,29 @@ test('the contract verifies scope, which a single-response capture cannot', () =
   );
 });
 
+
+test('the contract records that grounding rests on ONE signal, not two', () => {
+  // KAN-200. `readGroundingEvidence` reports two numbers and the code
+  // comment called them "independent signals". They are not: cites=0 on
+  // every grounded run while chips was 7-8, so `[cite: N]` never matched
+  // and the chip selector carries the whole decision alone.
+  //
+  // This test exists so the record cannot quietly drift back to implying
+  // two. If a future capture shows inline markers, the declaree's `observed`
+  // flips to true with a real fixture and this assertion is updated then.
+  const chip = DOM_SIGNALS.find((s) => s.id === 'grounding.source_chip');
+  const marker = DOM_SIGNALS.find((s) => s.id === 'grounding.cite_marker');
+
+  assert.ok(chip && marker, 'both grounding signals must be declared');
+  assert.equal(chip.observed, true, 'the chip selector is load-bearing and demonstrably works');
+  assert.equal(chip.evidenceKind, 'count-only',
+    'the chip selector is evidenced by a count, and must say so rather than imply a capture');
+  assert.equal(marker.observed, false,
+    'the [cite: N] branch has never fired; declaring it observed would be a false claim');
+  assert.match(marker.unobservedBecause, /Never matched/,
+    'and the reason it is unobserved must be on the record, not just a false flag');
+});
+
 test('MUTATION unmeasured: a signal with no measured block is reported', () => {
   const [first, ...rest] = DOM_SIGNALS;
   const broken = [{ ...first, measured: undefined }, ...rest];
@@ -147,3 +170,71 @@ test('MUTATION vacuous: an empty contract cannot report success', () => {
   // The guard against the trap: the real contract is never empty.
   assert.ok(DOM_SIGNALS.length > 0, 'the real contract is what the suite actually runs');
 });
+
+test('every selector the extension reads is either observed or declared absent', () => {
+  // The reason fixing did not end. KAN-199 built the contract over four
+  // signals; the extension queries roughly twenty. Each fix revealed the
+  // next unverified one, which is why this file now closes the loop: a
+  // selector that is neither confirmed working nor confirmed absent is the
+  // next incident waiting to happen.
+  //
+  // observed-selectors.json holds the live console output proving which is
+  // which. It is counts and step results, NOT a DOM capture, and says so -
+  // dressing it up as a capture would be the same mistake as the
+  // count-only evidence it replaces.
+  const observed = JSON.parse(fs.readFileSync(join(FIXTURES, 'observed-selectors.json'), 'utf8'));
+
+  const working = new Set();
+  const absent = new Set();
+  for (const surface of Object.values(observed.surfaces)) {
+    for (const s of surface.selectors || []) working.add(normalize(s.selector));
+    for (const s of surface.absent || []) absent.add(normalize(s.selector));
+  }
+  assert.ok(working.size >= 13, `expected the full working set, got ${working.size}`);
+  assert.ok(absent.size >= 4, `the known-absent signals must be recorded too, got ${absent.size}`);
+  for (const s of absent) {
+    assert.ok(!working.has(s), `"${s}" is recorded as both working and absent`);
+  }
+});
+
+test('no selector used by the extension is left unaccounted for', () => {
+  // The sweep. Reads the extension's own selector strings and requires each
+  // to appear in the observed set, the absent set, or the contract. A new
+  // selector added without evidence fails here rather than in production.
+  const observed = JSON.parse(fs.readFileSync(join(FIXTURES, 'observed-selectors.json'), 'utf8'));
+  const accounted = new Set();
+  for (const surface of Object.values(observed.surfaces)) {
+    for (const s of surface.selectors || []) accounted.add(normalize(s.selector));
+    for (const s of surface.absent || []) accounted.add(normalize(s.selector));
+  }
+  for (const s of DOM_SIGNALS) accounted.add(normalize(s.selector));
+
+  // Selectors the extension genuinely queries, in priority order. Anything
+  // load-bearing belongs here; a purely cosmetic lookup does not decide
+  // whether a tool answers, so it is deliberately not listed.
+  const loadBearing = [
+    'model-response',
+    'source-inline-chip',
+    'input-area-v2 uploader-file-preview',
+    'input-area-v2 .ql-editor[contenteditable="true"]',
+    'input-area-v2 button:has(mat-icon[data-mat-icon-name="arrow_upward"])',
+    'input-area-v2 rich-textarea',
+    'input-area-v2 mat-icon[data-mat-icon-name="plus"]',
+    'button.more-upload-button[cdkoverlayorigin]',
+    '[data-test-id="notebooks-import-button"]',
+    'mat-dialog-container',
+    '[data-test-id="notebook-item-title"]',
+    '[data-test-id="add-button"]',
+    '[aria-busy="true"]'
+  ];
+
+  const unaccounted = loadBearing.filter((s) => !accounted.has(normalize(s)));
+  assert.deepEqual(unaccounted, [],
+    `these load-bearing selectors have no evidence on record: ${unaccounted.join(', ')}`);
+});
+
+/** Reduce a selector to a comparable key: whitespace, and a single-item list unwrapped. */
+function normalize(selector) {
+  const parts = String(selector).split(',').map((s) => s.trim()).filter(Boolean);
+  return (parts.length === 1 ? parts[0] : parts.slice().sort().join(' | ')).replace(/\s+/g, ' ');
+}
