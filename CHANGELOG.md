@@ -2,6 +2,43 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.7.18] - 2026-09-29
+
+### Fixed
+- **Answers were being cut off, and the bridge reported success.** Four
+  consecutive `orchestrate_sdlc_plan` calls over production returned 442,
+  4,227, 4,892 and 6,735 characters; three ended mid-sentence or mid-table.
+  The decisive observation: the DOM response measured 26px while the MCP
+  caller received 6,735 characters — the two are not the same text, because
+  the replay path is a separate request from the one the page renders.
+
+  The cause is `adoptText` in `runReplayAttempt`, which drops any update that
+  does not extend the accumulated prefix. That is correct for the side-entry
+  frames Gemini appends, and it is also what loses a continuation; the
+  comment above `decodeChunk` already records this class of failure for
+  `orchestrate_sdlc_plan`, fixed for the link-only shape but not the
+  truncated-prose shape.
+
+  Every MCP tool now goes through the typed path. The routing is
+  unconditional rather than `requireGrounding: true`, because the four
+  ungrounded tools are the ones that truncate. The typed path renders into
+  the DOM and is read back whole — which is why `horo_consult`, the one tool
+  already on it, was the one returning complete prose.
+
+- **A run that worked but was quietly wrong had nowhere to report itself.**
+  `check_bridge_health` read `healthy` with `consecutive_errors: 0` through
+  all four truncated answers. A health *signal* now exists alongside errors:
+  it records a caveat without claiming a failure, does not touch the error
+  counters, and is surfaced as `last_signal` in the health report. Replay
+  dropped-update counts are recorded through it, so the OpenAI-compatible
+  endpoints — which have no typed equivalent — are no longer silent.
+
+### Notes
+- Replay is not removed. The `/v1/chat/completions` family still uses it, and
+  the signal is how an operator learns their answer may be incomplete.
+- Not deployed at the time of writing; `wrangler deploy` is left to the
+  operator as always.
+
 ## [4.7.17] - 2026-09-29
 
 ### Added

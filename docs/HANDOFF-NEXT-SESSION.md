@@ -3,9 +3,9 @@
 > **Written:** 2026-09-29, at the close of KAN-182
 > **Updated:** 2026-09-29 21:55 +07 — after KAN-190…199 (see §9, §12)
 > **Branch:** `main` · **HEAD:** see `git log -1` · working tree **clean**
-> **Production:** worker **v4.7.11** (NOT deployed) · extension **v4.7.17**
+> **Production:** worker **v4.7.18** (NOT deployed) · extension **v4.7.18**
 >   · DO `6b288492-974c-4172-9fc5-737348a4a093`
-> **Tests:** 502 passing, 0 failing, 5 skipped
+> **Tests:** 508 passing, 0 failing, 5 skipped
 > **Build:** run `python3 scripts/build-extension.py --verify` before trusting
 >   any live result — a stale build has invalidated one already (KAN-192)
 > **For:** whoever picks this project up next — you do **not** need to read the

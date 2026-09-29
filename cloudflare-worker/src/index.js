@@ -1,6 +1,6 @@
 // Cloudflare Worker: Stateful Gemini Web-Bridge Edge Hub
 // Architecture: Cloudflare Durable Objects (Unified WSS + HTTP Stateful Coordinator)
-// Version: 4.7.17 (see WORKER_VERSION below — this comment is informational only)
+// Version: 4.7.18 (see WORKER_VERSION below — this comment is informational only)
 
 import { normalizeModels, recommendedModel } from "./model-catalog.js";
 import { PONG_GRACE_MS, isKeepaliveMissed, isEvictable } from "./liveness.js";
@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.17";
+const WORKER_VERSION = "4.7.18";
 
 // ─── Verbose logging gate ────────────────────────────────────────
 // console.log is not free in Workers: each call formats its arguments,
@@ -383,6 +383,11 @@ export class GeminiBridgeDO extends DurableObject {
       lastSuccessfulGeneration: this._lastSuccessfulGeneration || null,
       consecutiveErrors: this._consecutiveErrors || 0,
       lastError: this._lastError || null,
+      // KAN-202: a caveat on an otherwise-successful run. Not an error and
+      // not a failure — see recordHealthSignal. Surfaced so a run that
+      // worked but was quietly incomplete is visible rather than invisible.
+      lastSignal: this._lastSignal || null,
+      lastSignalAt: this._lastSignalAt || null,
       lastHealthCheck: Date.now(),
       activeConnections: this.activeConnections.size,
       currentEpoch: this.epochCounter
@@ -411,6 +416,26 @@ export class GeminiBridgeDO extends DurableObject {
     this._lastSuccessfulGeneration = Date.now();
     this._consecutiveErrors = 0;
     this._lastError = null;
+  }
+
+  /**
+   * Record something worth knowing that is NOT a failure.
+   *
+   * KAN-202. A success signal was previously the only kind of good news the
+   * health state could carry, so a run that *worked* but was quietly wrong —
+   * four consecutive `orchestrate_sdlc_plan` answers truncated mid-sentence
+   * while `check_bridge_health` read `healthy` and `consecutive_errors: 0` —
+   * had nowhere to go.
+   *
+   * A signal is deliberately not an error: it does not clear the error
+   * counters, does not flip the status, and does not claim a failure. It
+   * records that the happy path was taken with a caveat, so the condition is
+   * visible to whoever looks next. `_lastSignal` is surfaced in
+   * `check_bridge_health` alongside `last_error`.
+   */
+  recordHealthSignal(message) {
+    this._lastSignal = message ?? null;
+    this._lastSignalAt = Date.now();
   }
 
   resetModelCatalog() {
@@ -1670,7 +1695,30 @@ export class GeminiBridgeDO extends DurableObject {
     // caller just paid for. The typed path is not a fallback there; it is the
     // only path in which the PAGE builds the request, and the page is what
     // carries the attachment.
-    const { requireGrounding = false } = opts;
+    // KAN-202: `requireTypedPath` forces the typing path for a second,
+    // independent reason — the answer must be COMPLETE, not grounded.
+    //
+    // Measured 2026-09-29: four consecutive `orchestrate_sdlc_plan` calls
+    // over production returned 442, 4,227, 4,892 and 6,735 characters. Three
+    // of the four ended mid-sentence or mid-table, and `check_bridge_health`
+    // reported `consecutive_errors: 0` and `healthy` throughout. The decisive
+    // observation: the DOM response measured 26px while the MCP caller
+    // received 6,735 characters. The two are not the same text.
+    //
+    // The cause is `adoptText` in runReplayAttempt, which drops any update
+    // that does not extend the accumulated prefix. That is correct for the
+    // side-entry frames Gemini appends, and it is also why a long answer can
+    // lose its continuation: the source comment above decodeChunk already
+    // records this class of failure ("long SDLC tool output come back
+    // empty/link-only"). It was fixed for the link-only shape and not for the
+    // truncated-prose shape.
+    //
+    // So replay cannot be trusted to deliver a complete answer, and
+    // `STREAM_DONE` reports success regardless. The typed path is the one
+    // that renders into the DOM and can be read back whole — which is why
+    // horo_consult, the one tool that used it, was the only one returning
+    // complete prose.
+    const { requireGrounding = false, requireTypedPath = false } = opts;
 
     if (!this.isExtensionReady()) {
       const err = new Error("Extension not connected");
@@ -1697,10 +1745,16 @@ export class GeminiBridgeDO extends DurableObject {
     // because a replayed answer can never be grounded (see `requireGrounding`
     // above) — so attempting it first would spend the attach and still return
     // an ungrounded result.
-    const useTypedOnly = requireGrounding;
+    //
+    // KAN-202 adds the second reason: replay can also return an incomplete
+    // answer, silently. Same routing, different justification, so the log
+    // line names which one applied.
+    const useTypedOnly = requireGrounding || requireTypedPath;
     try {
       if (useTypedOnly) {
-        vlog(`[Bridge DO] Grounding required; using the typed path (replay cannot carry a notebook reference).`);
+        vlog(`[Bridge DO] ${requireGrounding
+          ? "Grounding required"
+          : "Complete answer required"}; using the typed path (replay cannot ${requireGrounding ? "carry a notebook reference" : "deliver a complete long answer"}).`);
         throw Object.assign(new Error("replay_skipped_for_grounding"), { __typedOnly: true });
       }
       text = await this.runReplayAttempt({ requestId, encodedReq, model, onChunk });
@@ -2096,9 +2150,20 @@ export class GeminiBridgeDO extends DurableObject {
       // googleusercontent.com/lmdx_content link, a re-render) and blindly
       // replacing truncates long answers — this is what made
       // orchestrate_sdlc_plan return link-only or empty text.
+      // KAN-202: a rejected update is normal for the side-entry frames Gemini
+      // appends (the trailing lmdx link, LMDX UI components). It is ALSO what
+      // a dropped continuation looks like, and the two are indistinguishable
+      // from here. So it is not treated as a failure — the answer may be
+      // fine — but it is counted, and STREAM_DONE reports the count so a
+      // silently truncated answer is at least visible instead of being
+      // recorded as a clean success.
+      let droppedUpdates = 0;
       const adoptText = (candidate) => {
         if (!candidate) return false;
-        if (candidate.length < fullText.length && !candidate.startsWith(fullText)) return false;
+        if (candidate.length < fullText.length && !candidate.startsWith(fullText)) {
+          droppedUpdates += 1;
+          return false;
+        }
         if (candidate === fullText) return false;
         fullText = candidate;
         return true;
@@ -2124,6 +2189,17 @@ export class GeminiBridgeDO extends DurableObject {
           this.activeStreams.delete(requestId);
           const { deltaText } = ProtocolDecoder.decodeChunk(rpcBuffer);
           adoptText(deltaText);
+          // KAN-202: `STREAM_DONE` used to record an unqualified success.
+          // When updates were dropped the answer may have lost its tail, and
+          // nothing downstream could tell — `check_bridge_health` reported
+          // `healthy` through four consecutive truncated answers. Recording
+          // the count makes the condition visible without claiming a failure
+          // we cannot prove.
+          if (droppedUpdates > 0) {
+            this.recordHealthSignal(
+              `replay_dropped_updates:${droppedUpdates}@${fullText.length}chars`
+            );
+          }
           this.recordHealthSuccess();
           Promise.resolve().then(() => onChunk?.(fullText, fullText)).then(() => resolve(fullText), reject);
         } else if (msg.type === "STREAM_ERROR") {
@@ -3618,11 +3694,26 @@ export class GeminiBridgeDO extends DurableObject {
               // replay is skipped for it — see `requireGrounding`. Attempting
               // replay first would spend the attach and still return an
               // ungrounded answer.
+              //
+              // KAN-202: every MCP tool here goes through the typed path, for
+              // a second and independent reason. These tools return long
+              // structured prose, and the replay path was measured returning
+              // four answers of which three were cut off mid-sentence or
+              // mid-table while `check_bridge_health` read `healthy`. The
+              // typed path renders into the DOM and is read back whole, which
+              // is why horo_consult — the one tool already on it — was the one
+              // returning complete prose.
+              //
+              // So this is unconditional rather than `requireGrounding: true`,
+              // which would exempt the four ungrounded tools. Replay remains
+              // reachable for the OpenAI-compatible endpoints below, where the
+              // same caveat is now recorded as a health signal instead of
+              // passing silently.
               let resultText = await this.executeThroughExtension(
                 [{ role: "user", content: prompt }],
                 null,
                 targetModel,
-                { requireGrounding: Boolean(notebookGrounding) }
+                { requireGrounding: Boolean(notebookGrounding), requireTypedPath: true }
               );
 
               // Never hand an empty/blank answer back to the MCP client. Gemini
@@ -3896,6 +3987,10 @@ export class GeminiBridgeDO extends DurableObject {
           last_successful_generation: this.healthState.lastSuccessfulGeneration,
           consecutive_errors: this.healthState.consecutiveErrors,
           last_error: this.healthState.lastError,
+          // KAN-202: caveats on successful runs (e.g. a replay stream that
+          // dropped updates). Null in the normal case.
+          last_signal: this.healthState.lastSignal,
+          last_signal_at: this.healthState.lastSignalAt,
           gcp_fallback_configured: Boolean(this.env.GEMINI_API_KEY)
         },
         conversation_state: {
