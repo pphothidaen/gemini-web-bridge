@@ -15,11 +15,9 @@ orchestration/*.exit
 **/orchestration/*.log
 **/orchestration/*.exit
 artifacts/
-release/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-dist/
 .vscode/
 FAILURE_ANALYSIS.json
 

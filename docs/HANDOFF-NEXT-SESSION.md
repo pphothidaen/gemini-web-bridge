@@ -28,10 +28,21 @@ Three known behaviours, all of which look like bugs and are not:
   purple "Reload this tab (extension reloaded)" (KAN-191).
 - **Deploying restarts the DO** and drops the WebSocket, so the extension
   reports DISCONNECTED for a few seconds. Reloading the tab reconnects it.
-- **`dist/extension` is the build, and it is gitignored.** It goes stale the
-  moment you edit `extension-cloudflare/*.js` without rebuilding, and it can
-  disagree with the source while its manifest already claims the new version.
-  That exact mismatch hid a live verification once. Rebuild before loading.
+- **`dist/extension` is the build, and it is gitignored.** It used to go stale
+  silently — a manifest claiming the new version beside JavaScript from the
+  previous build. That exact mismatch hid a live verification once, and two
+  output roots (`dist/` and a repo-root `release/` that was still holding
+  v4.4.3) made it worse. There is now one root and a stamp:
+
+  ```bash
+  python3 scripts/build-extension.py              # -> dist/extension + dist/extension-<v>.zip
+  python3 scripts/build-extension.py --verify     # exits 1 if dist/ is behind source
+  ```
+
+  `--verify` compares a SHA of `extension-cloudflare/**` against the value
+  recorded in `dist/extension/BUILD.json`, so it catches an uncommitted edit —
+  a commit-SHA check cannot, because the tree is dirty most of the time.
+  **Run it before trusting any live browser result.**
 
 ### The verification that closed it
 

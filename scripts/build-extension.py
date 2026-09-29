@@ -35,9 +35,22 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = REPO_ROOT / "extension-cloudflare"
-DEFAULT_OUT_DIR = REPO_ROOT / "dist" / "extension"
+
+# ONE build root. Everything the build produces lives under dist/ so there is
+# never a second copy to fall out of date:
+#
+#   dist/extension/            unpacked build — "Load unpacked" points here
+#   dist/extension/BUILD.json  stamp: version, commit, build time
+#   dist/extension-<v>.zip     packaged release + .md5
+#
+# The old repo-root release/ directory is gone; RELEASE_DIR is kept only so
+# existing callers raise a clear error instead of silently writing elsewhere.
+DIST_DIR = REPO_ROOT / "dist"
+DEFAULT_OUT_DIR = DIST_DIR / "extension"
 MANIFEST_PATH = SRC_DIR / "manifest.json"
-RELEASE_DIR = REPO_ROOT / "release"
+RELEASE_DIR = DIST_DIR
+
+STAMP_NAME = "BUILD.json"
 
 PLACEHOLDER_PATTERNS = {
     "__BRIDGE_SECRET__": "BRIDGE_SECRET",
@@ -321,19 +334,150 @@ def build_extension(
     print(f"✅ Extension built to: {output_dir}")
     print(f"   Version: v{version}")
     print(f"   Load unpacked from this directory in Chrome")
-    print(f"   Or install from: {REPO_ROOT / 'release' / f'gemini-bridge-v{version}.zip'}")
+    print(f"   Or install from: {RELEASE_DIR / f'extension-{version}.zip'}")
 
     # Write .gitignore for output
     gitignore_path = output_dir / ".gitignore"
     gitignore_path.write_text("*", encoding="utf-8")
     print(f"   Added .gitignore (build artifacts not committed)")
 
+    write_build_stamp(output_dir, version)
     return version
 
 
+def _git(*args: str) -> str:
+    """Run a git command, returning "" on any failure (e.g. no repo)."""
+    try:
+        out = subprocess.run(
+            ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, timeout=10
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _source_version() -> str:
+    """Version declared in the source manifest — the one git tracks."""
+    try:
+        return json.loads(MANIFEST_PATH.read_text(encoding="utf-8")).get("version", "")
+    except Exception:
+        return ""
+
+
+def _source_digest() -> str:
+    """
+    Hash the source files that actually feed the build.
+
+    Comparing commit SHAs is not enough: the working tree is dirty most of
+    the time during development, so the same commit covers an untouched tree
+    and one where content.js was just edited. That is precisely the case that
+    let a live verification run against a stale build. Hashing the inputs
+    catches "the source moved, the build did not", regardless of git.
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    for path in sorted(SRC_DIR.rglob("*")):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        rel = path.relative_to(SRC_DIR).as_posix()
+        h.update(rel.encode("utf-8"))
+        try:
+            h.update(path.read_bytes())
+        except OSError:
+            continue
+    return h.hexdigest()[:12]
+
+
+def write_build_stamp(output_dir: Path, version: str) -> Path:
+    """
+    Record what this build was made from.
+
+    A built manifest can carry a new version while the JS beside it is from an
+    earlier build — that mismatch once hid a live verification, because the
+    version looked current and nobody asked whether the code was. The stamp
+    makes the two comparable: if the version or the commit moves without a
+    rebuild, verify_build() says so instead of the build going quietly stale.
+    """
+    stamp = {
+        "version": version,
+        "source_version": _source_version(),
+        "source_digest": _source_digest(),
+        "commit": _git("rev-parse", "--short", "HEAD"),
+        "dirty": bool(_git("status", "--porcelain")),
+        "built_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    path = output_dir / STAMP_NAME
+    path.write_text(json.dumps(stamp, indent=2) + "\n", encoding="utf-8")
+    print(f"   Stamped {STAMP_NAME} (commit {stamp['commit'] or 'unknown'}"
+          f"{', dirty tree' if stamp['dirty'] else ''})")
+    return path
+
+
+def verify_build() -> int:
+    """
+    Report whether dist/extension still matches the source it was built from.
+
+    Exit 0 when fresh, 1 when stale or missing. This is the check to run
+    before trusting anything about a live browser session, because "the
+    extension is loaded" does not imply "the extension has the current code".
+    """
+    out_dir = DEFAULT_OUT_DIR
+    stamp_path = out_dir / STAMP_NAME
+
+    if not (out_dir / "manifest.json").is_file():
+        print(f"❌ No build at {out_dir}")
+        print("   Run: python3 scripts/build-extension.py")
+        return 1
+
+    if not stamp_path.is_file():
+        print(f"⚠️  Build at {out_dir} has no {STAMP_NAME} (built before stamping).")
+        print("   Rebuild to get a comparable stamp.")
+        return 1
+
+    try:
+        stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"❌ {STAMP_NAME} is unreadable: {e}")
+        return 1
+
+    src_ver = _source_version()
+    built_ver = stamp.get("version", "")
+    head = _git("rev-parse", "--short", "HEAD")
+    problems = []
+
+    if src_ver and built_ver and src_ver != built_ver:
+        problems.append(f"version: built {built_ver}, source is {src_ver}")
+
+    # The decisive check: did the source move since this build?
+    src_digest = _source_digest()
+    built_digest = stamp.get("source_digest", "")
+    if built_digest and src_digest and built_digest != src_digest:
+        problems.append(
+            f"source changed: built from {built_digest}, source is now {src_digest}"
+        )
+
+    if head and stamp.get("commit") and stamp["commit"] != head and not problems:
+        problems.append(f"commit: built {stamp['commit']}, HEAD is {head}")
+
+    if problems:
+        print(f"❌ STALE build at {out_dir}")
+        for p in problems:
+            print(f"   {p}")
+        print("   Chrome would be running older code than the repo. Run:")
+        print("   python3 scripts/build-extension.py   # then reload the extension")
+        return 1
+
+    print(f"✅ Build is current: v{built_ver} from {stamp.get('commit') or 'unknown'}"
+          f", built {stamp.get('built_at', 'unknown')}")
+    if stamp.get("dirty"):
+        print("   ⚠️  built from a dirty working tree")
+    return 0
+
+
 def create_release_zip(version: str, output_dir: Path) -> Path:
-    """Create release zip from built extension."""
-    zip_path = RELEASE_DIR / f"gemini-bridge-v{version}.zip"
+    """Package the built extension into dist/, beside the unpacked build."""
+    zip_path = RELEASE_DIR / f"extension-{version}.zip"
 
     # Remove old zip
     if zip_path.exists():
@@ -394,20 +538,20 @@ def zip_extension(output_dir: Path, version: str) -> Path:
 
 
 def clean(output_dir: Path) -> None:
-    """Clean build output."""
+    """Remove the unpacked build and every packaged artifact in dist/."""
     if output_dir.exists():
         shutil.rmtree(output_dir)
         print(f"✅ Cleaned: {output_dir}")
     else:
         print(f"Already clean: {output_dir}")
 
-    # Also clean release zip for this version
-    manifest = read_manifest()
-    version = manifest.get("version", "0.0.0")
-    zip_path = RELEASE_DIR / f"gemini-bridge-v{version}.zip"
-    if zip_path.exists():
-        zip_path.unlink()
-        print(f"✅ Cleaned zip: {zip_path.name}")
+    # Every zip in dist/ is a build artifact of this script, so clean them all
+    # rather than only the current version's — a stale one is the thing most
+    # likely to be loaded by mistake.
+    if RELEASE_DIR.is_dir():
+        for z in sorted(RELEASE_DIR.glob("extension-*.zip*")):
+            z.unlink()
+            print(f"✅ Cleaned: {z.name}")
 
 
 def main():
@@ -435,8 +579,17 @@ def main():
         help="Show what would be done without building"
     )
     parser.add_argument(
-        "--create-zip", "-z", action="store_true",
-        help="After building, create release zip artifact"
+        "--create-zip", "-z", action="store_true", default=True,
+        help="Package the build into dist/extension-<version>.zip (default: on)"
+    )
+    parser.add_argument(
+        "--no-zip", action="store_true",
+        help="Skip the zip; only the unpacked build in dist/extension is written"
+    )
+    parser.add_argument(
+        "--verify", action="store_true",
+        help="Check whether dist/extension still matches the source. No build. "
+             "Exits 1 if stale — run this before trusting a live browser session."
     )
     parser.add_argument(
         "--skip-build", action="store_true",
@@ -448,6 +601,13 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # --verify is a read-only check: no build, no secrets, no network.
+    if args.verify:
+        sys.exit(verify_build())
+
+    if args.no_zip:
+        args.create_zip = False
 
     # Handle upsert secrets command
     if args.upsert_secrets:
