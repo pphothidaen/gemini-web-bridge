@@ -302,30 +302,33 @@
         return { active: true, source: "response_stop_button" };
       }
 
-      // Class-based signal observed 2026-09-29 on the live DOM:
-      // `structured-content-container.processing-state-visible` and
-      // `structured-content-container.has-thoughts` are present on a
-      // descendant element while Gemini is still generating.
+      // The signal that actually tracks generation on this build is
+      // `aria-busy`, measured live on 2026-09-29 by sampling the DOM every
+      // couple of seconds across one whole generation:
       //
-      // IMPORTANT: these classes are also present on FINISHED responses, so
-      // the check MUST be scoped to the newest response. A document-wide
-      // querySelector for either class would fire forever, producing the same
-      // "generating: 1" wedge that motivated the sidenav guard above.
-      // querySelectorAll may be absent on minimal DOM stubs (tests); treat that
-      // as "not found" rather than throwing. Likewise, elements returned by
-      // querySelectorAll may lack className on some stubs — guard it.
-      if (typeof response.querySelectorAll === "function") {
-        const candidates = response.querySelectorAll("*");
-        for (let i = 0; i < candidates.length; i++) {
-          const cls = candidates[i].className;
-          if (typeof cls !== "string") continue;
-          if (cls.includes("processing-state-visible")) {
-            return { active: true, source: "processing_state_class" };
-          }
-          if (cls.includes("has-thoughts")) {
-            return { active: true, source: "thoughts_class" };
-          }
-        }
+      //   while generating : div.markdown[aria-busy="true"]   present
+      //   when finished   : (no such node)                   absent
+      //
+      // It is scoped to the newest response for the same reason the spinner
+      // is: an earlier turn's node is not evidence about this one.
+      //
+      // What this REPLACES, and why it mattered. An earlier version treated
+      // `processing-state-visible` and `has-thoughts` as generating signals.
+      // They are not — they are permanent. The same finished response carried
+      // `class="model-response-text has-thoughts processing-state-visible"`
+      // and a sibling `response-footer … has-thoughts complete`, and the
+      // finished footer is what proves the run was over. Treating those
+      // classes as "still generating" made isGenerating() return true
+      // forever, so handleCollectAnswer waited out its full 120s budget and
+      // failed with collect_answer_timeout on an answer that had been
+      // finished for a minute.
+      //
+      // The lesson is in the tests: they were written from that assumption
+      // rather than from a capture, so they passed against code that broke
+      // production. The fixtures in native-recovery-generating.test.mjs are
+      // now the measured before/after DOM.
+      if (response.querySelector('[aria-busy="true"]')) {
+        return { active: true, source: "response_aria_busy" };
       }
     }
 

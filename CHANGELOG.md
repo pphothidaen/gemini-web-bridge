@@ -2,6 +2,31 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.7.14] - 2026-09-29
+
+### Fixed
+- **The generating signal read two class names that never change.**
+  4.7.13 keyed `isGenerating()` on `processing-state-visible` and
+  `has-thoughts`, sampled once from a response that was still streaming. They
+  are permanent: the same response measured after settling still carried
+  `class="model-response-text has-thoughts processing-state-visible"`, beside
+  a `response-footer … has-thoughts complete`. So the signal stayed true after
+  the answer was done, `handleCollectAnswer` burned its full 120s budget, and
+  every call failed with `collect_answer_timeout` on an answer that had been
+  finished for a minute.
+
+  The signal is `aria-busy`, measured by sampling the DOM across one whole
+  generation: present at 1242px and again at 3508px, absent once settled.
+  It is the only candidate that differs between the two observed states.
+
+### Notes
+- The tests for this were written from the assumption rather than from a
+  capture, which is why they passed against code that wedged production. The
+  fixtures are now the measured before/after DOM, and re-introducing the
+  4.7.13 check fails four of them.
+- Not deployed. The worker still runs 4.7.11; `wrangler deploy` is left to the
+  operator.
+
 ## [4.7.13] - 2026-09-29
 
 ### Fixed
