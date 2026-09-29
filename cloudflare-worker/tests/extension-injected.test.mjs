@@ -246,6 +246,33 @@ test('decodeAndSanitizePayload strips prompt content from StreamGenerate body', 
   assert.ok(dumped.includes('"type":"string"'));
 });
 
+test('decodeAndSanitizePayload returns null when body has no f.req= envelope', () => {
+  // Bodies without f.req= at all — all three null guards in the function overlap;
+  // these act as basic sanity assertions but are NOT sufficient to pin the specific guard.
+  assert.equal(Injected.decodeAndSanitizePayload('count=1&event=click'), null);
+  assert.equal(Injected.decodeAndSanitizePayload('data=somevalue&other=stuff'), null);
+
+  // The mutation-pinning case: a body whose raw string does NOT contain the literal
+  // "f.req=" substring (so the guard `if (!bodyStr.includes("f.req=")) return null`
+  // must fire), but whose *decoded* URLSearchParams key IS "f.req" with a parseable
+  // JSON array value.  The encoded dot trick: `f%2Ereq=<payload>`.
+  //
+  // - Guard present  → bodyStr.includes("f.req=") is false → returns null ✓
+  // - Guard removed  → params.get("f.req") returns the payload → returns non-null ✗
+  //
+  // This is the only assertion that changes behaviour when the guard is mutated to
+  // `if (false) return null`.
+  const encodedKeyBody = 'f%2Ereq=' + encodeURIComponent(
+    JSON.stringify([null, JSON.stringify([[]])])
+  );
+  assert.ok(!encodedKeyBody.includes('f.req='), 'precondition: raw body must not contain literal f.req=');
+  assert.equal(
+    Injected.decodeAndSanitizePayload(encodedKeyBody),
+    null,
+    'guard must reject body that lacks the literal f.req= envelope'
+  );
+});
+
 test('matchRecognizedEndpoint recognizes StreamGenerate and rejects other hosts', () => {
   const match = Injected.matchRecognizedEndpoint(
     'https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=cfb2h_123'
