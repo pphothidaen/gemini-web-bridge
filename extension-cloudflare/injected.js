@@ -3,10 +3,12 @@
 // Declarative Early Interceptor & Native Gemini RPC Observer
 // ============================================================
 
-(function () {
+(function (root) {
   "use strict";
 
-  console.log("[Gemini Cloudflare Bridge Injected] Main World Interceptor Initialized (Declarative MAIN).");
+  if (typeof console !== "undefined" && console.log) {
+    console.log("[Gemini Cloudflare Bridge Injected] Main World Interceptor Initialized (Declarative MAIN).");
+  }
 
   // In-memory private storage in MAIN world (CSRF token NEVER leaves MAIN world)
   let activeCsrfToken = null;
@@ -43,7 +45,8 @@
    * Checks the host first, then the inner editor: different Gemini builds hang
    * the instance off different elements, and guessing wrong is silent.
    */
-  function findQuillInMainWorld(doc = document) {
+  function findQuillInMainWorld(doc = (typeof document !== "undefined" ? document : null)) {
+    if (!doc || typeof doc.querySelector !== "function") return null;
     const host = doc.querySelector(PROMPT_EDITOR_SELECTORS.richTextarea);
     if (!host) return null;
     if (host.__quill) return host.__quill;
@@ -140,17 +143,21 @@
       settleMs = 250,
       maxAttempts = 3,
       setT = setTimeout,
-      doc = document
+      doc = (typeof document !== "undefined" ? document : null)
     } = opts;
 
     const value = typeof text === "string" ? text : "";
     if (!value.trim()) {
       return { ok: false, reason: "empty_prompt", text: "", attempts: 0 };
     }
+    if (!doc || typeof doc.querySelector !== "function") {
+      return { ok: false, reason: "document_not_available", text: "", attempts: 0 };
+    }
 
     const sleep = (ms) => new Promise((resolve) => setT(resolve, ms));
     const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
     const editorSel = PROMPT_EDITOR_SELECTORS.editor;
+    const hostSel = PROMPT_EDITOR_SELECTORS.richTextarea;
     const wanted = norm(value);
 
     const readEditor = () => {
@@ -193,9 +200,10 @@
         }
         // Zone.js hooks native events, so give it one to enqueue an Angular tick.
         try {
-          editor.dispatchEvent(new InputEvent("input", {
-            bubbles: true, inputType: "insertText", data: value
-          }));
+          const evt = typeof InputEvent !== "undefined"
+            ? new InputEvent("input", { bubbles: true, inputType: "insertText", data: value })
+            : { type: "input", bubbles: true, inputType: "insertText", data: value };
+          editor.dispatchEvent(evt);
         } catch (e) {
           // The settled read below is still the verdict.
         }
@@ -218,9 +226,10 @@
         if (!inserted) {
           editor.textContent = value;
           try {
-            editor.dispatchEvent(new InputEvent("input", {
-              bubbles: true, inputType: "insertText", data: value
-            }));
+            const evt = typeof InputEvent !== "undefined"
+              ? new InputEvent("input", { bubbles: true, inputType: "insertText", data: value })
+              : { type: "input", bubbles: true, inputType: "insertText", data: value };
+            editor.dispatchEvent(evt);
           } catch (e) {
             // The settled read-back below is the real verdict.
           }
@@ -261,7 +270,7 @@
   // ─── 1. Token & Session Extraction (MAIN World Memory Only) ─
   function inspectWizGlobalData() {
     try {
-      const wizData = window.WIZ_global_data;
+      const wizData = (typeof window !== "undefined" && window.WIZ_global_data) || null;
       if (!wizData) return false;
 
       // Extract CSRF 'at' token - kept strictly inside MAIN world memory
@@ -283,28 +292,32 @@
 
   function broadcastSessionState() {
     const isReady = inspectWizGlobalData();
-    window.postMessage({
-      source: "GEMINI_INJECTED",
-      type: "SESSION_STATE",
-      payload: {
-        sessionReady: isReady,
-        buildLabel: activeBuildLabel,
-        sessionEpoch: currentSessionEpoch,
-        accountHash: activeAccountHash
-      }
-    }, "*");
+    if (typeof window !== "undefined" && typeof window.postMessage === "function") {
+      window.postMessage({
+        source: "GEMINI_INJECTED",
+        type: "SESSION_STATE",
+        payload: {
+          sessionReady: isReady,
+          buildLabel: activeBuildLabel,
+          sessionEpoch: currentSessionEpoch,
+          accountHash: activeAccountHash
+        }
+      }, "*");
+    }
     return isReady;
   }
 
   // Initial session broadcast with polling fallback until WIZ_global_data hydrates
-  if (!broadcastSessionState()) {
-    let attempts = 0;
-    const tokenPoll = setInterval(() => {
-      attempts++;
-      if (broadcastSessionState() || attempts > 30) {
-        clearInterval(tokenPoll);
-      }
-    }, 500);
+  if (typeof window !== "undefined") {
+    if (!broadcastSessionState()) {
+      let attempts = 0;
+      const tokenPoll = setInterval(() => {
+        attempts++;
+        if (broadcastSessionState() || attempts > 30) {
+          clearInterval(tokenPoll);
+        }
+      }, 500);
+    }
   }
 
   // ─── 2. Recognized Endpoints & Payload Decoder ─────────────
@@ -316,7 +329,8 @@
 
   function matchRecognizedEndpoint(urlStr) {
     try {
-      const parsed = new URL(urlStr, window.location.href);
+      const baseHref = (typeof window !== "undefined" && window.location?.href) || GEMINI_ORIGIN;
+      const parsed = new URL(urlStr, baseHref);
       if (parsed.origin !== GEMINI_ORIGIN) return null;
       for (const path of RECOGNIZED_PATHS) {
         if (parsed.pathname.includes(path)) {
@@ -400,118 +414,124 @@
   // ─── 3. Early Fetch & XHR Interceptors ───────────────────────
   // Captures SUCCESSFUL responses only. Zero learning from bridge replay.
 
-  const originalFetch = window.fetch;
+  const originalFetch = (typeof window !== "undefined" && typeof window.fetch === "function") ? window.fetch : null;
 
-  window.fetch = async function (input, init) {
-    let urlStr = "";
-    let requestInit = init || {};
+  if (typeof window !== "undefined" && originalFetch) {
+    window.fetch = async function (input, init) {
+      let urlStr = "";
+      let requestInit = init || {};
 
-    if (typeof input === "string") {
-      urlStr = input;
-    } else if (input instanceof URL) {
-      urlStr = input.toString();
-    } else if (input && typeof input === "object" && input.url) {
-      urlStr = input.url;
-      requestInit = { ...input, ...init };
-    }
+      if (typeof input === "string") {
+        urlStr = input;
+      } else if (input instanceof URL) {
+        urlStr = input.toString();
+      } else if (input && typeof input === "object" && input.url) {
+        urlStr = input.url;
+        requestInit = { ...input, ...init };
+      }
 
-    // Check if internal bridge replay call (WeakSet check, NO custom headers sent upstream)
-    const isBridgeCall = internalBridgeCalls.has(requestInit) || (init && internalBridgeCalls.has(init));
-    if (isBridgeCall) {
-      return originalFetch.apply(this, arguments);
-    }
+      // Check if internal bridge replay call (WeakSet check, NO custom headers sent upstream)
+      const isBridgeCall = internalBridgeCalls.has(requestInit) || (init && internalBridgeCalls.has(init));
+      if (isBridgeCall) {
+        return originalFetch.apply(this, arguments);
+      }
 
-    const matched = matchRecognizedEndpoint(urlStr);
-    if (!matched) {
-      return originalFetch.apply(this, arguments);
-    }
+      const matched = matchRecognizedEndpoint(urlStr);
+      if (!matched) {
+        return originalFetch.apply(this, arguments);
+      }
 
-    // Capture model ID at request initiation time
-    const modelIdAtRequestTime = currentCanonicalModelId;
-    const requestStructure = decodeAndSanitizePayload(requestInit.body);
+      // Capture model ID at request initiation time
+      const modelIdAtRequestTime = currentCanonicalModelId;
+      const requestStructure = decodeAndSanitizePayload(requestInit.body);
 
-    const response = await originalFetch.apply(this, arguments);
+      const response = await originalFetch.apply(this, arguments);
 
-    // Only qualify successful responses (HTTP 200) with valid Gemini envelope
-    if (response.ok && response.status === 200 && requestStructure) {
-      try {
-        const clone = response.clone();
-        const reader = clone.body?.getReader();
-        if (reader) {
-          reader.read().then(({ value }) => {
-            if (value) {
-              const preview = new TextDecoder().decode(value.slice(0, 100));
-              // Verify Gemini RPC envelope prefix
-              if (preview.includes(")]}'") || preview.includes("wrb.fr")) {
-                window.postMessage({
-                  source: "GEMINI_INJECTED",
-                  type: "NATIVE_RPC_OBSERVED",
-                  evidence: {
-                    endpoint: matched.endpoint,
-                    canonicalPath: matched.canonicalPath,
-                    buildLabel: matched.buildLabel || activeBuildLabel,
-                    sessionEpoch: currentSessionEpoch,
-                    canonicalModelId: modelIdAtRequestTime,
-                    timestamp: Date.now(),
-                    requestSignature: requestStructure,
-                    responseVerified: true
-                  }
-                }, "*");
+      // Only qualify successful responses (HTTP 200) with valid Gemini envelope
+      if (response.ok && response.status === 200 && requestStructure) {
+        try {
+          const clone = response.clone();
+          const reader = clone.body?.getReader();
+          if (reader) {
+            reader.read().then(({ value }) => {
+              if (value) {
+                const preview = new TextDecoder().decode(value.slice(0, 100));
+                // Verify Gemini RPC envelope prefix
+                if (preview.includes(")]}'") || preview.includes("wrb.fr")) {
+                  window.postMessage({
+                    source: "GEMINI_INJECTED",
+                    type: "NATIVE_RPC_OBSERVED",
+                    evidence: {
+                      endpoint: matched.endpoint,
+                      canonicalPath: matched.canonicalPath,
+                      buildLabel: matched.buildLabel || activeBuildLabel,
+                      sessionEpoch: currentSessionEpoch,
+                      canonicalModelId: modelIdAtRequestTime,
+                      timestamp: Date.now(),
+                      requestSignature: requestStructure,
+                      responseVerified: true
+                    }
+                  }, "*");
+                }
               }
-            }
-          }).catch(() => {});
-        }
-      } catch (e) {}
-    }
+            }).catch(() => {});
+          }
+        } catch (e) {}
+      }
 
-    return response;
-  };
+      return response;
+    };
+  }
 
   // Intercept XMLHttpRequest
-  const originalXhrOpen = XMLHttpRequest.prototype.open;
-  const originalXhrSend = XMLHttpRequest.prototype.send;
+  const hasXhr = typeof XMLHttpRequest !== "undefined" && XMLHttpRequest.prototype;
+  if (hasXhr) {
+    const originalXhrOpen = XMLHttpRequest.prototype.open;
+    const originalXhrSend = XMLHttpRequest.prototype.send;
 
-  XMLHttpRequest.prototype.open = function (method, url) {
-    this._bridgeUrl = String(url);
-    return originalXhrOpen.apply(this, arguments);
-  };
+    XMLHttpRequest.prototype.open = function (method, url) {
+      this._bridgeUrl = String(url);
+      return originalXhrOpen.apply(this, arguments);
+    };
 
-  XMLHttpRequest.prototype.send = function (body) {
-    const matched = matchRecognizedEndpoint(this._bridgeUrl || "");
-    if (!matched) {
-      return originalXhrSend.apply(this, arguments);
-    }
-
-    const modelIdAtRequestTime = currentCanonicalModelId;
-    const requestStructure = decodeAndSanitizePayload(body);
-
-    this.addEventListener("loadend", () => {
-      if (this.status === 200 && requestStructure) {
-        const text = typeof this.responseText === "string" ? this.responseText.slice(0, 100) : "";
-        if (text.includes(")]}'") || text.includes("wrb.fr")) {
-          window.postMessage({
-            source: "GEMINI_INJECTED",
-            type: "NATIVE_RPC_OBSERVED",
-            evidence: {
-              endpoint: matched.endpoint,
-              canonicalPath: matched.canonicalPath,
-              buildLabel: matched.buildLabel || activeBuildLabel,
-              sessionEpoch: currentSessionEpoch,
-              canonicalModelId: modelIdAtRequestTime,
-              timestamp: Date.now(),
-              requestSignature: requestStructure,
-              responseVerified: true
-            }
-          }, "*");
-        }
+    XMLHttpRequest.prototype.send = function (body) {
+      const matched = matchRecognizedEndpoint(this._bridgeUrl || "");
+      if (!matched) {
+        return originalXhrSend.apply(this, arguments);
       }
-    }, { once: true });
 
-    return originalXhrSend.apply(this, arguments);
-  };
+      const modelIdAtRequestTime = currentCanonicalModelId;
+      const requestStructure = decodeAndSanitizePayload(body);
+
+      this.addEventListener("loadend", () => {
+        if (this.status === 200 && requestStructure) {
+          const text = typeof this.responseText === "string" ? this.responseText.slice(0, 100) : "";
+          if (text.includes(")]}'") || text.includes("wrb.fr")) {
+            window.postMessage({
+              source: "GEMINI_INJECTED",
+              type: "NATIVE_RPC_OBSERVED",
+              evidence: {
+                endpoint: matched.endpoint,
+                canonicalPath: matched.canonicalPath,
+                buildLabel: matched.buildLabel || activeBuildLabel,
+                sessionEpoch: currentSessionEpoch,
+                canonicalModelId: modelIdAtRequestTime,
+                timestamp: Date.now(),
+                requestSignature: requestStructure,
+                responseVerified: true
+              }
+            }, "*");
+          }
+        }
+      }, { once: true });
+
+      return originalXhrSend.apply(this, arguments);
+    };
+  }
 
   // ─── 4. Message Bus from Content Script ─────────────────────
-  window.addEventListener("message", async (event) => {
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("message", async (event) => {
     if (event.source !== window || !event.data || event.data.source !== "GEMINI_CONTENT") {
       return;
     }
@@ -656,5 +676,22 @@
       }
     }
   });
+  }
 
-})();
+  const api = {
+    PROMPT_EDITOR_SELECTORS,
+    findQuillInMainWorld,
+    syncAngularModel,
+    typePromptInMainWorld,
+    inspectWizGlobalData,
+    broadcastSessionState,
+    matchRecognizedEndpoint,
+    decodeAndSanitizePayload
+  };
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = api;
+  }
+  root.GeminiInjected = api;
+  root.__GeminiBridgeMain = api;
+})(typeof globalThis !== "undefined" ? globalThis : this);

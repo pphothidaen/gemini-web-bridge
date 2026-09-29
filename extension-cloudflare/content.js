@@ -1365,6 +1365,16 @@
     });
   }
 
+  function requestTabFocus() {
+    if (coordinatorPort && typeof coordinatorPort.postMessage === 'function') {
+      try {
+        coordinatorPort.postMessage({ type: 'REQUEST_TAB_FOCUS' });
+      } catch (e) {
+        // Port may have closed; a failed focus is not fatal.
+      }
+    }
+  }
+
   /**
    * Handles ATTACH_NOTEBOOK from the Worker.
    *
@@ -1405,6 +1415,9 @@
 
     let outcome;
     try {
+      // Focus the tab so isTabVisible() passes — the manual osascript step is no longer needed.
+      requestTabFocus();
+      await new Promise((resolve) => setTimeout(resolve, 200)); // let Chrome update document.hidden
       outcome = await Attach.attachNotebook({
         notebookName,
         timeoutMs,
@@ -1579,6 +1592,9 @@
 
     let outcome;
     try {
+      // Focus the tab so isTabVisible() passes — the manual osascript step is no longer needed.
+      requestTabFocus();
+      await new Promise((resolve) => setTimeout(resolve, 200)); // let Chrome update document.hidden
       outcome = await Typing.typeAndSend({
         prompt,
         timeoutMs,

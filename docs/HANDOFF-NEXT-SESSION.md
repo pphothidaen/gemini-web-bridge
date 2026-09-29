@@ -180,11 +180,12 @@ measurement taken at the wrong moment and reported as a settled fact.**
 2. **Give `injected.js` a test harness.** The MAIN-world logic is the least
    covered part of the codebase and it is on the critical path for every
    grounded answer. A `window`/`document` stub is enough; the module is small.
-3. **Decide what to do about the replay path.** It works, and it is the faster
-   route for the SDLC tools, but it cannot ground. Either document that
-   permanently, or make the assembled payload carry the attachment. The
-   blocker is the `r_…` session token and ~40 inner fields in Gemini's real
-   payload; a single captured payload is not enough to derive it safely.
+3. **Replay path — architecture decision recorded.** The bifurcation is permanent:
+   the replay path cannot ground anything and never will (see `ARCHITECTURE.md` §
+   "Replay Path vs Grounded Path"). The open sub-task is to make the assembled
+   payload carry the attachment if and when a captured `r_…` session token can
+   be reliably derived — which requires more than one payload sample. Until then,
+   the replay path is skipped when `requireGrounding` is set and this is correct.
 4. **Auto-focus the tab.** The bridge currently requires a human to foreground
    Chrome before a grounded call works. Doing it from the extension would
    remove a real footgun. It is a small change and was deliberately deferred.

@@ -217,3 +217,26 @@ Google Gemini Web UI ใช้ Batched RPC Payload บนเส้นทาง `
   - `innerData[1][0]`: Conversation ID (สำหรับต่อบทสนทนา)
   - `innerData[1][1]`: Response ID
   - `innerData[4][0][0]`: Choice ID
+
+---
+
+## Replay Path vs Grounded Path — Architecture Decision (2026-09-29)
+
+There are two execution paths for sending a prompt through the bridge. This is a **permanent bifurcation**, not a temporary workaround.
+
+| Path | How it works | When to use | Grounding |
+|---|---|---|---|
+| **UI Typing (Grounded)** | Content script drives Quill in the MAIN world via `injected.js`; notebook is attached per-prompt via `notebook-attach.js` | Any tool where `requireGrounding: true` or a `notebook` parameter is present | ✅ Real, verifiable citations |
+| **Replay (StreamGenerate)** | `injected.js` posts a raw `f.req` payload directly to Gemini's StreamGenerate endpoint using the captured CSRF token | Stateless text tools where speed matters and no DOM attachments exist | ❌ Cannot carry `notebook://…/sources/…` references |
+
+### Why the replay path can never be grounded
+
+The grounded StreamGenerate payload contains ~40 dynamic inner fields including an `r_…` session token that is specific to a single notebook-attachment event. Capturing one payload is not sufficient to derive another safely — the session token is single-use and tied to the current auth session. Attempting to inject a notebook attachment reference into a replay payload produces a payload that Google silently rejects (verified on the wire in KAN-182).
+
+### Guardrail
+
+If a tool request carries `requireGrounding: true` or any `notebook` parameter, the Cloudflare Worker DO **must not** route it to the replay path. Routing to replay in this case produces an answer that appears successful but is not grounded — the same class of bug that took nine separate defects to fully close in KAN-182.
+
+> [!CAUTION]
+> **Never "optimize" the replay path back into the grounded path.** The two paths are distinct by necessity, not accident.
+

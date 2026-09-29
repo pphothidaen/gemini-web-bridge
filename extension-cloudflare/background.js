@@ -1268,6 +1268,22 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onConnect) {
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name === "gemini-tab-coordinator") {
       coordinator.handlePortConnect(port);
+      port.onMessage.addListener((msg) => {
+        if (msg && msg.type === 'REQUEST_TAB_FOCUS') {
+          const tabId = port.sender?.tab?.id;
+          const windowId = port.sender?.tab?.windowId;
+          if (tabId) {
+            chrome.tabs.update(tabId, { active: true }, () => {
+              if (chrome.runtime.lastError) return; // tab may have closed
+            });
+          }
+          if (windowId) {
+            chrome.windows.update(windowId, { focused: true }, () => {
+              if (chrome.runtime.lastError) return;
+            });
+          }
+        }
+      });
     } else if (port.name === "gemini-bridge-socket") {
       manager.handleBridgePort(port);
     }
