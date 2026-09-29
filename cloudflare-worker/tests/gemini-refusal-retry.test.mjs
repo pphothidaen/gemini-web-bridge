@@ -21,6 +21,128 @@ import { buildToolPrompt } from '../src/prompt-templates.js';
 
 const require = createRequire(import.meta.url);
 const NativeRecovery = require('../../extension-cloudflare/native-recovery.js');
+const NotebookAttach = require('../../extension-cloudflare/notebook-attach.js');
+
+// ── Notebook attach: selectors verified against the live Gemini DOM ──────────
+//
+// Every selector here was read out of a real, authenticated
+// gemini.google.com tab (2026-09-29, boq-gemini-web-uiserver) by driving the
+// actual menu. They are NOT copied from a DOM sample: the flow was clicked
+// through end to end and the DOM re-read after each step. That distinction
+// matters because the Lottie selector KAN-176 "verified" against a DOM sample
+// matched nothing in production, and every wait silently degraded.
+
+test('the attach flow uses only localization-proof selectors', () => {
+  const S = NotebookAttach.SELECTORS;
+  // The UI is in Thai here and English elsewhere. A selector that depends on
+  // a visible label would work in exactly one locale and fail everywhere else.
+  const localized = ['อัปโหลด', 'การอัปโหลดเพิ่มเติม', 'เพิ่ม Notebook', 'Notebook', 'เครื่องมือ'];
+  for (const [name, sel] of Object.entries(S)) {
+    for (const word of localized) {
+      assert.ok(
+        !String(sel).includes(word),
+        `SELECTORS.${name} ("${sel}") must not match on the localized label "${word}"`
+      );
+    }
+  }
+  // The two steps that have no test-id at all are keyed by class / icon name.
+  assert.equal(S.plusButton, 'input-area-v2 mat-icon[data-mat-icon-name="plus"]');
+  assert.equal(S.moreUploadsButton, 'button.more-upload-button[cdkoverlayorigin]');
+  // "more_horiz" is shared with the "เครื่องมือเพิ่มเติม" item, so the class is
+  // the only thing that discriminates the more-uploads submenu.
+  assert.ok(!S.moreUploadsButton.includes('more_horiz'));
+  assert.equal(S.notebooksButton, '[data-test-id="notebooks-import-button"]');
+  assert.equal(S.addButton, '[data-test-id="add-button"]');
+  assert.equal(S.attachedChip, 'input-area-v2 uploader-file-preview');
+});
+
+test('a HIDDEN tab is refused up front, not reported as a selector failure', () => {
+  // The bug this guards: a CDK overlay pane IS created and the "+" trigger
+  // DOES flip to aria-expanded="true" on a hidden tab, but Angular never
+  // populates the panel. Every child selector then matches nothing and the
+  // flow dies at "more_uploads", which reads as a broken selector when the
+  // real cause is simply that nobody was looking at the tab.
+  assert.equal(NotebookAttach.isTabVisible({ hidden: true }), false);
+  assert.equal(NotebookAttach.isTabVisible({ hidden: false }), true);
+  // A document with no Page Visibility API is treated as visible rather than
+  // failing closed, or every mock-based test would break.
+  assert.equal(NotebookAttach.isTabVisible({}), true);
+});
+
+test('attachNotebook returns tab_not_visible without clicking anything', async () => {
+  const doc = { hidden: true, querySelector: () => null, querySelectorAll: () => [] };
+  const out = await NotebookAttach.attachNotebook({
+    notebookName: 'Horo', doc, log: () => {}, sleep: async () => {}, setT: () => {}
+  });
+  assert.equal(out.ok, false);
+  assert.equal(out.reason, 'tab_not_visible');
+  assert.equal(out.step, 'visibility');
+});
+
+test('an already-attached notebook makes the flow a no-op (idempotent)', async () => {
+  const chip = { innerText: 'Horo', textContent: 'Horo' };
+  const doc = {
+    hidden: false,
+    querySelectorAll: (sel) => (sel === NotebookAttach.SELECTORS.attachedChip ? [chip] : []),
+    querySelector: () => null
+  };
+  const out = await NotebookAttach.attachNotebook({
+    notebookName: 'Horo', doc, log: () => {}, sleep: async () => {}, setT: () => {}
+  });
+  assert.equal(out.ok, true);
+  assert.equal(out.alreadyAttached, true);
+  assert.deepEqual(out.attached, ['Horo']);
+});
+
+test('the notebook row is matched by name, never by list position', () => {
+  // This account has six notebooks and the target is not always first, so a
+  // positional match would silently attach the wrong knowledge base.
+  const TITLES = [
+    'Horo',
+    'claude-code-best-practice',
+    'Spring Security Architecture and JPA Performance Optimization Strategies',
+    'Bangkok Bank Java Technical Lead Interview Research Dossier',
+    'Spiritual Guidance for Career Success and Ancestral Alignment',
+    'Citta AI Notebook'
+  ];
+  const doc = {
+    querySelectorAll: (sel) => (sel === NotebookAttach.SELECTORS.notebookTitle
+      ? TITLES.map((t) => ({ textContent: t, closest: () => ({ __row: t }) }))
+      : [])
+  };
+  assert.equal(NotebookAttach.findNotebookRow(doc, 'Horo').__row, 'Horo');
+  // Case and surrounding whitespace must not defeat it.
+  assert.equal(NotebookAttach.findNotebookRow(doc, '  horo ').__row, 'Horo');
+  // An unknown notebook must return null rather than falling back to index 0,
+  // which would attach the wrong notebook and report success.
+  assert.equal(NotebookAttach.findNotebookRow(doc, 'Nonexistent'), null);
+  assert.equal(NotebookAttach.findNotebookRow(doc, ''), null);
+});
+
+test('openPlusMenu does not click an already-open menu, which would close it', () => {
+  // The "+" trigger is a toggle. A blind click breaks any retry after a
+  // partially-completed attempt, and the failure only surfaces several steps
+  // later as a missing menu item.
+  let state = { expanded: false, clicks: 0 };
+  const btn = {
+    getAttribute: (a) => (a === 'aria-expanded' ? String(state.expanded) : null),
+    click: () => { state.clicks++; state.expanded = !state.expanded; }
+  };
+  // findPlusButton resolves the mat-icon to its wrapping <button> first.
+  const icon = { closest: (sel) => (sel === 'button' ? btn : null) };
+  const doc = { querySelector: () => icon };
+
+  assert.equal(NotebookAttach.openPlusMenu(doc), true);
+  assert.equal(state.expanded, true, 'a closed menu must be opened');
+  assert.equal(state.clicks, 1);
+
+  assert.equal(NotebookAttach.openPlusMenu(doc), false);
+  assert.equal(state.expanded, true, 'an open menu must be left alone, not toggled shut');
+  assert.equal(state.clicks, 1);
+
+  assert.equal(NotebookAttach.openPlusMenu({ querySelector: () => null }), false);
+});
+
 
 // ── Prompt shape: prose, not a spec sheet ─────────────────────────────────
 //
@@ -276,31 +398,96 @@ test("Gemini's 'Gemini บอกว่า' label is a placeholder, not an answer
 test('generatingSignal reports WHICH selector matched, not just a boolean', () => {
   // A dead selector is otherwise invisible: the wait silently degrades to
   // text-stability. Reporting provenance is what makes that loud.
-  const spinner = { querySelector: (s) => (s === 'div.loading-content-spinner-container' ? {} : null) };
-  assert.deepEqual(NativeRecovery.generatingSignal(spinner),
-    { active: true, source: 'material_spinner_container' });
+  const inResponse = {
+    querySelector: (s) => (s === 'div.loading-content-spinner-container' ? {} : null)
+  };
+  const doc = {
+    querySelectorAll: () => [inResponse],
+    querySelector: () => null
+  };
+  assert.deepEqual(NativeRecovery.generatingSignal(doc),
+    { active: true, source: 'response_spinner' });
 
-  const lottie = { querySelector: (s) => (s === 'clipPath[id^="__lottie_element"]' ? {} : null) };
+  const lottie = {
+    querySelectorAll: () => [],
+    querySelector: (s) => (s === 'clipPath[id^="__lottie_element"]' ? {} : null)
+  };
   assert.equal(NativeRecovery.generatingSignal(lottie).source, 'lottie_clippath');
 
-  assert.deepEqual(NativeRecovery.generatingSignal({ querySelector: () => null }),
+  assert.deepEqual(NativeRecovery.generatingSignal({ querySelectorAll: () => [], querySelector: () => null }),
     { active: false, source: 'none' });
 });
 
-test('the live Material spinner is the generation-in-progress signal', () => {
-  // Verified against the real Gemini DOM (boq-gemini-web-uiserver 20260927.05)
-  // during a 1500-word generation:
-  //   <div class="loading-content-spinner-container ng-star-inserted">
-  //     <mat-progress-spinner class="mat-mdc-progress-spinner mdc-circular-progress">
-  const MATERIAL = [
-    'div.loading-content-spinner-container',
-    'mat-progress-spinner.mat-mdc-progress-spinner'
-  ];
-  for (const sel of MATERIAL) {
-    const spinning = { querySelector: (s) => (s === sel ? {} : null) };
-    assert.equal(NativeRecovery.isGenerating(spinning), true, sel);
-  }
-  assert.equal(NativeRecovery.isGenerating({ querySelector: () => null }), false);
+test('the sidenav chat-history spinner is NOT treated as generating', () => {
+  // THE BUG (KAN-177). `div.loading-content-spinner-container` and
+  // `mat-progress-spinner.mat-mdc-progress-spinner` render permanently in the
+  // left sidenav while it loads recent chats — aria-label "กำลังโหลด Gem และ
+  // การสนทนาล่าสุด", path SIDE-NAVIGATION-CONTENT → BARD-SIDENAV. An unscoped
+  // document.querySelector matched it forever, so `waitFor((d) =>
+  // !generatingSignal(d).active, ...)` could never resolve and every native
+  // retry burned its whole budget. Verified live: a finished 3,460-char answer
+  // with no stop button still had the sidenav spinner present.
+  const sidenavSpinner = {
+    closest: (sel) => (sel.includes('bard-sidenav') ? {} : null)
+  };
+  const doc = {
+    querySelectorAll: () => [],
+    querySelector: (s) =>
+      s === 'div.loading-content-spinner-container' ||
+      s === 'mat-progress-spinner.mat-mdc-progress-spinner'
+        ? sidenavSpinner
+        : null
+  };
+
+  const out = NativeRecovery.generatingSignal(doc);
+  assert.equal(out.active, false, 'a sidenav spinner must not report "generating"');
+  assert.equal(out.source, 'sidenav_spinner_rejected', 'the guard must be visible in logs');
+  assert.equal(NativeRecovery.isGenerating(doc), false);
+});
+
+test('a spinner inside the newest response IS a real generation signal', () => {
+  // The guard must not over-correct: a spinner scoped to the response is the
+  // genuine signal the wait is supposed to block on.
+  const response = {
+    querySelector: (s) =>
+      s === 'mat-progress-spinner.mat-mdc-progress-spinner' || s === 'div.loading-content-spinner-container'
+        ? { closest: () => null }
+        : null
+  };
+  const out = NativeRecovery.generatingSignal({ querySelectorAll: () => [response], querySelector: () => null });
+  assert.equal(out.active, true);
+  assert.equal(out.source, 'response_spinner');
+});
+
+test('a spinner outside the sidenav but with no response is not trusted', () => {
+  // Belt and braces: an unattributable spinner must not wedge the wait open.
+  const orphan = { closest: () => null };
+  const doc = {
+    querySelectorAll: () => [],
+    querySelector: (s) => (s === 'div.loading-content-spinner-container' ? orphan : null)
+  };
+  const out = NativeRecovery.generatingSignal(doc);
+  assert.equal(out.active, false);
+  assert.equal(out.source, 'unscoped_spinner_no_response');
+});
+
+test('generatingSignal keeps the Material spinner ahead of the falsified Lottie one', () => {
+  // The `__lottie_element_<n>` clipPath was probed for 25s across a real
+  // generation and matched nothing on this build. It must not become the
+  // primary signal, or the wait silently degrades to text-stability.
+  const source = readFileSync(
+    new URL('../../extension-cloudflare/native-recovery.js', import.meta.url), 'utf8'
+  );
+  const start = source.indexOf('function generatingSignal');
+  const end = source.indexOf('\n  }', start);
+  assert.ok(start !== -1 && end > start, 'generatingSignal must exist');
+  const body = source.slice(start, end);
+  const material = body.indexOf('loading-content-spinner-container');
+  const lottie = body.indexOf('__lottie_element');
+  assert.ok(material !== -1, 'the Material spinner must still be checked');
+  assert.ok(lottie === -1 || material < lottie, 'Material must be checked before the falsified Lottie one');
+  // The sidenav guard must exist, or the false positive returns silently.
+  assert.ok(body.includes('bard-sidenav'), 'the sidenav guard must be present in generatingSignal');
 });
 
 test('the Lottie clipPath probe was falsified on the live DOM, kept only as fallback', () => {
@@ -327,6 +514,7 @@ test('thinking-dots alone is not treated as still generating', () => {
   // It appears only during the thinking phase and can vanish before the
   // answer is finished, so it must not keep the wait open.
   const thinkingOnly = {
+    querySelectorAll: () => [],
     querySelector: (s) => (s === 'div.thinking-dots-animation' ? {} : null)
   };
   assert.equal(NativeRecovery.isGenerating(thinkingOnly), false);

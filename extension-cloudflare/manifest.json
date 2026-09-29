@@ -38,6 +38,7 @@
         "auto-thinking.js",
         "evidence-registry.js",
         "native-recovery.js",
+        "notebook-attach.js",
         "content.js"
       ],
       "run_at": "document_start"

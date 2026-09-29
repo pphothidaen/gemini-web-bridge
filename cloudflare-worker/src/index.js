@@ -278,6 +278,17 @@ export class GeminiBridgeDO extends DurableObject {
     };
     this.mcpSessions = new Map();
 
+    // KAN-177: outcome of the most recent notebook attach, surfaced by
+    // check_bridge_health. Starts "unknown" rather than "ok" so a health
+    // report can never imply grounding was verified when no attach has ever
+    // been attempted.
+    this.notebookAttachState = {
+      status: "unknown",
+      at: null,
+      reason: null,
+      failures: 0
+    };
+
     // ─── Phase 3: Per-instance-id Tracking + Epoch Counter ───
     // Replaces origin-based identity with cryptographically random instance ID
     // that persists across SW restarts and is sent as query param in WS URL.
@@ -1721,6 +1732,63 @@ export class GeminiBridgeDO extends DurableObject {
   }
 
   /**
+   * Ask the extension to attach a NotebookLM notebook to the conversation
+   * that is already open, and wait for the result.
+   *
+   * Why this is not a scope switch
+   * ------------------------------
+   * The obvious approach is `set_bridge_scope("notebook:<id>")`, which
+   * navigates the tab to gemini.google.com/notebook/<id>. That page is not
+   * a chat surface: submitting a question there wraps it in a
+   * "คุณบอกว่า…" preamble and spawns a NEW conversation under /app/<new-id>.
+   * The requested scope is therefore gone before the answer streams, and
+   * the caller sees a refusal or an empty answer while the real reply sits
+   * in a different element.
+   *
+   * Attaching through Gemini's own "+ > more uploads > Notebooks" menu
+   * keeps the conversation, the URL, and the scope exactly as they are and
+   * grounds the answer in the notebook — which is the whole point of
+   * `horo_consult`.
+   *
+   * Resolves {ok:false} rather than throwing, so a failed attach degrades
+   * into an explicit, reportable state instead of an opaque error.
+   */
+  runNotebookAttach({ requestId, notebookName, timeoutMs = 45000 }) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.activeStreams.delete(requestId);
+        resolve({ ok: false, reason: "notebook_attach_timeout", step: "timeout", attached: [] });
+      }, timeoutMs);
+
+      this.activeStreams.set(requestId, (msg) => {
+        if (msg.type !== "NOTEBOOK_ATTACH_RESULT") return;
+        clearTimeout(timer);
+        this.activeStreams.delete(requestId);
+        resolve({
+          ok: Boolean(msg.ok),
+          reason: msg.reason || "",
+          step: msg.step || "",
+          alreadyAttached: Boolean(msg.alreadyAttached),
+          attached: Array.isArray(msg.attached) ? msg.attached : []
+        });
+      });
+
+      try {
+        this.activeSocket.send(JSON.stringify({
+          type: "ATTACH_NOTEBOOK",
+          requestId,
+          notebookName,
+          timeoutMs: Math.min(timeoutMs - 5000, 40000)
+        }));
+      } catch (err) {
+        clearTimeout(timer);
+        this.activeStreams.delete(requestId);
+        resolve({ ok: false, reason: "notebook_attach_send_failed", step: "send", attached: [] });
+      }
+    });
+  }
+
+  /**
    * A single replay attempt through the extension's verified-replay path.
    */
   runReplayAttempt({ requestId, encodedReq, model, onChunk }) {
@@ -2638,7 +2706,7 @@ export class GeminiBridgeDO extends DurableObject {
               }
             },
             response_format: { type: "string", enum: ["text", "pdf"], default: "text" },
-            scope: { type: "string", description: "\"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com — ถ้าไม่ระบุ ระบบจะใช้ค่าเริ่มต้นคือ App (https://gemini.google.com/app) ส่วน horo_consult เท่านั้นที่จะใช้ Notebook ความรู้ HoroConsultant (notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0) แล้วคืนค่า scope default เดิมหลังเรียกเสร็จ" }
+            scope: { type: "string", description: "\"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com — ถ้าไม่ระบุ ระบบจะใช้ค่าเริ่มต้นคือ App (https://gemini.google.com/app) ส่วน horo_consult เท่านั้น ที่จะแนบ Notebook ความรู้ HoroConsultant (notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0) เข้ากับบทสนทนาที่เปิดอยู่ โดยไม่เปลี่ยน URL (ผลลัพธ์จะรายงาน notebookGrounding และ bridgeScope.attachedInPlace=true)" }
           },
           required: ["query"]
         }
@@ -2853,6 +2921,25 @@ export class GeminiBridgeDO extends DurableObject {
           return { response: res };
         }
 
+        // ─── horo_consult grounding constants ──────────────────────────────
+        // Declared here, before every tool branch, because check_bridge_health
+        // reports them too. Declaring them further down left them in the
+        // temporal dead zone for any tool that ran first.
+        //
+        // The notebook's canonical scope id, used to report the scope that
+        // served a horo_consult answer.
+        const HORO_CONSULT_DEFAULT_SCOPE = "notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0";
+
+        // KAN-177: the notebook's DISPLAY NAME, used by the attach flow.
+        //
+        // The attach dialog (`+ > more uploads > Notebooks > เพิ่ม Notebook`)
+        // lists notebooks by name and exposes no id, so the name is the only
+        // key available there. It is matched exactly, never by list position:
+        // this account has six notebooks and the target is not always first.
+        // The id above stays the canonical scope identifier reported to
+        // callers; the two are deliberately separate concerns.
+        const HORO_CONSULT_NOTEBOOK_NAME = "Horo";
+
         if (method === "tools/call") {
           const toolName = params.name;
           const args = params.arguments || {};
@@ -2899,6 +2986,25 @@ export class GeminiBridgeDO extends DurableObject {
               },
               hybrid_fallback: {
                 has_gcp_fallback: Boolean(this.env.GEMINI_API_KEY)
+              },
+              // KAN-177: notebook grounding state.
+              //
+              // The attach only happens inside a horo_consult call, so
+              // without a record of it there is no way to tell "never
+              // asked" from "asked and failed" without spending a Gemini
+              // round-trip — which is exactly what a health check must not
+              // do. lastAttach is written by the attach path; nothing here
+              // polls the browser, so this stays free.
+              notebook: {
+                target_name: HORO_CONSULT_NOTEBOOK_NAME,
+                target_scope: HORO_CONSULT_DEFAULT_SCOPE,
+                // "unknown" until the first horo_consult attach runs, so an
+                // operator is never told grounding is fine on the strength
+                // of no evidence at all.
+                last_attach_status: this.notebookAttachState.status,
+                last_attach_at: this.notebookAttachState.at,
+                last_attach_reason: this.notebookAttachState.reason,
+                attach_failures: this.notebookAttachState.failures
               }
             };
 
@@ -2930,10 +3036,6 @@ export class GeminiBridgeDO extends DurableObject {
           }
 
       const knownSdlcTools = ["sdlc_solution_architect", "orchestrate_sdlc_plan", "code_review_and_debug", "evaluate_tech_tradeoffs", "horo_consult"];
-
-      // horo_consult defaults to the HoroConsultant knowledge Notebook scope
-      // when the caller does not pass an explicit scope.
-      const HORO_CONSULT_DEFAULT_SCOPE = "notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0";
 
       // Scope switch helper shared by set_bridge_scope and the SDLC tools.
       const applyScope = async (scopeInput) => {
@@ -3054,11 +3156,21 @@ export class GeminiBridgeDO extends DurableObject {
             prompt = buildToolPrompt(toolName, args);
           }
 
+          // KAN-177 — horo_consult grounds its answer in the HoroConsultant
+          // notebook, but it must NOT navigate to /notebook/<id>: that page
+          // is not a chat surface, so the query is re-issued into a fresh
+          // /app/<new-id> conversation and the scope the bridge resolved is
+          // gone before the answer arrives. Instead the notebook is attached
+          // to the conversation already open, which preserves the URL, the
+          // conversation, and the scope.
+          //
+          // An explicit `scope` argument still wins and still means a real
+          // scope switch — this only replaces the implicit default.
+          const wantsDefaultNotebook =
+            toolName === "horo_consult" && !(typeof args.scope === "string" && args.scope.trim());
+
           // Switch conversation scope (normal chat / notebook) before executing.
-          // horo_consult falls back to the default Notebook scope when omitted.
-          const effectiveScope = (toolName === "horo_consult" && !(typeof args.scope === "string" && args.scope.trim()))
-            ? HORO_CONSULT_DEFAULT_SCOPE
-            : args.scope;
+          const effectiveScope = wantsDefaultNotebook ? null : args.scope;
 
           // horo_consult pins the bridge to a Notebook scope, so remember where
           // the session came from and put it back once the call is done.
@@ -3067,6 +3179,11 @@ export class GeminiBridgeDO extends DurableObject {
           const scopeBeforeCall = this.currentScope;
           let scopeUsed = scopeBeforeCall;
           let switchedScope = false;
+
+          // KAN-177: what the notebook attach actually did, reported back to
+          // the MCP client. Stays null for every tool except a
+          // default-scoped horo_consult, so other results are unchanged.
+          let notebookGrounding = null;
 
           const restorePreCallScope = async () => {
             // Nothing to restore to (fresh session that never had a scope) or
@@ -3148,6 +3265,61 @@ export class GeminiBridgeDO extends DurableObject {
             }
 
             try {
+              // KAN-177: attach the HoroConsultant notebook to this
+              // conversation before asking, so the answer is grounded in
+              // it. The attach is idempotent on the extension side, so a
+              // repeat call costs nothing.
+              //
+              // A failed attach is reported rather than swallowed: an
+              // ungrounded BaZi answer that looks grounded is worse than
+              // an honest error, because the caller cannot tell the two
+              // apart from the text alone.
+              if (wantsDefaultNotebook) {
+                const attach = await this.runNotebookAttach({
+                  requestId: `${id}:notebook-attach`,
+                  notebookName: HORO_CONSULT_NOTEBOOK_NAME
+                });
+                notebookGrounding = {
+                  requested: HORO_CONSULT_NOTEBOOK_NAME,
+                  attached: attach.ok,
+                  alreadyAttached: attach.alreadyAttached,
+                  attachedNames: attach.attached,
+                  step: attach.step || null,
+                  reason: attach.reason || null
+                };
+                // KAN-177: record the outcome so check_bridge_health can
+                // answer "is notebook grounding working?" without spending a
+                // Gemini round-trip to find out. A failure is recorded even
+                // though the call then returns an error — that is precisely
+                // the case an operator needs to see.
+                this.notebookAttachState = {
+                  status: attach.ok ? "ok" : "failed",
+                  at: new Date().toISOString(),
+                  reason: attach.ok ? null : (attach.reason || attach.step || "unknown"),
+                  failures: attach.ok
+                    ? this.notebookAttachState.failures
+                    : this.notebookAttachState.failures + 1
+                };
+                if (!attach.ok) {
+                  this.recordHealthError(`notebook_attach_failed:${attach.reason}@${attach.step}`);
+                  console.warn(`[Bridge DO] Notebook attach failed: ${attach.reason} (step=${attach.step})`);
+                  return {
+                    response: {
+                      jsonrpc: "2.0",
+                      id,
+                      error: {
+                        code: -32000,
+                        message:
+                          `Could not attach the HoroConsultant notebook "${HORO_CONSULT_NOTEBOOK_NAME}" ` +
+                          `to the Gemini tab (step=${attach.step || "unknown"}, reason=${attach.reason || "unknown"}). ` +
+                          `horo_consult answers must be grounded in that notebook, so it will not answer ungrounded. ` +
+                          `Make sure the Gemini tab is in the foreground and open, then retry.`
+                      }
+                    }
+                  };
+                }
+              }
+
               const targetModel = recommendedModel(this.dynamicModels) || this.activeBrowserModel || (this.dynamicModels[0]?.id) || "gemini-3.8-flash";
               let resultText = await this.executeThroughExtension([{ role: "user", content: prompt }], null, targetModel);
 
@@ -3250,11 +3422,33 @@ export class GeminiBridgeDO extends DurableObject {
           // Notebook default without having to read the bridge source.
           const resultScope = outcome?.response?.result;
           if (resultScope && Array.isArray(resultScope.content)) {
+            // KAN-177: for a default-scoped horo_consult the notebook is
+            // ATTACHED to the conversation, not navigated to, so the live
+            // tab scope is still whatever /app/ conversation it was on.
+            // Reporting that as `used` would tell the caller the notebook
+            // was never involved — the opposite of the truth. The intent
+            // scope is reported instead, and `browserUrl` carries the real
+            // one for anyone debugging.
+            const reportedScope = wantsDefaultNotebook
+              ? HORO_CONSULT_DEFAULT_SCOPE
+              : (scopeUsed || null);
             resultScope.bridgeScope = {
-              used: scopeUsed || null,
+              used: reportedScope,
               active: this.currentScope || null,
               restored: switchedScope
             };
+            if (wantsDefaultNotebook) {
+              resultScope.bridgeScope.attachedInPlace = true;
+            }
+          }
+          // KAN-177: proof of grounding, so a caller can tell a notebook
+          // answer from a general-knowledge one. Only ever set for a
+          // successful default-scoped horo_consult.
+          if (notebookGrounding) {
+            const resultBody = outcome?.response?.result;
+            if (resultBody && Array.isArray(resultBody.content)) {
+              resultBody.notebookGrounding = notebookGrounding;
+            }
           }
           return outcome;
         }

@@ -1167,7 +1167,7 @@ export class BridgeSocketManager {
       // Content script re-detected scope after navigation; resolve pending scopes
       // with the ACTUAL scope (not the target). Also forward to Worker for currentScope update.
       this.onScopeDetected(tabId, msg.scope);
-    } else if (["STREAM_CHUNK", "STREAM_DONE", "STREAM_ERROR", "MODEL_READY", "NATIVE_RETRY_RESULT"].includes(msg.type)) {
+    } else if (["STREAM_CHUNK", "STREAM_DONE", "STREAM_ERROR", "MODEL_READY", "NATIVE_RETRY_RESULT", "NOTEBOOK_ATTACH_RESULT"].includes(msg.type)) {
       this.sendToWorker(msg);
     } else if (msg.type === "REQUEST_SCOPE_DETECTION") {
       // Forward scope re-detection requests to the active content script.

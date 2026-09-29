@@ -614,6 +614,13 @@ export const MessageTypes = Object.freeze({
   PREPARE_MODEL: 'PREPARE_MODEL',
   PREPARE_SCOPE: 'PREPARE_SCOPE',
 
+  // KAN-177: attach a NotebookLM notebook to the live conversation.
+  // Distinct from PREPARE_SCOPE: a notebook scope would navigate the tab
+  // to /notebook/<id>, which is not a chat surface. This leaves the
+  // conversation at its real /app/ URL and attaches the notebook there.
+  ATTACH_NOTEBOOK: 'ATTACH_NOTEBOOK',
+  NOTEBOOK_ATTACH_RESULT: 'NOTEBOOK_ATTACH_RESULT',
+
   // Control
   CANCEL_REQUEST: 'CANCEL_REQUEST',
   REFRESH_MODELS: 'REFRESH_MODELS',

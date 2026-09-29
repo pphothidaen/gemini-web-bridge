@@ -201,22 +201,82 @@
    *
    * @returns {{active: boolean, source: string}}
    */
+  /**
+   * True while Gemini is still generating.
+   *
+   * ⚠️ The spinner selector below is a FALSE POSITIVE and is guarded
+   * against rather than trusted. `div.loading-content-spinner-container`
+   * and `mat-progress-spinner.mat-mdc-progress-spinner` do not mark
+   * generation at all: they also render permanently in the left sidenav
+   * while it loads the chat history, with
+   * aria-label="กำลังโหลด Gem และการสนทนาล่าสุด" ("loading Gems and recent
+   * conversations") and a DOM path of
+   *   SIDE-NAVIGATION-CONTENT → BARD-SIDENAV → infinite-scroller.
+   *
+   * Verified 2026-09-29 against a live authenticated tab: with a finished
+   * 3,460-character answer on screen and NO stop button, the sidebar
+   * spinner was still present. An unscoped `document.querySelector` here
+   * therefore returns `active: true` forever, so the wait at
+   * `!generatingSignal(d).active` can never resolve and the native-retry
+   * path burns its entire budget on every single call. That is the
+   * "generating: 1" symptom that looked like an upstream outage.
+   *
+   * So every spinner match is now checked against the region it is
+   * allowed to live in — the newest `model-response` — and anything
+   * found in the sidenav is rejected by name rather than ignored.
+   * KAN-176 recorded this selector as "verified against the real DOM";
+   * it was read from a DOM sample, not observed over a live generation.
+   */
   function generatingSignal(doc = document) {
     if (!doc) return { active: false, source: "no_document" };
-    if (doc.querySelector("div.loading-content-spinner-container")) {
-      return { active: true, source: "material_spinner_container" };
+
+    // Scope: only a spinner inside the newest response can mean that
+    // response is still generating. lastModelResponse may be null (no
+    // response yet) and a minimal document stub may lack the method, so
+    // both are tolerated rather than thrown from a diagnostic helper.
+    let response = null;
+    try {
+      response = lastModelResponse(doc);
+    } catch (e) {
+      response = null;
     }
-    if (doc.querySelector("mat-progress-spinner.mat-mdc-progress-spinner")) {
-      return { active: true, source: "material_progress_spinner" };
+    if (response && typeof response.querySelector === "function") {
+      const inResponse =
+        response.querySelector("div.loading-content-spinner-container") ||
+        response.querySelector("mat-progress-spinner.mat-mdc-progress-spinner");
+      if (inResponse) {
+        return { active: true, source: "response_spinner" };
+      }
+      // A stop control inside the response is the signal that actually
+      // tracks generation on this build; the spinner is not.
+      if (response.querySelector(
+        'button[aria-label*="หยุดการสร้าง"], button[aria-label*="Stop generating"]'
+      )) {
+        return { active: true, source: "response_stop_button" };
+      }
     }
+
+    // Document-wide match: only report it as a real signal if it is NOT
+    // the chat-history loader in the sidenav. Named so a future log line
+    // shows the guard fired instead of the wait hanging invisibly.
+    const anySpinner =
+      doc.querySelector("div.loading-content-spinner-container") ||
+      doc.querySelector("mat-progress-spinner.mat-mdc-progress-spinner");
+    if (anySpinner) {
+      const inSidenav =
+        typeof anySpinner.closest === "function" &&
+        anySpinner.closest("bard-sidenav, side-navigation-content, .sidenav-with-history-container");
+      return {
+        active: false,
+        source: inSidenav ? "sidenav_spinner_rejected" : "unscoped_spinner_no_response"
+      };
+    }
+
     if (doc.querySelector('clipPath[id^="__lottie_element"]')) {
       return { active: true, source: "lottie_clippath" };
     }
     if (doc.querySelector('svg[clip-path*="__lottie_element"]')) {
       return { active: true, source: "lottie_svg" };
-    }
-    if (doc.querySelector('button[aria-label*="หยุดการสร้าง"], button[aria-label*="Stop generating"]')) {
-      return { active: true, source: "stop_button" };
     }
     return { active: false, source: "none" };
   }

@@ -312,6 +312,77 @@ test('MCP Protocol: tools/call executes check_bridge_health and returns diagnost
   assert.ok(healthJson.queue);
   assert.ok(healthJson.metrics);
   assert.equal(healthJson.hybrid_fallback.has_gcp_fallback, false);
+  // KAN-177: notebook grounding is reported, and reads "unknown" before any
+  // attach has run rather than implying grounding is fine on no evidence.
+  assert.equal(healthJson.notebook.target_name, 'Horo');
+  assert.equal(healthJson.notebook.target_scope, HORO_DEFAULT_NOTEBOOK_SCOPE);
+  assert.equal(healthJson.notebook.last_attach_status, 'unknown');
+  assert.equal(healthJson.notebook.last_attach_at, null);
+  assert.equal(healthJson.notebook.attach_failures, 0);
+});
+
+test('check_bridge_health: notebook status becomes "ok" only after a real attach', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
+  b.executeThroughExtension = async () => 'answer';
+
+  const call = async () => {
+    const r = await postMcp(b, {
+      jsonrpc: '2.0', id: 90, method: 'tools/call',
+      params: { name: 'horo_consult', arguments: { query: 'q' } }
+    });
+    return (await r.json());
+  };
+  const health = async () => {
+    const r = await postMcp(b, {
+      jsonrpc: '2.0', id: 91, method: 'tools/call',
+      params: { name: 'check_bridge_health' }
+    });
+    return JSON.parse((await r.json()).result.content[0].text);
+  };
+
+  assert.equal((await health()).notebook.last_attach_status, 'unknown');
+  await call();
+  const after = (await health()).notebook;
+  assert.equal(after.last_attach_status, 'ok');
+  assert.ok(after.last_attach_at, 'the attach time must be recorded');
+  assert.equal(after.last_attach_reason, null);
+  assert.equal(after.attach_failures, 0);
+});
+
+test('check_bridge_health: a failed attach is recorded with its reason and counted', async () => {
+  // The failure path returns an error to the caller, so without this record
+  // the health check would keep reporting "unknown" forever and the one
+  // signal that says grounding is broken would be invisible.
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.runNotebookAttach = async () => ({ ok: false, reason: 'tab_not_visible', step: 'visibility', attached: [] });
+
+  await postMcp(b, {
+    jsonrpc: '2.0', id: 92, method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q' } }
+  });
+  const healthRes = await postMcp(b, {
+    jsonrpc: '2.0', id: 93, method: 'tools/call',
+    params: { name: 'check_bridge_health' }
+  });
+  const nb = JSON.parse((await healthRes.json()).result.content[0].text).notebook;
+  assert.equal(nb.last_attach_status, 'failed');
+  assert.equal(nb.last_attach_reason, 'tab_not_visible');
+  assert.equal(nb.attach_failures, 1);
+  assert.ok(nb.last_attach_at);
+
+  // A second failure must accumulate, not reset.
+  await postMcp(b, {
+    jsonrpc: '2.0', id: 94, method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q' } }
+  });
+  const health2 = await postMcp(b, {
+    jsonrpc: '2.0', id: 95, method: 'tools/call',
+    params: { name: 'check_bridge_health' }
+  });
+  assert.equal(JSON.parse((await health2.json()).result.content[0].text).notebook.attach_failures, 2);
 });
 
 test('MCP Protocol: tools/call executes list_bridge_models and returns dynamic models', async () => {
@@ -776,7 +847,10 @@ test('horo_consult: listed in tools/list with BaZi schema (query required, respo
   const scopeDesc = tool.inputSchema.properties.scope.description;
   assert.match(scopeDesc, /https:\/\/gemini\.google\.com\/app/, 'scope description must document the App default');
   assert.ok(scopeDesc.includes(HORO_DEFAULT_NOTEBOOK_SCOPE), 'scope description must document the HoroConsultant notebook default');
-  assert.ok(scopeDesc.includes('คืนค่า scope default เดิม'), 'scope description must document that the pre-call scope is restored');
+  // KAN-177: the notebook is attached in place, not navigated to, and the
+  // description must stop promising a scope switch-and-restore.
+  assert.match(scopeDesc, /bridgeScope\.attachedInPlace=true/, 'scope description must document the in-place attach');
+  assert.doesNotMatch(scopeDesc, /คืนค่า scope default เดิม/, 'no scope switch happens for horo_consult, so do not promise a restore');
 });
 
 test('horo_consult: fails fast with standard extension-disconnected error when no extension is connected', async () => {
@@ -797,11 +871,18 @@ test('horo_consult: fails fast with standard extension-disconnected error when n
   assert.match(data.error.message, /Chrome Extension is not connected/);
 });
 
-test('horo_consult: default notebook scope applied when args.scope omitted, prompt carries Role/Birth Context/User Question', async () => {
+// KAN-177: horo_consult no longer navigates the tab to /notebook/<id>.
+// That page is not a chat surface — submitting there re-issues the query
+// into a fresh /app/<new-id> conversation, so the scope the bridge asked
+// for is gone before the answer streams. The notebook is now ATTACHED to
+// the conversation already open, which keeps the URL and the scope intact.
+test('horo_consult: attaches the notebook in place instead of switching scope; prompt keeps persona/birth/question', async () => {
   const b = createBridge();
   b.activeSocket = { readyState: 1, send: () => {} };
   const preparedScopes = [];
   b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
+  const attaches = [];
+  b.runNotebookAttach = async ({ notebookName }) => { attaches.push(notebookName); return { ok: true, attached: [notebookName] }; };
   let capturedPrompt = null;
   b.executeThroughExtension = async (messages) => { capturedPrompt = messages[0].content; return 'คำตอบทดสอบจาก Notebook'; };
 
@@ -825,8 +906,15 @@ test('horo_consult: default notebook scope applied when args.scope omitted, prom
   assert.deepEqual(data.result.content, [{ type: 'text', text: 'คำตอบทดสอบจาก Notebook' }]);
   assert.equal(data.result.structuredContent, undefined);
 
-  // Default scope: notebook:id was prepared
-  assert.deepEqual(preparedScopes, [HORO_DEFAULT_NOTEBOOK_SCOPE]);
+  // The notebook was attached, and NO scope switch was attempted: navigating
+  // to /notebook/<id> is exactly the behaviour this replaced.
+  assert.deepEqual(attaches, ['Horo']);
+  assert.deepEqual(preparedScopes, [], 'must not navigate the tab to a notebook scope');
+
+  // Proof of grounding travels with the result so a caller can tell a
+  // notebook-grounded answer from a general-knowledge one.
+  assert.equal(data.result.notebookGrounding.attached, true);
+  assert.deepEqual(data.result.notebookGrounding.attachedNames, ['Horo']);
 
   // Prompt construction. The template is prose, not a "[Role: ...] / Birth
   // Context: ... / User Question: ..." spec sheet — see src/prompt-templates.js.
@@ -837,6 +925,27 @@ test('horo_consult: default notebook scope applied when args.scope omitted, prom
   assert.ok(capturedPrompt.includes('day_master: Jia Wood'), 'birth context must survive');
   assert.ok(capturedPrompt.includes('ช่วยวิเคราะห์ดวงการเงิน'), 'the user question must survive');
   assert.doesNotMatch(capturedPrompt, /\[Role:/, 'no label block');
+});
+
+// A failed attach must be a loud error, never a silent ungrounded answer.
+test('horo_consult: a failed notebook attach is an explicit error, not an ungrounded answer', async () => {
+  const b = createBridge();
+  b.activeSocket = { readyState: 1, send: () => {} };
+  b.runNotebookAttach = async () => ({ ok: false, reason: 'tab_not_visible', step: 'visibility', attached: [] });
+  let executed = false;
+  b.executeThroughExtension = async () => { executed = true; return 'should never be reached'; };
+
+  const res = await postMcp(b, {
+    jsonrpc: '2.0', id: 64, method: 'tools/call',
+    params: { name: 'horo_consult', arguments: { query: 'q' } }
+  });
+
+  const data = await res.json();
+  assert.ok(data.error, 'expected a JSON-RPC error, got: ' + JSON.stringify(data));
+  assert.match(data.error.message, /Could not attach the HoroConsultant notebook/);
+  // The step and reason must survive, or the message is unactionable.
+  assert.match(data.error.message, /tab_not_visible/);
+  assert.equal(executed, false, 'must not ask Gemini without the notebook attached');
 });
 
 test('horo_consult: explicit args.scope overrides the default notebook scope', async () => {
@@ -859,12 +968,15 @@ test('horo_consult: explicit args.scope overrides the default notebook scope', a
   assert.deepEqual(preparedScopes, ['app']);
 });
 
-test('horo_consult: restores the pre-call scope after using the default notebook scope (no sticky scope leak)', async () => {
+// KAN-177: with no explicit scope there is no scope switch at all, so the
+// pre-call scope is trivially preserved — the attach flow cannot leak it.
+test('horo_consult: leaves the session scope untouched when attaching in place (no sticky scope leak)', async () => {
   const b = createBridge();
   b.activeSocket = { readyState: 1, send: () => {} };
   b.currentScope = 'app'; // session was on /app before the horo call
   const preparedScopes = [];
   b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
+  b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
   let scopeDuringExecution = null;
   b.executeThroughExtension = async () => { scopeDuringExecution = b.currentScope; return 'answer'; };
 
@@ -878,19 +990,20 @@ test('horo_consult: restores the pre-call scope after using the default notebook
   const data = await res.json();
   assert.ok(data.result, 'expected success, got: ' + JSON.stringify(data.error || data));
 
-  // Answer was produced on the Notebook...
-  assert.equal(scopeDuringExecution, HORO_DEFAULT_NOTEBOOK_SCOPE);
-  // ...but the session was put back on /app afterwards, so the next unscoped
-  // tool call does not silently inherit the Notebook scope.
-  assert.deepEqual(preparedScopes, [HORO_DEFAULT_NOTEBOOK_SCOPE, 'app']);
+  // The answer was produced on the conversation that was already open...
+  assert.equal(scopeDuringExecution, 'app');
+  // ...and nothing navigated anywhere, so the next unscoped tool call cannot
+  // inherit a Notebook scope that was never set.
+  assert.deepEqual(preparedScopes, []);
   assert.equal(b.currentScope, 'app');
 
-  // Callers can observe the scope that actually served the answer.
-  assert.deepEqual(data.result.bridgeScope, {
-    used: HORO_DEFAULT_NOTEBOOK_SCOPE,
-    active: 'app',
-    restored: true
-  });
+  // Callers see the notebook scope that served the answer, plus the flag
+  // that says it was attached in place rather than navigated to.
+  assert.equal(data.result.bridgeScope.used, HORO_DEFAULT_NOTEBOOK_SCOPE);
+  assert.equal(data.result.bridgeScope.active, 'app');
+  assert.equal(data.result.bridgeScope.restored, false);
+  assert.equal(data.result.bridgeScope.attachedInPlace, true);
+  assert.equal(data.result.notebookGrounding.attached, true);
 });
 
 test('horo_consult: explicit scope is used for the call, then the pre-call scope is restored', async () => {
@@ -945,12 +1058,13 @@ test('horo_consult: no restore when the requested scope equals the current scope
   assert.deepEqual(data.result.bridgeScope, { used: 'app', active: 'app', restored: false });
 });
 
-test('horo_consult: restores the pre-call scope even when execution fails', async () => {
+test('horo_consult: does not move the session when execution fails after a successful attach', async () => {
   const b = createBridge();
   b.activeSocket = { readyState: 1, send: () => {} };
   b.currentScope = 'app';
   const preparedScopes = [];
   b.prepareScope = async (scope) => { preparedScopes.push(scope); return { scope }; };
+  b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
   b.executeThroughExtension = async () => { throw new Error('boom'); };
 
   const res = await postMcp(b, {
@@ -963,8 +1077,8 @@ test('horo_consult: restores the pre-call scope even when execution fails', asyn
   const data = await res.json();
   assert.ok(data.error, 'expected JSON-RPC error, got: ' + JSON.stringify(data));
   assert.match(data.error.message, /Tool execution failed/);
-  // The failure path must not leave the session pinned to the Notebook.
-  assert.deepEqual(preparedScopes, [HORO_DEFAULT_NOTEBOOK_SCOPE, 'app']);
+  // The failure path must not leave the session somewhere new.
+  assert.deepEqual(preparedScopes, []);
   assert.equal(b.currentScope, 'app');
 });
 
@@ -997,6 +1111,10 @@ test('horo_consult: response_format=pdf stores artifact in KV with 1h TTL and re
   const b = createBridge();
   b.activeSocket = { readyState: 1, send: () => {} };
   b.prepareScope = async (scope) => ({ scope });
+  // KAN-177: the default-scoped path attaches the notebook first. Without
+  // this stub the real runNotebookAttach waits out its 45s timeout, which
+  // turns this KV assertion into a slow, misleading failure.
+  b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
   b.executeThroughExtension = async () => 'Horo Consultation Report\n\n- Section 1: ดวงชะตา (sanitized in PDF)';
   const kv = mockArtifactKv();
   b.env.ARTIFACT_KV = kv;
@@ -1041,6 +1159,9 @@ test('horo_consult: PDF generation failure degrades gracefully to text without c
   const b = createBridge();
   b.activeSocket = { readyState: 1, send: () => {} };
   b.prepareScope = async (scope) => ({ scope });
+  // KAN-177: stub the notebook attach so this asserts PDF degradation rather
+  // than the attach timeout.
+  b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
   b.executeThroughExtension = async () => 'answer text';
   b.env.ARTIFACT_KV = { put: async () => { throw new Error('kv down'); }, get: async () => null };
 

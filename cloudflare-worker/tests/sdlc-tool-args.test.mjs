@@ -194,10 +194,12 @@ test('horo_consult: a missing required query returns -32602 without calling Gemi
 
 test('horo_consult: a valid query still reaches Gemini (the required-arg guard does not over-reject)', async () => {
   const b = createBridge();
-  // horo_consult pins the session to the HoroConsultant Notebook by default, so
-  // prepareScope must be stubbed — the real one drives the extension and would
-  // block for its full 45s timeout in a unit test.
+  // horo_consult attaches the HoroConsultant notebook to the open conversation
+  // before asking, so the attach must be stubbed — the real one drives the
+  // browser UI and would block for its full 45s timeout in a unit test.
+  // prepareScope is stubbed too, for the explicit-scope path.
   b.prepareScope = async (scope) => ({ scope });
+  b.runNotebookAttach = async () => ({ ok: true, attached: ['Horo'] });
   let prompt = null;
   b.executeThroughExtension = async (messages) => { prompt = messages[0].content; return 'หัวใจ: น้ำ ดิน ไฟ'; };
 

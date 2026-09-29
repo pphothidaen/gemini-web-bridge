@@ -615,6 +615,13 @@
         if (isLeaderTab) handleNativeRetry(msg);
         break;
 
+      // KAN-177: attach a NotebookLM notebook to the live conversation
+      // instead of navigating to /notebook/<id>, which is not a chat
+      // surface and moves the tab out from under the bridge.
+      case "ATTACH_NOTEBOOK":
+        if (isLeaderTab) handleAttachNotebook(msg);
+        break;
+
       case "CANCEL_REQUEST":
         handleCancelRequest(msg);
         break;
@@ -1334,6 +1341,82 @@
       ok: outcome.ok,
       reason: outcome.reason,
       text: outcome.text
+    });
+  }
+
+  /**
+   * Handles ATTACH_NOTEBOOK from the Worker.
+   *
+   * `horo_consult` needs the HoroConsultant notebook attached to the
+   * conversation it is about to ask. The old approach navigated the tab
+   * to gemini.google.com/notebook/<id>, but that page is not a chat
+   * surface: submitting there wraps the question in a "คุณบอกว่า…"
+   * preamble and spawns a NEW conversation under /app/<new-id>, so the
+   * scope the bridge resolved is gone before the answer streams.
+   *
+   * Driving Gemini's own "+ > more uploads > Notebooks" menu attaches the
+   * notebook to the conversation already open, so the URL, the
+   * conversation, and the scope all stay put.
+   *
+   * The attach is a UI round trip with real latency, so the indicator
+   * reports progress and every failure carries the step it died at plus
+   * the selector that step used. A silently-empty menu reads as a
+   * selector bug when it is really a hidden tab — NotebookAttach
+   * distinguishes those (see isTabVisible) and says so.
+   */
+  async function handleAttachNotebook(msg) {
+    const { requestId, notebookName, timeoutMs = 20000 } = msg;
+    console.log(`[Bridge] 📎 ATTACH_NOTEBOOK "${notebookName}" (${requestId})`);
+
+    const Attach = (typeof globalThis !== "undefined" && globalThis.NotebookAttach) || null;
+    if (!Attach) {
+      sendToWorker({
+        type: "NOTEBOOK_ATTACH_RESULT",
+        requestId,
+        ok: false,
+        reason: "attach_unavailable",
+        step: "load"
+      });
+      return;
+    }
+
+    createOrUpdateIndicator("connected", `Bridge: Attaching "${notebookName}"...`);
+
+    let outcome;
+    try {
+      outcome = await Attach.attachNotebook({
+        notebookName,
+        timeoutMs,
+        log: (line) => console.log(`[Bridge] ${line}`)
+      });
+    } catch (err) {
+      outcome = { ok: false, reason: err?.message || "attach_failed", step: "unknown" };
+    }
+
+    // The whole point of the flow is that the answer is grounded, so the
+    // attached names travel back with the result. The worker reports
+    // them to the MCP client instead of asserting grounding it cannot see.
+    const attached = outcome.attached || Attach.readAttachedNotebooks(document);
+
+    console.log(
+      `[Bridge] 📎 ATTACH_NOTEBOOK ${outcome.ok ? "ok" : "failed"} ` +
+      `(step=${outcome.step || "n/a"}, reason=${outcome.reason || "none"}, ` +
+      `attached=${JSON.stringify(attached)})`
+    );
+
+    createOrUpdateIndicator(
+      "connected",
+      outcome.ok ? `Bridge: "${notebookName}" attached` : "Bridge: notebook attach failed"
+    );
+
+    sendToWorker({
+      type: "NOTEBOOK_ATTACH_RESULT",
+      requestId,
+      ok: outcome.ok,
+      reason: outcome.reason,
+      step: outcome.step,
+      alreadyAttached: outcome.alreadyAttached,
+      attached
     });
   }
 
