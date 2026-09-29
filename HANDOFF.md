@@ -1,10 +1,23 @@
 # 🧭 Master Project Handoff & Architecture Blueprint
 
+> ## ⚠️ START HERE INSTEAD → [`docs/HANDOFF-NEXT-SESSION.md`](docs/HANDOFF-NEXT-SESSION.md)
+>
+> **This file is stale.** It describes `v4.4.3`, 95 tests, and a production host
+> (`gemini-web-bridge.pansakorn-pho.workers.dev`) that is **not** the current
+> one. As of 2026-09-29 the project is on `v4.7.9`, 409 tests, and
+> `https://prod.gemini-web-bridge.workers.dev`.
+>
+> Treat the sections below as background on the architecture only. For the
+> current state, the commands, the operational gotchas and the open work, use
+> `docs/HANDOFF-NEXT-SESSION.md`. The detailed working log for the most recent
+> ticket is `docs/HANDOFF-KAN-182.md`.
+
+---
+
 > **Gemini Web Bridge (Edge AI Gateway & Hybrid Hub)**  
-> **Current Version:** `v4.4.3` (Background-Socket Sessions & Conversation Scopes Edition)  
-> **Repository:** `gemini-web-bridge` | **Production URL:** `https://gemini-web-bridge.pansakorn-pho.workers.dev`  
+> **Document version:** `v4.4.3` — superseded, see above  
+> **Repository:** `gemini-web-bridge`  
 > **System Status:** Production Ready & 100% Operational  
-> **Test Pass Rate:** **95 / 95 Tests (100%)** — All tests passing ✅
 > **Last Verified Date:** 2026-09-21
 ---
 
