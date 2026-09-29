@@ -19,9 +19,9 @@ KAN-182 is **done, committed, and verified live**. The `horo_consult` tool now
 returns answers that are genuinely grounded in the HoroConsultant notebook, and
 it says so honestly when they are not.
 
-Nothing is half-applied, but v4.7.10 (the auto-focus bail plus its tests) sits
-**uncommitted in the working tree** and has never run in a browser. The
-deployed worker is still v4.7.9. See §6.
+Working tree is clean at `1f60bf4`. v4.7.10 is **committed and verified live
+in the extension**, but the *worker* is still deployed at v4.7.9 — run
+`npx wrangler deploy` if the worker-side copy needs to match.
 
 ### The verification that closed it
 
@@ -196,7 +196,7 @@ measurement taken at the wrong moment and reported as a settled fact.**
    one payload sample**. Until then, the replay path is skipped when
    `requireGrounding` is set and this is correct. **Currently blocked on
    data, not on code.**
-4. ~~**Auto-focus the tab.**~~ **DONE in tree, NOT verified live.** The
+4. ~~**Auto-focus the tab.**~~ **DONE and verified live (KAN-190).** The
    extension asks the background script to foreground the tab
    (`REQUEST_TAB_FOCUS` → `chrome.tabs.update` + `chrome.windows.update`) and
    polls `document.visibilityState` for up to 2s. Both handlers bail on a
@@ -204,8 +204,10 @@ measurement taken at the wrong moment and reported as a settled fact.**
    previous version discarded that boolean and a failed focus then surfaced
    much later as `tab_not_visible` — indistinguishable from a UI problem.
    Covered by `tests/extension-tab-focus.test.mjs` (9 tests), mutation-checked:
-   reverting the bail turns 4 of the 9 red. Tracked as **KAN-190**, which
-   stays open until the live run below passes.
+   reverting the bail turns 4 of the 9 red. Verified live on 2026-09-29 with
+   three consecutive grounded calls; on the third the tab was deliberately
+   left hidden and became visible mid-run, so the focus path demonstrably
+   does the work. KAN-190 is closed.
 
 ### The one thing left, and why it is not yet done
 
