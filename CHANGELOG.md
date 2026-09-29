@@ -2,6 +2,33 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.7.13] - 2026-09-29
+
+### Fixed
+- **The bridge judged a half-written answer.** `generatingSignal()` checked a
+  spinner, a stop button and a lottie clipPath. None of them exist on this
+  build: the response instead carries
+  `processing-state-visible` and `has-thoughts`, and neither was looked for. So
+  `isGenerating()` returned false mid-generation, `handleCollectAnswer` stopped
+  waiting, and the worker ran its grounding check on a partial answer.
+  Measured: `COLLECT_ANSWER` reported `chars=37` and the answer was judged
+  `no_citations_in_response`, while the same response was 1267px tall and
+  complete moments later. The class check is scoped to the newest response,
+  because a finished response keeps `has-thoughts` permanently.
+- **Grounding settled after 1.2 seconds of stillness.** A gap between two
+  bursts of a long Thai answer looked identical to a finished one, and
+  citations stream in after the text. The settle window is now 4 seconds, the
+  counter is suspended while the response is still generating, and a timeout
+  that expires mid-generation reports `timeout_while_generating` rather than
+  claiming citations were absent.
+
+Both were the same defect at two layers, and the second is the one KAN-182
+already warned about: an unreadable answer reported as an ungrounded one.
+
+### Notes
+- Not deployed. The worker still runs 4.7.11; `wrangler deploy` is left to the
+  operator.
+
 ## [4.7.12] - 2026-09-29
 
 ### Added

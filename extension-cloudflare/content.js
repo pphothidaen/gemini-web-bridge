@@ -774,7 +774,7 @@
   function handleScopeSwitch(msg) {
     const { scope: targetScope, requestId } = msg;
     console.log(`[Bridge] 📡 SCOPE_SWITCH received: ${detectScope()} -> ${targetScope} (req: ${requestId})`);
-    
+
     // Validate the target scope
     const m = /^(app|notebook):([A-Za-z0-9_-]+)$/.exec(targetScope || "");
     if (!m && targetScope !== 'app') {
@@ -787,7 +787,7 @@
       });
       return;
     }
-    
+
     const current = detectScope();
     if (targetScope === current || (targetScope === 'app' && current === 'app')) {
       // Already at target scope, confirm immediately
@@ -795,11 +795,11 @@
       sendToWorker({ type: "SCOPE_READY", requestId: requestId, scope: current });
       return;
     }
-    
+
     // The background service worker handles navigation
     // We just acknowledge and wait for navigation to complete
     console.log(`[Bridge] SCOPE_SWITCH acknowledged; background will navigate to ${targetScope}`);
-    
+
     // Grace window for in-flight background navigation before failing
     const GRACE_WINDOW_MS = 800;
     setTimeout(() => {
@@ -1586,18 +1586,38 @@
 
       if (evidence.verified) break;
 
-      // Settled means the newest response is neither gaining citations nor
-      // changing shape, so there is nothing left to wait for.
-      const signature = `${evidence.chipCount || 0}:${evidence.citeMarkers || 0}`;
-      if (signature === lastSignature) {
-        stableSamples += 1;
-        if (stableSamples >= 3) break;
-      } else {
+      const Recovery = (typeof globalThis !== "undefined" && globalThis.NativeRecovery) || null;
+      const isGenerating = Recovery ? Recovery.isGenerating(document) : false;
+
+      if (isGenerating) {
+        // Suspend the settle counter while the response is actively generating.
         stableSamples = 0;
-        lastSignature = signature;
+        lastSignature = null;
+      } else {
+        // Settled means the newest response is neither gaining citations nor
+        // changing shape, so there is nothing left to wait for.
+        // 10 samples x 400ms = 4.0s of no change. 1.2s is too short for a long
+        // Thai-language response (e.g., 2,800-3,100 chars), which can pause
+        // for >1.2s mid-burst. 4 seconds makes it much less likely to judge a
+        // mid-answer gap as finished.
+        const signature = `${evidence.chipCount || 0}:${evidence.citeMarkers || 0}`;
+        if (signature === lastSignature) {
+          stableSamples += 1;
+          if (stableSamples >= 10) break;
+        } else {
+          stableSamples = 0;
+          lastSignature = signature;
+        }
       }
 
       await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+
+    const RecoveryOut = (typeof globalThis !== "undefined" && globalThis.NativeRecovery) || null;
+    const isGeneratingAtEnd = RecoveryOut ? RecoveryOut.isGenerating(document) : false;
+
+    if (Date.now() >= deadline && isGeneratingAtEnd && !evidence?.verified) {
+      if (evidence) evidence.reason = "timeout_while_generating";
     }
 
     console.log(
