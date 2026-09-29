@@ -287,6 +287,9 @@ Gemini Web Bridge provides a complete suite of remote MCP tools via `POST /mcp` 
 - **[docs/COMMIT_TICKET_MAPPING.md](docs/COMMIT_TICKET_MAPPING.md)** — commit → Jira ticket
   mapping, including six commits whose `KAN-` prefix does not match their scope.
   Check it before acting on a ticket referenced from history.
+- **[docs/api-spec.md](docs/api-spec.md)** — authoritative API spec for the
+  `horo_consult` MCP tool (notebook-grounded consultation): input schema,
+  grounding model, fail-closed error matrix, and consumer adapter contract.
 
 ---
 

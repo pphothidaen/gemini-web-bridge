@@ -152,13 +152,13 @@ HTTP-level: `401` key ไม่ถูก, `429` คิวเต็ม, `503` ext
 | ขาด `query` | `-32602` ก่อนใช้ทรัพยากรใด ๆ | แก้ payload |
 | Attach notebook ล้ม (แท็บถูก minimize, dialog ไม่ขึ้น) | `-32000` `notebook_attach_failed` พร้อม `step`/`reason` — **ไม่มีคำตอบส่งกลับ** | นำแท็บ Gemini ขึ้น foreground แล้ว retry |
 | คำตอบไม่มี citation จาก notebook | `-32000` grounding unverified — ไม่มีคำตอบ | **เริ่ม conversation ใหม่** (attachment ถูกใช้ต่อข้อความ) แล้ว retry 1 ครั้ง |
-| คำตอบว่างหลัง decode | `-32000` empty response (หรือ GCP fallback) | Retry |
-| Extension offline | `-32000` (MCP) / `503` (REST); ถ้ามี `GEMINI_API_KEY` → **GCP fallback** | ดูกติกา fallback ด้านล่าง |
+| คำตอบว่างหลัง decode | `-32000` empty response — grounding-required call **ไม่เดิน GCP fallback** | Retry |
+| Extension offline | `-32000` (MCP) / `503` (REST); grounding-required call **ไม่เดิน GCP fallback**; tool อื่น fallback ได้ | ดูกติกา fallback ด้านล่าง |
 | คิวเต็ม (>10 waiters) | HTTP `429` | Backoff แล้ว retry |
 | `scope` พิมพ์ผิด/ไม่รู้จัก | `-32602` พร้อมข้อความ usage | แก้ค่า scope |
 
 > [!IMPORTANT]
-> **GCP fallback leak:** เมื่อ extension ตัดการเชื่อมต่อและ worker มี `GEMINI_API_KEY` คำตอบจะกลับมาแบบ **สำเร็จ** แต่เป็นคำตอบที่ **ไม่ grounded ใน notebook** (ไม่มี `notebookGrounding`, ข้อความขึ้นต้น `[Provider: GCP Gemini Fallback]`) Consumer ที่ต้องการ grounding ต้องตรวจ `notebookGrounding.verified === true` เสมอ ไม่ใช่ตัดสินจากการที่ call สำเร็จ
+> **GCP fallback (fail-closed ตั้งแต่ KAN-204):** ก่อนหน้านี้เมื่อ extension ตัดการเชื่อมต่อและ worker มี `GEMINI_API_KEY` call ที่ต้องการ grounding อาจกลับมาเป็น **สำเร็จ** แต่ไม่ grounded (ไม่มี `notebookGrounding`, ข้อความขึ้นต้น `[Provider: GCP Gemini Fallback]`) — ตอนนี้ worker **ปิดช่องนี้แล้วทั้ง 3 เส้นทาง** (extension offline, คำตอบว่าง, transient error): call ที่ต้องการ grounding จะได้ `-32000` เสมอ ไม่มีการตอบจาก GCP ผู้เรียกยังควรตรวจ `notebookGrounding.verified === true` ต่อไปเป็น defense-in-depth (ป้องกัน worker เวอร์ชันเก่าและ call แบบ explicit-scope ที่ไม่มี grounding claim ให้ตัดสิน)
 
 ## 8. Timing, Concurrency & Latency Pattern
 
@@ -225,7 +225,7 @@ args = {
 
 **Hard guard ก่อนยอมรับคำตอบ** (เข้าเงื่อนไข HITL/audit ของโปรเจค):
 
-1. `notebookGrounding.verified === true` — ไม่ใช่ → raise ProviderError (รวมกรณี GCP fallback: ไม่มี field `notebookGrounding` หรือ text ขึ้นต้น `[Provider: GCP Gemini Fallback]`)
+1. `notebookGrounding.verified === true` — ไม่ใช่ → raise ProviderError (รวมกรณี GCP fallback: ไม่มี field `notebookGrounding` หรือ text ขึ้นต้น `[Provider: GCP Gemini Fallback]` — worker ปิดช่องนี้แล้วตั้งแต่ KAN-204 จึงเหลือเป็น defense-in-depth)
 2. `bridgeScope.used == "notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0"`
 3. `text` ไม่ว่าง
 4. (config flag) ส่งผ่าน `project/validator.py` เพื่อคุมคุณภาพเทียบเส้นทางอื่น

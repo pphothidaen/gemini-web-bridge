@@ -3591,7 +3591,12 @@ export class GeminiBridgeDO extends DurableObject {
               await this.waitForExtension();
             }
             if (!this.isExtensionReady()) {
-              if (this.env.GEMINI_API_KEY) {
+              // KAN-204 / api-spec invariant G-1: a default-scoped horo_consult
+              // must never answer from the GCP fallback. That provider cannot
+              // see the notebook, so its answer is fluent but ungrounded — the
+              // exact failure the grounding verify exists to prevent. Other
+              // tools keep the fallback.
+              if (this.env.GEMINI_API_KEY && !wantsDefaultNotebook) {
                 try {
                   const gcpResult = await this.callGcpGemini([{ role: "user", content: prompt }]);
                   const res = {
@@ -3618,7 +3623,9 @@ export class GeminiBridgeDO extends DurableObject {
                 id,
                 error: {
                   code: -32000,
-                  message: "Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session."
+                  message: wantsDefaultNotebook
+                    ? "Chrome Extension is not connected. horo_consult will not answer from the GCP fallback because that answer cannot be grounded in the HoroConsultant notebook. Reconnect the browser session (open gemini.google.com) and retry."
+                    : "Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session."
                 }
               };
               return { response: res };
@@ -3726,7 +3733,10 @@ export class GeminiBridgeDO extends DurableObject {
               if (!usableText) {
                 this.recordHealthError(`Empty model response for tool '${toolName}'`);
                 console.warn(`[Bridge DO] Empty model response for tool '${toolName}' — returning error instead of blank content.`);
-                if (this.env.GEMINI_API_KEY) {
+                // KAN-204 / api-spec G-1: same fail-closed rule as the offline
+                // branch — an empty grounded answer must not turn into a
+                // successful ungrounded fallback answer.
+                if (this.env.GEMINI_API_KEY && !wantsDefaultNotebook) {
                   try {
                     const gcpResult = await this.callGcpGemini([{ role: "user", content: prompt }]);
                     return {
@@ -3746,7 +3756,9 @@ export class GeminiBridgeDO extends DurableObject {
                     id,
                     error: {
                       code: -32000,
-                      message: `Empty model response from Gemini Web for tool '${toolName}'. The browser session returned no decodable text; retry or re-open the Gemini tab.`
+                      message: wantsDefaultNotebook
+                        ? `Empty model response from Gemini Web for tool '${toolName}'. The browser session returned no decodable text, and the GCP fallback is deliberately skipped because the answer must be grounded in the HoroConsultant notebook. Start a fresh conversation and retry.`
+                        : `Empty model response from Gemini Web for tool '${toolName}'. The browser session returned no decodable text; retry or re-open the Gemini tab.`
                     }
                   }
                 };
@@ -3833,7 +3845,10 @@ export class GeminiBridgeDO extends DurableObject {
               };
               return { response: res };
             } catch (err) {
-              if (this.env.GEMINI_API_KEY && (err.code === "extension_disconnected" || err.code === "model_unverified" || /reconnected|disconnected|failed|timed out|unverified/i.test(err.message || ""))) {
+              // KAN-204 / api-spec G-1: the transient-error fallback is gated
+              // like the other two — a grounding-required tool must fail, not
+              // drift onto an ungrounded provider.
+              if (this.env.GEMINI_API_KEY && !wantsDefaultNotebook && (err.code === "extension_disconnected" || err.code === "model_unverified" || /reconnected|disconnected|failed|timed out|unverified/i.test(err.message || ""))) {
                 try {
                   const gcpResult = await this.callGcpGemini([{ role: "user", content: prompt }]);
                   const res = {
