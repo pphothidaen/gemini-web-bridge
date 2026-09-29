@@ -23,6 +23,7 @@ const require = createRequire(import.meta.url);
 const NativeRecovery = require('../../extension-cloudflare/native-recovery.js');
 const NotebookAttach = require('../../extension-cloudflare/notebook-attach.js');
 const PromptTyping = require('../../extension-cloudflare/prompt-typing.js');
+const GeminiInjected = require('../../extension-cloudflare/injected.js');
 
 // ── Prompt typing fallback (KAN-182) ────────────────────────────────────────
 //
@@ -1238,3 +1239,305 @@ test('KAN-182: setPromptTextAsync returns false for an empty prompt', async () =
   assert.equal(await PromptTyping.setPromptTextAsync(''), false);
   assert.equal(await PromptTyping.setPromptTextAsync('   '), false);
 });
+
+// ── MAIN-world prompt typing in injected.js (KAN-182) ──────────────────────
+//
+// Background: injected.js runs in Chrome's MAIN world to access Quill (__quill)
+// and Angular's internal model, which are invisible to the ISOLATED content script.
+// These tests validate its core typing, settling, reconciliation, and sync logic
+// without running the browser side-effects.
+
+test('MAIN-world typing: a text that survives settling is reported as landed (ok:true, settled:true)', async () => {
+  let quillText = '';
+  let quillSource = '';
+  const mockQuill = {
+    setText: (t, src) => { quillText = t; quillSource = src; },
+    setSelection: () => {},
+    getLength: () => quillText.length
+  };
+  const editor = {
+    className: 'ql-editor',
+    innerText: 'Hello from MAIN world',
+    textContent: 'Hello from MAIN world',
+    dispatchEvent: () => true
+  };
+  const host = {
+    __quill: mockQuill,
+    querySelector: (sel) => (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.editor ? editor : null)
+  };
+  const doc = {
+    querySelector: (sel) => {
+      if (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.richTextarea) return host;
+      if (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.editor) return editor;
+      return null;
+    }
+  };
+
+  const out = await GeminiInjected.typePromptInMainWorld('Hello from MAIN world', {
+    doc,
+    settleMs: 1,
+    maxAttempts: 3,
+    setT: (fn) => setTimeout(fn, 1)
+  });
+
+  assert.equal(out.ok, true);
+  assert.equal(out.settled, true);
+  assert.equal(out.text, 'Hello from MAIN world');
+  assert.equal(out.attempts, 1);
+  assert.equal(quillSource, 'user');
+});
+
+test('MAIN-world typing: a text that Angular reverts before settle is reported as text_reverted_after_settle', async () => {
+  let writes = 0;
+  const editor = {
+    // Angular resets the editor to blank after write
+    className: 'ql-editor ql-blank',
+    innerText: '',
+    textContent: '',
+    dispatchEvent: () => true
+  };
+  const mockQuill = {
+    setText: () => { writes++; },
+    setSelection: () => {},
+    getLength: () => 5
+  };
+  const host = {
+    __quill: mockQuill,
+    querySelector: () => editor
+  };
+  const doc = {
+    querySelector: (sel) => {
+      if (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.richTextarea) return host;
+      if (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.editor) return editor;
+      return null;
+    }
+  };
+
+  const out = await GeminiInjected.typePromptInMainWorld('reverted prompt', {
+    doc,
+    settleMs: 1,
+    maxAttempts: 3,
+    setT: (fn) => setTimeout(fn, 1)
+  });
+
+  assert.equal(out.ok, false);
+  assert.equal(out.reason, 'text_reverted_after_settle');
+  assert.equal(out.settled, true);
+  assert.equal(out.attempts, 3);
+  assert.equal(writes, 3);
+});
+
+test('MAIN-world typing: ql-blank makes a read count as reverted even when innerText holds text momentarily', async () => {
+  // Live failure mode: setText puts the string in innerText, but Angular marks
+  // the wrapper ql-blank during reconciliation. A text-only check reports a false success.
+  const editor = {
+    className: 'ql-editor ql-blank',
+    innerText: 'transient text still in DOM',
+    textContent: 'transient text still in DOM',
+    dispatchEvent: () => true
+  };
+  const mockQuill = {
+    setText: () => {},
+    setSelection: () => {},
+    getLength: () => 10
+  };
+  const host = {
+    __quill: mockQuill,
+    querySelector: () => editor
+  };
+  const doc = {
+    querySelector: (sel) => {
+      if (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.richTextarea) return host;
+      if (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.editor) return editor;
+      return null;
+    }
+  };
+
+  const out = await GeminiInjected.typePromptInMainWorld('transient text still in DOM', {
+    doc,
+    settleMs: 1,
+    maxAttempts: 2,
+    setT: (fn) => setTimeout(fn, 1)
+  });
+
+  assert.equal(out.ok, false);
+  assert.equal(out.reason, 'text_reverted_after_settle');
+  assert.equal(out.settled, true);
+});
+
+test('MAIN-world typing: a later attempt can win and report attempts count', async () => {
+  let attempt = 0;
+  const editor = {
+    get className() {
+      // First attempt is reverted (ql-blank); second attempt sticks.
+      return attempt >= 2 ? 'ql-editor' : 'ql-editor ql-blank';
+    },
+    get innerText() {
+      return attempt >= 2 ? 'eventually landed' : '';
+    },
+    dispatchEvent: () => true
+  };
+  const mockQuill = {
+    setText: () => { attempt++; },
+    setSelection: () => {},
+    getLength: () => 10
+  };
+  const host = {
+    __quill: mockQuill,
+    querySelector: () => editor
+  };
+  const doc = {
+    querySelector: (sel) => {
+      if (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.richTextarea) return host;
+      if (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.editor) return editor;
+      return null;
+    }
+  };
+
+  const out = await GeminiInjected.typePromptInMainWorld('eventually landed', {
+    doc,
+    settleMs: 1,
+    maxAttempts: 3,
+    setT: (fn) => setTimeout(fn, 1)
+  });
+
+  assert.equal(out.ok, true);
+  assert.equal(out.settled, true);
+  assert.equal(out.text, 'eventually landed');
+  assert.equal(out.attempts, 2);
+});
+
+test('MAIN-world typing: retries are strictly bounded by maxAttempts', async () => {
+  let attemptsMade = 0;
+  const editor = {
+    className: 'ql-editor ql-blank',
+    innerText: '',
+    dispatchEvent: () => true
+  };
+  const mockQuill = {
+    setText: () => { attemptsMade++; },
+    setSelection: () => {},
+    getLength: () => 5
+  };
+  const host = {
+    __quill: mockQuill,
+    querySelector: () => editor
+  };
+  const doc = {
+    querySelector: (sel) => {
+      if (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.richTextarea) return host;
+      if (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.editor) return editor;
+      return null;
+    }
+  };
+
+  const out = await GeminiInjected.typePromptInMainWorld('bound check', {
+    doc,
+    settleMs: 1,
+    maxAttempts: 4,
+    setT: (fn) => setTimeout(fn, 1)
+  });
+
+  assert.equal(out.ok, false);
+  assert.equal(out.attempts, 4);
+  assert.equal(attemptsMade, 4);
+});
+
+test('MAIN-world typing: a missing editor returns editor_not_found with attempts 0', async () => {
+  const doc = {
+    querySelector: () => null
+  };
+  const out = await GeminiInjected.typePromptInMainWorld('any prompt', { doc });
+  assert.equal(out.ok, false);
+  assert.equal(out.reason, 'editor_not_found');
+  assert.equal(out.attempts, 0);
+  assert.equal(out.text, '');
+});
+
+test('MAIN-world typing: an empty or whitespace prompt is rejected before touching the editor', async () => {
+  let queried = false;
+  const doc = {
+    querySelector: () => { queried = true; return null; }
+  };
+
+  for (const emptyVal of ['', '   ', '\t\n\r  ', null, undefined]) {
+    const out = await GeminiInjected.typePromptInMainWorld(emptyVal, { doc });
+    assert.equal(out.ok, false);
+    assert.equal(out.reason, 'empty_prompt');
+    assert.equal(out.attempts, 0);
+    assert.equal(out.text, '');
+  }
+  assert.equal(queried, false, 'must not query the DOM for empty/whitespace prompts');
+});
+
+test('MAIN-world typing: syncAngularModel returns false when window.ng is absent', () => {
+  const host = {};
+  const prevWindow = globalThis.window;
+  delete globalThis.window;
+  try {
+    assert.equal(GeminiInjected.syncAngularModel(host, 'prompt'), false);
+  } finally {
+    if (prevWindow !== undefined) globalThis.window = prevWindow;
+  }
+
+  // Also when window exists but ng property is missing
+  globalThis.window = {};
+  try {
+    assert.equal(GeminiInjected.syncAngularModel(host, 'prompt'), false);
+  } finally {
+    if (prevWindow !== undefined) globalThis.window = prevWindow;
+    else delete globalThis.window;
+  }
+});
+
+test('MAIN-world typing: syncAngularModel returns true when fake ng with getComponent/applyChanges is provided', () => {
+  const host = {};
+  let updatedValue = null;
+  let appliedComponent = null;
+
+  const mockComponent = {
+    formControl: {
+      setValue: (v) => { updatedValue = v; }
+    }
+  };
+
+  const prevWindow = globalThis.window;
+  globalThis.window = {
+    ng: {
+      getComponent: (el) => (el === host ? mockComponent : null),
+      applyChanges: (comp) => { appliedComponent = comp; }
+    }
+  };
+
+  try {
+    const synced = GeminiInjected.syncAngularModel(host, 'synced value');
+    assert.equal(synced, true);
+    assert.equal(updatedValue, 'synced value');
+    assert.equal(appliedComponent, mockComponent);
+  } finally {
+    if (prevWindow !== undefined) globalThis.window = prevWindow;
+    else delete globalThis.window;
+  }
+});
+
+test('MAIN-world typing: findQuillInMainWorld finds Quill on host and editor', () => {
+  const mockQuill = { setText: () => {} };
+  const hostWithQuill = { __quill: mockQuill };
+  const docHost = {
+    querySelector: (sel) => (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.richTextarea ? hostWithQuill : null)
+  };
+  assert.equal(GeminiInjected.findQuillInMainWorld(docHost), mockQuill);
+
+  const editorWithQuill = { __quill: mockQuill };
+  const hostWithoutQuill = {
+    __quill: null,
+    querySelector: (sel) => (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.editor ? editorWithQuill : null)
+  };
+  const docEditor = {
+    querySelector: (sel) => (sel === GeminiInjected.PROMPT_EDITOR_SELECTORS.richTextarea ? hostWithoutQuill : null)
+  };
+  assert.equal(GeminiInjected.findQuillInMainWorld(docEditor), mockQuill);
+
+  assert.equal(GeminiInjected.findQuillInMainWorld(null), null);
+});
+

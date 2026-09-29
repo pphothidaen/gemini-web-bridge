@@ -1375,6 +1375,25 @@
     }
   }
 
+  // Focus is requested from the background script, so this is a *wait* on a
+  // side effect we do not control directly. The boolean matters: without a
+  // bail on false, a tab that never comes forward still runs the full attach
+  // or typing path and fails later as `tab_not_visible`, which reads like a
+  // selector problem rather than "Chrome never focused the tab".
+  //
+  // Page Visibility states other than "visible" all mean the same thing here.
+  // If `visibilityState` is missing entirely (test rigs, some embedders) we
+  // treat the tab as visible — same rule the modules' isTabVisible() uses —
+  // because failing closed would wedge every environment without the API.
+  async function waitForTabVisible(timeoutMs = 2000, pollMs = 50) {
+    if (typeof document.visibilityState !== "string") return true;
+    const deadline = Date.now() + timeoutMs;
+    while (document.visibilityState !== "visible" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+    return document.visibilityState === "visible";
+  }
+
   /**
    * Handles ATTACH_NOTEBOOK from the Worker.
    *
@@ -1415,16 +1434,25 @@
 
     let outcome;
     try {
-      // Focus the tab so isTabVisible() passes — the manual osascript step is no longer needed.
+      // Focus the tab before Gemini's UI work, then let Chrome update page
+      // visibility. Bail here rather than proceeding: a hidden tab would fail
+      // deep inside attachNotebook with `tab_not_visible`, indistinguishable
+      // from a genuine UI problem.
       requestTabFocus();
-      await new Promise((resolve) => setTimeout(resolve, 200)); // let Chrome update document.hidden
+      if (!(await waitForTabVisible(2000))) {
+        throw Object.assign(new Error("tab_never_visible"), { step: "visibility" });
+      }
       outcome = await Attach.attachNotebook({
         notebookName,
         timeoutMs,
         log: (line) => console.log(`[Bridge] ${line}`)
       });
     } catch (err) {
-      outcome = { ok: false, reason: err?.message || "attach_failed", step: "unknown" };
+      outcome = {
+        ok: false,
+        reason: err?.message || "attach_failed",
+        step: err?.step || "unknown"
+      };
     }
 
     // The whole point of the flow is that the answer is grounded, so the
@@ -1592,16 +1620,24 @@
 
     let outcome;
     try {
-      // Focus the tab so isTabVisible() passes — the manual osascript step is no longer needed.
+      // Focus the tab before Gemini's UI work, then let Chrome update page
+      // visibility. Bail here rather than proceeding: typing into a hidden
+      // tab is a silent no-op that would look like a successful submit.
       requestTabFocus();
-      await new Promise((resolve) => setTimeout(resolve, 200)); // let Chrome update document.hidden
+      if (!(await waitForTabVisible(2000))) {
+        throw Object.assign(new Error("tab_never_visible"), { step: "visibility" });
+      }
       outcome = await Typing.typeAndSend({
         prompt,
         timeoutMs,
         log: (line) => console.log(`[Bridge] ${line}`)
       });
     } catch (err) {
-      outcome = { ok: false, reason: err?.message || "typing_failed", step: "unknown" };
+      outcome = {
+        ok: false,
+        reason: err?.message || "typing_failed",
+        step: err?.step || "unknown"
+      };
     }
 
     console.log(

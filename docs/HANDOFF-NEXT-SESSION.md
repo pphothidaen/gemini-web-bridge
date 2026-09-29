@@ -1,9 +1,11 @@
 # Session Handoff — start here
 
 > **Written:** 2026-09-29, at the close of KAN-182
-> **Branch:** `main` · **HEAD:** `6a34b3b` · working tree **clean**
-> **Production:** `https://prod.gemini-web-bridge.workers.dev` · **v4.7.9** · worker `75249e36`
-> **Tests:** 409 passing, 0 failing
+> **Updated:** 2026-09-29 — §1/§3/§6 corrected against the working tree
+> **Branch:** `main` · **HEAD:** `1e9a756` · working tree **dirty** (v4.7.10 bump)
+> **Production:** `https://prod.gemini-web-bridge.workers.dev` · **v4.7.9** deployed
+>   (v4.7.10 is in the tree, not yet deployed)
+> **Tests:** 438 passing, 0 failing, 5 skipped
 > **For:** whoever picks this project up next — you do **not** need to read the
 > other handoffs to start, though §7 links them.
 
@@ -17,8 +19,9 @@ KAN-182 is **done, committed, and verified live**. The `horo_consult` tool now
 returns answers that are genuinely grounded in the HoroConsultant notebook, and
 it says so honestly when they are not.
 
-Nothing is in flight and nothing is half-applied. If you were told otherwise,
-that is stale information.
+Nothing is half-applied, but v4.7.10 (the auto-focus bail plus its tests) sits
+**uncommitted in the working tree** and has never run in a browser. The
+deployed worker is still v4.7.9. See §6.
 
 ### The verification that closed it
 
@@ -71,7 +74,7 @@ cd /Users/kimlenglim/Project/gemini-web-bridge
 set -a; source .env; set +a
 python3 scripts/build-extension.py
 
-# tests  (expect 409 passing)
+# tests  (expect 438 passing)
 cd cloudflare-worker && npm test
 
 # deploy the worker  (print the version id at the end)
@@ -173,22 +176,57 @@ measurement taken at the wrong moment and reported as a settled fact.**
 
 ## 6. Open work, in the order I would take it
 
-1. **Close KAN-182 on Jira.** It is fixed, committed and verified; the ticket
-   is still open. Note that `docs/COMMIT_TICKET_MAPPING.md` records cases where
-   a commit's ticket key does not match its work — check the ticket before
-   closing it, not just the commit subject.
-2. **Give `injected.js` a test harness.** The MAIN-world logic is the least
-   covered part of the codebase and it is on the critical path for every
-   grounded answer. A `window`/`document` stub is enough; the module is small.
-3. **Replay path — architecture decision recorded.** The bifurcation is permanent:
-   the replay path cannot ground anything and never will (see `ARCHITECTURE.md` §
-   "Replay Path vs Grounded Path"). The open sub-task is to make the assembled
-   payload carry the attachment if and when a captured `r_…` session token can
-   be reliably derived — which requires more than one payload sample. Until then,
-   the replay path is skipped when `requireGrounding` is set and this is correct.
-4. **Auto-focus the tab.** The bridge currently requires a human to foreground
-   Chrome before a grounded call works. Doing it from the extension would
-   remove a real footgun. It is a small change and was deliberately deferred.
+1. ~~**Close KAN-182 on Jira.**~~ **DONE** — transitioned to Done on
+   2026-09-29 14:14 +07, with a verification comment citing 409 tests. That
+   figure was correct *when written*: a later commit added 10 more, and the
+   uncommitted refusal-retry tests added 10 more again.
+2. ~~**Give `injected.js` a test harness.**~~ **DONE** —
+   `cloudflare-worker/tests/extension-injected.test.mjs`, 10 tests, landed in
+   `1e9a756`. **Caveat:** an audit found several are tautological — they
+   assert that exported functions exist and that selector constants equal
+   their own literals, rather than exercising behaviour. They will not catch a
+   regression in the MAIN-world typing path. Treat this item as *closed but
+   thin*; the useful version needs a fake Quill/Angular host, not more
+   assertions about the module's shape.
+3. **Replay path — architecture decision recorded.** The bifurcation is
+   permanent: the replay path cannot ground anything and never will (see
+   `ARCHITECTURE.md` §"Replay Path vs Grounded Path"). The open sub-task is to
+   make the assembled payload carry the attachment if and when a captured
+   `r_…` session token can be reliably derived — which requires **more than
+   one payload sample**. Until then, the replay path is skipped when
+   `requireGrounding` is set and this is correct. **Currently blocked on
+   data, not on code.**
+4. ~~**Auto-focus the tab.**~~ **DONE in tree, NOT verified live.** The
+   extension asks the background script to foreground the tab
+   (`REQUEST_TAB_FOCUS` → `chrome.tabs.update` + `chrome.windows.update`) and
+   polls `document.visibilityState` for up to 2s. Both handlers bail on a
+   timeout with `tab_never_visible` / `step: "visibility"`, because the
+   previous version discarded that boolean and a failed focus then surfaced
+   much later as `tab_not_visible` — indistinguishable from a UI problem.
+   Covered by `tests/extension-tab-focus.test.mjs` (9 tests), mutation-checked:
+   reverting the bail turns 4 of the 9 red. Tracked as **KAN-190**, which
+   stays open until the live run below passes.
+
+### The one thing left, and why it is not yet done
+
+The auto-focus change has **never run in a browser**. Two things block it:
+
+- The extension must be reloaded at `chrome://extensions` after any
+  `extension-cloudflare/*.js` edit, and Kapture cannot reach that page — **a
+  human has to press the reload button.**
+- Acceptance is **two consecutive grounded `horo_consult` calls** with Chrome
+  foregrounded, per §4. Not one, and not just `check_bridge_health`.
+
+Do not mark this done on the strength of the unit tests. They cover the
+timeout logic; they cannot tell you whether `chrome.windows.update` actually
+foregrounded the tab on this machine.
+
+**State as of 2026-09-29 ~17:10 +07:** `check_bridge_health` reports
+`status: critical`, `extension_status: DISCONNECTED`, `last_attach_at: null`,
+`last_grounding_at: null`. The Durable Object answers `ping`, so the worker is
+alive — the extension is not connected to it. Per §4 that is almost always a
+sleeping service worker, fixed by reloading the **Gemini tab** (which re-runs
+the content script), not by rebuilding. No live run has been recorded yet.
 
 ---
 

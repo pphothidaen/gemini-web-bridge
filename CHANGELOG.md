@@ -2,6 +2,26 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.7.10] - 2026-09-29
+
+### Fixed
+- **Auto-focus could not report its own failure.** A grounded call needs the
+  Gemini tab in the foreground; the extension now asks the background script
+  to focus it (`REQUEST_TAB_FOCUS` → `chrome.tabs.update` +
+  `chrome.windows.update`) and polls `document.visibilityState` for up to 2s
+  instead of sleeping a flat 200ms. The first version polled and then
+  *discarded the boolean*, which made the wait cosmetic: a tab that never came
+  forward still ran the full attach/typing path and failed much later, inside
+  the module, as `tab_not_visible` — the identical reason a genuinely hidden
+  tab produces. The log then read as a UI or selector problem when the real
+  cause was "Chrome never focused the tab", and the two are indistinguishable
+  afterwards. Both handlers now bail on a timeout with the distinct reason
+  `tab_never_visible` and `step: "visibility"`, so a failed focus is legible
+  instead of masquerading as a UI failure. `waitForTabVisible` also treats a
+  document with no `visibilityState` as visible, matching the modules'
+  `isTabVisible()` rule — failing closed there would wedge every test rig and
+  embedder lacking the Page Visibility API.
+
 ## [4.7.9] - 2026-09-29
 
 ### Fixed
