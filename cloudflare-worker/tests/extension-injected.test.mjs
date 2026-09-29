@@ -22,6 +22,13 @@ test('injected.js exports all essential MAIN-world helpers', () => {
     broadcastSessionState: 'function',
     matchRecognizedEndpoint: 'function',
     decodeAndSanitizePayload: 'function',
+    // KAN-196: string classification + the gated probe's toggle.
+    // A length alone cannot attribute a field's change to the notebook, so
+    // each sanitized string also carries a shape class.
+    STRING_CLASS: 'object',
+    classifyString: 'function',
+    extractBoundedStructure: 'function',
+    handleProbeSet: 'function',
     PROMPT_EDITOR_SELECTORS: 'object'
   };
 

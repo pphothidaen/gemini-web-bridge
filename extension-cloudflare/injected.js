@@ -23,6 +23,66 @@
   // Current canonical model ID tracked from DOM/UI selector state
   let currentCanonicalModelId = null;
 
+  // ─── String classification for sanitized evidence (KAN-196) ──
+  //
+  // A length alone cannot say what a field holds: two different values can
+  // share a length, so "this field changed size" does not tell you whether a
+  // notebook reference appeared in it, vanished, or was replaced by something
+  // else of similar size. That ambiguity is what left the replay-path question
+  // open after KAN-195.
+  //
+  // So each sanitized string also carries a class. The classes are shapes the
+  // PROTOCOL defines, not shapes the user supplies, and only a fixed prefix
+  // allowlist is consulted — no prefix, substring, hash or first-N of an
+  // arbitrary string is ever recorded. A user's prompt cannot match any of
+  // these prefixes, so it lands in OPAQUE with nothing about it retained, which
+  // is what keeps GUARDRAILS G1.2.1 satisfied.
+  //
+  // The question this answers is not "what does field 3 contain" but "does any
+  // field carry a notebook reference at all" — one bit per field, carried by
+  // the protocol rather than by the person typing.
+  const STRING_CLASS = {
+    NOTEBOOK_REF: "notebook_ref",  // notebook://…/sources/…
+    URL:         "url",            // http:// or https://
+    UUID:        "uuid",           // bare 8-4-4-4-12 hex
+    BUILD_LABEL: "build_label",    // boq_…
+    JSON_BLOB:   "json_blob",      // parses as JSON
+    OPAQUE:      "opaque"          // everything else, including the prompt
+  };
+
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  /**
+   * Name the SHAPE of a string without keeping any of it.
+   *
+   * Order is fixed and load-bearing. NOTEBOOK_REF is tested before URL because
+   * a notebook reference is protocol-specific and must not be absorbed by a
+   * looser scheme test. JSON_BLOB is last among the specific classes: it is
+   * the most expensive test and the least specific, and "this field is a
+   * serialized blob" is itself the useful answer for the list that carries
+   * notebook references.
+   *
+   * A prompt that happens to open with "[" must not be filed as a blob, so
+   * JSON.parse has to actually succeed.
+   */
+  function classifyString(str) {
+    if (typeof str !== "string" || str.length === 0) return STRING_CLASS.OPAQUE;
+    if (str.startsWith("notebook://")) return STRING_CLASS.NOTEBOOK_REF;
+    if (str.startsWith("https://") || str.startsWith("http://")) return STRING_CLASS.URL;
+    if (UUID_RE.test(str)) return STRING_CLASS.UUID;
+    if (str.startsWith("boq_")) return STRING_CLASS.BUILD_LABEL;
+    const first = str[0];
+    if (first === "[" || first === "{") {
+      try {
+        JSON.parse(str);
+        return STRING_CLASS.JSON_BLOB;
+      } catch (e) {
+        return STRING_CLASS.OPAQUE;
+      }
+    }
+    return STRING_CLASS.OPAQUE;
+  }
+
   // ─── 0. Prompt typing in the MAIN world (KAN-182) ───
   //
   // Kept here rather than in prompt-typing.js because of where the Quill
@@ -392,8 +452,12 @@
     if (typeof val === "number") return typeof val;
 
     // Never preserve user prompt text or model response text!
+    // `cls` names the shape only — see classifyString above and GUARDRAILS
+    // G1.2.1. It is what makes a length delta attributable: without it, a
+    // field that changed size could have gained a notebook reference, lost
+    // one, or held something unrelated all along.
     if (typeof val === "string") {
-      return { type: "string", length: val.length };
+      return { type: "string", length: val.length, cls: classifyString(val) };
     }
 
     if (Array.isArray(val)) {
@@ -413,6 +477,51 @@
 
   // ─── 3. Early Fetch & XHR Interceptors ───────────────────────
   // Captures SUCCESSFUL responses only. Zero learning from bridge replay.
+
+  // ─── Sanitized payload probe (KAN-196) ───────────────────────
+  //
+  // Off by default, and toggled at runtime from the page console:
+  //   window.postMessage({source:"GEMINI_CONTENT",
+  //                        type:"PAYLOAD_PROBE_SET", enabled:true}, "*")
+  //
+  // KAN-195's probe was a hand-inserted console.log that had to be committed,
+  // built and reloaded before every capture. This one is gated so a later
+  // capture costs one message instead, and so a debugging aid can never be
+  // left switched on in a build that ships.
+  //
+  // What it writes is `requestStructure` — already reduced to {type,length,cls}
+  // by extractBoundedStructure, so it holds no prompt text (GUARDRAILS
+  // G1.2.1) and no CSRF token. It goes to the console and nowhere else: the
+  // console is the only sink that cannot persist anything, which is what made
+  // the KAN-195 capture acceptable in the first place.
+  let payloadProbeEnabled = false;
+
+  function probeRecord(matched, transport, requestStructure, modelId) {
+    if (!requestStructure) return null;
+    return {
+      endpoint: matched.endpoint,
+      transport,
+      buildLabel: matched.buildLabel || activeBuildLabel,
+      sessionEpoch: currentSessionEpoch,
+      canonicalModelId: modelId || null,
+      structure: requestStructure
+    };
+  }
+
+  function logProbeRecord(record) {
+    if (!record || !payloadProbeEnabled) return;
+    if (typeof console === "undefined") return;
+    try {
+      console.log("PAYLOAD_PROBE " + JSON.stringify(record));
+    } catch (e) {}
+  }
+
+  /** Accepts only a boolean; anything else leaves the flag as it was. */
+  function handleProbeSet(msg) {
+    if (!msg || typeof msg.enabled !== "boolean") return false;
+    payloadProbeEnabled = msg.enabled;
+    return payloadProbeEnabled;
+  }
 
   const originalFetch = (typeof window !== "undefined" && typeof window.fetch === "function") ? window.fetch : null;
 
@@ -444,6 +553,10 @@
       // Capture model ID at request initiation time
       const modelIdAtRequestTime = currentCanonicalModelId;
       const requestStructure = decodeAndSanitizePayload(requestInit.body);
+
+      // Logged before the response is awaited, so a slow or hanging endpoint
+      // cannot delay or reorder the record relative to the request itself.
+      logProbeRecord(probeRecord(matched, "fetch", requestStructure, modelIdAtRequestTime));
 
 
       const response = await originalFetch.apply(this, arguments);
@@ -504,6 +617,11 @@
       const modelIdAtRequestTime = currentCanonicalModelId;
       const requestStructure = decodeAndSanitizePayload(body);
 
+      // The prompt travels over XHR, so the fetch-side probe alone never sees
+      // it — a fetch-only capture produces structures with no prompt field and
+      // is what made the first KAN-195 pass come back empty.
+      logProbeRecord(probeRecord(matched, "xhr", requestStructure, modelIdAtRequestTime));
+
 
       this.addEventListener("loadend", () => {
         if (this.status === 200 && requestStructure) {
@@ -539,6 +657,13 @@
     }
 
     const { type, requestId, payload } = event.data;
+
+    // Runtime toggle for the sanitized payload probe (KAN-196). Off unless a
+    // boolean explicitly turns it on.
+    if (type === "PAYLOAD_PROBE_SET") {
+      handleProbeSet(event.data);
+      return;
+    }
 
     // Explicit Handshake Re-request
     if (type === "REQUEST_SESSION_STATE") {
@@ -688,7 +813,11 @@
     inspectWizGlobalData,
     broadcastSessionState,
     matchRecognizedEndpoint,
-    decodeAndSanitizePayload
+    decodeAndSanitizePayload,
+    STRING_CLASS,
+    classifyString,
+    extractBoundedStructure,
+    handleProbeSet
   };
 
   if (typeof module !== "undefined" && module.exports) {
