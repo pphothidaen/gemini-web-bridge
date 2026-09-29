@@ -2,10 +2,10 @@
 
 > **Written:** 2026-09-29, at the close of KAN-182
 > **Updated:** 2026-09-29 — §1/§3/§6 corrected against the working tree
-> **Branch:** `main` · **HEAD:** `1e9a756` · working tree **dirty** (v4.7.10 bump)
-> **Production:** `https://prod.gemini-web-bridge.workers.dev` · **v4.7.9** deployed
->   (v4.7.10 is in the tree, not yet deployed)
-> **Tests:** 438 passing, 0 failing, 5 skipped
+> **Branch:** `main` · **HEAD:** `a4d0bf0` · working tree **clean**
+> **Production:** `https://prod.gemini-web-bridge.workers.dev` · **v4.7.11**
+>   · DO `6b288492-974c-4172-9fc5-737348a4a093`
+> **Tests:** 446 passing, 0 failing, 5 skipped
 > **For:** whoever picks this project up next — you do **not** need to read the
 > other handoffs to start, though §7 links them.
 
@@ -19,9 +19,19 @@ KAN-182 is **done, committed, and verified live**. The `horo_consult` tool now
 returns answers that are genuinely grounded in the HoroConsultant notebook, and
 it says so honestly when they are not.
 
-Working tree is clean at `1f60bf4`. v4.7.10 is **committed and verified live
-in the extension**, but the *worker* is still deployed at v4.7.9 — run
-`npx wrangler deploy` if the worker-side copy needs to match.
+Everything is committed, built, deployed, and verified live at v4.7.11.
+
+Three known behaviours, all of which look like bugs and are not:
+
+- **Reloading the extension invalidates every live content script.** The tab
+  then needs reloading too. The extension now says so on the indicator:
+  purple "Reload this tab (extension reloaded)" (KAN-191).
+- **Deploying restarts the DO** and drops the WebSocket, so the extension
+  reports DISCONNECTED for a few seconds. Reloading the tab reconnects it.
+- **`dist/extension` is the build, and it is gitignored.** It goes stale the
+  moment you edit `extension-cloudflare/*.js` without rebuilding, and it can
+  disagree with the source while its manifest already claims the new version.
+  That exact mismatch hid a live verification once. Rebuild before loading.
 
 ### The verification that closed it
 
