@@ -2,6 +2,31 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.7.17] - 2026-09-29
+
+### Added
+- **T3, the capture that could not be transcribed.** `source-inline-chip` —
+  the selector that decides grounded vs not — had been evidenced only by a
+  count (chips 7, 8) since KAN-182. It is now captured from a live
+  notebook-grounded answer, and the capture settles two things a count
+  could not: `source-inline-chip` is a custom element whose **tag name** is
+  that string, not a class, and the earlier response in a two-turn
+  conversation renders no chips at all while the newest renders three. The
+  contract now checks real states for it instead of claiming none.
+  Structure only is recorded; the chip's `aria-label` carries the notebook
+  source filename and is stored as present-with-value-withheld, since a
+  committed fixture must not hold text.
+
+### Verified
+- **v4.7.16 answers end to end.** A live `horo_consult` run collected in
+  ~58s where 4.7.13 burned its full 120s budget, and reported
+  `VERIFY_GROUNDING grounded (chips=3, cites=0)` on a 2,316-character
+  answer. The `aria-busy` fix is confirmed against the running extension,
+  which is the first end-to-end confirmation of any fix from this series.
+
+### Notes
+- Not deployed. The worker still runs 4.7.11.
+
 ## [4.7.16] - 2026-09-29
 
 ### Fixed

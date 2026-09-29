@@ -76,19 +76,21 @@ export const DOM_SIGNALS = [
     // one thing here that cannot be transcribed from existing evidence.
     id: 'grounding.source_chip',
     file: 'extension-cloudflare/notebook-attach.js',
+    // A custom element whose TAG NAME is `source-inline-chip` - not a class.
     selector: 'source-inline-chip',
     scope: 'newest-response',
-    states: { generating: null, settled: null },
+    states: { generating: false, settled: true },
     observed: true,
-    evidenceKind: 'count-only',
-    unobservedBecause:
-      'Observed working by count only: chips=7 and chips=8 on grounded runs ' +
-      '(2026-09-29). The element itself has not been captured, so no state is ' +
-      'claimed and the contract checks nothing here yet. T3 in KAN-200.',
+    evidenceKind: 'captured',
     measured: {
       date: '2026-09-29',
-      fixture: 'generating-signal.json',
-      method: 'Counted 7-8 matches per grounded response. Not a DOM capture; recorded as count-only rather than dressed up as one.'
+      fixture: 'grounding-chips.json',
+      method:
+        'T3 in KAN-200, the measurement that could not be transcribed. ' +
+        'Captured from a live notebook-grounded answer on a two-response ' +
+        'conversation: the newest model-response (926px) rendered 3 chips, ' +
+        'the earlier one (4348px) rendered none. readGroundingEvidence ' +
+        'reported chips=3, matching the DOM exactly.'
     }
   },
   {
@@ -106,15 +108,15 @@ export const DOM_SIGNALS = [
     states: { generating: null, settled: null },
     observed: false,
     unobservedBecause:
-      'Never matched. cites=0 on every grounded run recorded 2026-09-29 ' +
-      'while chips was 7-8, so the chip selector is carrying the whole ' +
-      'decision alone. Kept in the code because the worker error path and ' +
-      'the health report both carry the field, and a renderer that does emit ' +
-      'inline markers would otherwise be invisible.',
+      'Never matched. cites=0 on the T3 capture and on every grounded run ' +
+      'recorded 2026-09-29 while chips was 3-8, so the chip selector is ' +
+      'carrying the whole decision alone. Kept in the code because the ' +
+      'worker error path and the health report both carry the field, and a ' +
+      'renderer that does emit inline markers would otherwise be invisible.',
     measured: {
       date: '2026-09-29',
-      fixture: 'generating-signal.json',
-      method: 'Regex over response innerText on every grounded run; zero matches each time. Counts, not a capture.'
+      fixture: 'grounding-chips.json',
+      method: 'Regex over the response innerText of the T3 capture; zero matches. Recorded as absent rather than dressed up as a checked signal.'
     }
   },
   {

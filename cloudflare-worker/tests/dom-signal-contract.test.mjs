@@ -125,12 +125,40 @@ test('the contract records that grounding rests on ONE signal, not two', () => {
 
   assert.ok(chip && marker, 'both grounding signals must be declared');
   assert.equal(chip.observed, true, 'the chip selector is load-bearing and demonstrably works');
-  assert.equal(chip.evidenceKind, 'count-only',
-    'the chip selector is evidenced by a count, and must say so rather than imply a capture');
+  assert.equal(chip.evidenceKind, 'captured',
+    'T3 captured the chip element, so this is no longer count-only evidence');
   assert.equal(marker.observed, false,
     'the [cite: N] branch has never fired; declaring it observed would be a false claim');
   assert.match(marker.unobservedBecause, /Never matched/,
     'and the reason it is unobserved must be on the record, not just a false flag');
+});
+
+
+test('the chip selector is a custom element, not a class', () => {
+  // T3. `source-inline-chip` is the element's TAG NAME. Reading it as a
+  // class would compile to a class selector, match nothing, and report every
+  // grounded answer ungrounded - the failure mode this contract exists to
+  // make visible.
+  const fixture = JSON.parse(fs.readFileSync(join(FIXTURES, 'grounding-chips.json'), 'utf8'));
+  const nodes = fixture.states.settled.nodes;
+  assert.ok(nodes.some((n) => n.tag === 'source-inline-chip'),
+    'the capture must record the element as a custom tag');
+
+  const chip = DOM_SIGNALS.find((s) => s.id === 'grounding.source_chip');
+  assert.equal(chip.selector, 'source-inline-chip', 'bare tag, no dot');
+  assert.equal(chip.scope, 'newest-response');
+  assert.deepEqual(chip.states, { generating: false, settled: true },
+    'and it now claims real states, checked against the capture');
+});
+
+test('the capture withholds text, so it cannot leak a filename or a prompt', () => {
+  // The chip's aria-label carries the notebook source name. GUARDRAILS
+  // G1.2.1 forbids persisting personal text, and a fixture is a committed
+  // file - so the label is recorded as present-with-value-withheld.
+  const raw = fs.readFileSync(join(FIXTURES, 'grounding-chips.json'), 'utf8');
+  assert.ok(!/FORTUNE/.test(raw), 'no source filename may appear in a committed fixture');
+  assert.ok(raw.includes('value withheld'), 'the aria-label is recorded as withheld, not dropped silently');
+  assert.ok(!raw.includes('ผู้ใช้'), 'no user text');
 });
 
 test('MUTATION unmeasured: a signal with no measured block is reported', () => {

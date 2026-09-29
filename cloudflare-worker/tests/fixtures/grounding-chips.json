@@ -1,0 +1,84 @@
+{
+  "signal": "grounding.source_chip",
+  "captured": "2026-09-29T15:32Z",
+  "scope": "newest-response",
+  "note": "THE MISSING MEASUREMENT. T3 in KAN-200. Captured from a live notebook-grounded answer, not inferred from a count. Structure only: no text, no filenames, no tokens. The chip's aria-label carries the notebook source name and is deliberately NOT recorded - only its presence and type. A response that quoted a filename here would be the same mistake as persisting a prompt.",
+  "method": "A horo_consult run on a two-response conversation. The newest model-response (926px) rendered 3 source-inline-chip elements; the earlier one (4348px) rendered none. readGroundingEvidence reported chips=3 cites=0, matching the DOM exactly, which is what makes this a checkable capture rather than a count.",
+  "states": {
+    "generating": {
+      "height": 926,
+      "note": "Mid-stream the answer is not yet finished, so this is deliberately not recorded as a distinct state: the grounding check runs only after the response settles (KAN-197 raised the settle window to 4s and suspends it while aria-busy is set). The captured answer was settled when read.",
+      "nodes": []
+    },
+    "settled": {
+      "height": 926,
+      "note": "The chip element, verbatim in structure. It is a CUSTOM ELEMENT whose tag name is literally `source-inline-chip` - which is why the selector is a bare tag and not a class. Its accessible name lives on an inner button, not on the element the selector matches.",
+      "nodes": [
+        {
+          "tag": "source-inline-chip",
+          "class": "ng-star-inserted"
+        },
+        {
+          "tag": "div",
+          "class": "source-inline-chip-container luminous-sources hide-from-message-actions ng-star-inserted"
+        },
+        {
+          "tag": "button",
+          "class": "button multiple-button ng-star-inserted",
+          "attrs": {
+            "cdkoverlayorigin": "",
+            "aria-expanded": "false",
+            "aria-haspopup": "dialog",
+            "aria-label": "<present, value withheld>"
+          }
+        },
+        {
+          "tag": "div",
+          "class": "source-label-container gds-body-s ng-star-inserted"
+        },
+        {
+          "tag": "span",
+          "class": "source-title"
+        },
+        {
+          "tag": "span",
+          "class": "source-count ng-star-inserted"
+        }
+      ],
+      "chipCount": 3,
+      "citeMarkerCount": 0
+    }
+  },
+  "two_responses": {
+    "note": "The scoping case, live. The earlier 4348px response has NO chips; the newest 926px one has 3. A document-wide count would find the same 3 here, so this state exists to pin that the newest response is the one read - if a future capture ever showed chips on an older reply while the newest had none, that would be a grounding false negative and the contract would catch it.",
+    "responses": [
+      {
+        "note": "earlier turn, no notebook attached to this message",
+        "nodes": []
+      },
+      {
+        "note": "newest turn, notebook attached",
+        "nodes": [
+          {
+            "tag": "source-inline-chip",
+            "class": "ng-star-inserted"
+          },
+          {
+            "tag": "div",
+            "class": "source-inline-chip-container luminous-sources hide-from-message-actions ng-star-inserted"
+          },
+          {
+            "tag": "button",
+            "class": "button multiple-button ng-star-inserted",
+            "attrs": {
+              "cdkoverlayorigin": "",
+              "aria-expanded": "false",
+              "aria-haspopup": "dialog",
+              "aria-label": "<present, value withheld>"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
