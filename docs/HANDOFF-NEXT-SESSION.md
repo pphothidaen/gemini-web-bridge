@@ -1,13 +1,13 @@
 # Session Handoff — start here
 
 > **Written:** 2026-09-29, at the close of KAN-182
-> **Updated:** 2026-09-29 20:25 +07 — after KAN-190…195 (see §9)
-> **Branch:** `main` · **HEAD:** `cd205ea` · working tree **clean**
-> **Production:** `https://prod.gemini-web-bridge.workers.dev` · **v4.7.11**
+> **Updated:** 2026-09-29 21:55 +07 — after KAN-190…199 (see §9, §12)
+> **Branch:** `main` · **HEAD:** see `git log -1` · working tree **clean**
+> **Production:** worker **v4.7.11** (NOT deployed) · extension **v4.7.15**
 >   · DO `6b288492-974c-4172-9fc5-737348a4a093`
-> **Tests:** 459 passing, 0 failing, 5 skipped
-> **Build:** `dist/extension` current as of `cd205ea` — run
->   `python3 scripts/build-extension.py --verify` before trusting any live result
+> **Tests:** 497 passing, 0 failing, 5 skipped
+> **Build:** run `python3 scripts/build-extension.py --verify` before trusting
+>   any live result — a stale build has invalidated one already (KAN-192)
 > **For:** whoever picks this project up next — you do **not** need to read the
 > other handoffs to start, though §7 links them.
 
@@ -302,6 +302,12 @@ Five tickets, all closed except where noted. Commits, newest first:
 
 | commit | ticket | what |
 |---|---|---|
+| see `git log` | KAN-199 | DOM signal contract: a selector with no recorded capture fails the build |
+| `561a126` | KAN-198 | `aria-busy` is the generating signal; 4.7.13 keyed on two permanent class names |
+| `c0dac2f` | KAN-197 | grounding must not judge a half-written answer |
+| `5c3684f` | KAN-197 | the generating signal could not see this build (superseded by KAN-198) |
+| `c75ba43` | KAN-196 | the classifier shipped without a version bump |
+| `bdc39fb` | KAN-196 | classify sanitized payload strings; probe behind a runtime flag |
 | `cd205ea` | KAN-195 | StreamGenerate samples captured; probe removed |
 | `72e8e1e` | KAN-195 | *(interim — the temporary probe, superseded)* |
 | `158088d` | KAN-194 | two injected.js tests made able to fail |
@@ -416,7 +422,7 @@ grounded control. The comparison has to be two real prompts.
 
 | | |
 |---|---|
-| reconcile `ARCHITECTURE.md` | §9's finding contradicts the `r_…` premise and the "~40 dynamic fields" claim. Correct the doc, or the next session reads it as fact. |
+| reconcile `ARCHITECTURE.md` | Two specific claims in "Why the replay path can never be grounded" (line 232) are false: that the payload holds an `r_…` session token that is "single-use", and that it contains "~40 dynamic inner fields". Both were checked against the live DOM — the token slot is a zero-length string in both captures, and 19 of 20 top-level fields are identical across two different conversations. Correct the doc, or the next session reads it as fact. |
 | `build-extension.py --verify` | warns about a dirty tree. The build ran while uncommitted probe edits existed, so the stamp carries a note. Harmless, but the next clean build clears it. |
 | `injected.js` tests | 2 tautological tests were rewritten in KAN-194. Worth a third pass only if someone adds behaviour to pin. |
 | `skill-creator` eval | `run_eval.py` / `run_loop.py` do not exist, so skill descriptions cannot be scored automatically. |
@@ -454,3 +460,59 @@ agy-run --tier cheap|mid|strong --packet <file> --mode readonly|worktree|bypass
 `check_bridge_health` is the only source that knows what the extension is
 actually doing. `last_attach_at: null` means nothing has run — that reading
 caught a "done" that had never been tested.
+
+---
+
+## 12. 4.7.13 shipped a bridge that could not answer — read this before writing a selector
+
+This is the most expensive mistake in the session, and it is recorded here
+because the instinct it corrects is the one you will have next.
+
+**What shipped.** `isGenerating()` was changed to treat two CSS classes as a
+"still generating" signal: `processing-state-visible` and `has-thoughts`. The
+names read like a state. They are permanent. The same finished response
+carried both, beside a sibling footer reading `response-footer … has-thoughts
+complete` — the `complete` being the actual evidence that the run was over.
+
+**What it cost.** `handleCollectAnswer` waits while `isGenerating()` is true.
+With the signal permanently true it burned the full 120s budget on every call
+and failed with `collect_answer_timeout` on answers that had been finished for
+a minute. The bridge stopped answering entirely — a worse failure than the
+partial-read bug it was meant to fix.
+
+**Why the tests passed.** Ten tests, all green. Three mutation checks, all
+clean. The tests were written from the assumption, and the DOM stub was built
+to satisfy the assumption — including a case asserting "a finished response
+with only `has-thoughts` is inactive", which is false. A test constructed to
+match the code is worse than no test, because it reads like verification.
+
+The real signal is `aria-busy`, found by sampling the DOM every couple of
+seconds across a whole generation: present at 1242px and again at 3508px,
+absent once settled. That measurement took five minutes and would have
+prevented the entire incident.
+
+### The rule this produced
+
+> **A DOM signal must be observed in BOTH states before it is trusted. One
+> snapshot is not evidence.**
+
+It is now enforced rather than remembered. `cloudflare-worker/tests/helpers/dom-signal.mjs`
+holds one declaration per selector — including the selector, its expected value
+in each state, and the capture that justifies it — and
+`checkDomSignals()` fails the build when a signal has no `measured` block, names
+a fixture that does not exist, or claims something its capture contradicts.
+Captures live in `cloudflare-worker/tests/fixtures/` as structural attributes
+only: no text, no tokens, nothing that GUARDRAILS G1.2.1 forbids persisting.
+
+Adding a selector is now a deliberate act with a paper trail rather than a
+one-line edit. That is the intended cost.
+
+### The same shape, twice
+
+| proxy read as the thing itself | reality |
+|---|---|
+| KAN-192: manifest said 4.7.10 | the JavaScript beside it was older |
+| KAN-197: `has-thoughts` = "processing" | it means "has a thinking section", forever |
+
+Both were correct as data and wrong as evidence, and nothing in the repo
+required the evidence to exist. That gap is what this section closes.

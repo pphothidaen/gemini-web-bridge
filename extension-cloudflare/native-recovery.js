@@ -303,30 +303,30 @@
       }
 
       // The signal that actually tracks generation on this build is
-      // `aria-busy`, measured live on 2026-09-29 by sampling the DOM every
-      // couple of seconds across one whole generation:
+      // `aria-busy`. Evidence: tests/fixtures/generating-signal.json,
+      // captured 2026-09-29 by sampling the DOM every couple of seconds
+      // across one whole generation:
       //
       //   while generating : div.markdown[aria-busy="true"]   present
+      //                      (observed at response heights 1242px, 3508px)
       //   when finished   : (no such node)                   absent
+      //                      (footer had gained class "complete", 4311px)
       //
-      // It is scoped to the newest response for the same reason the spinner
-      // is: an earlier turn's node is not evidence about this one.
+      // Scoped to the newest response, and the corpus carries a
+      // two-response capture precisely so that scoping is checkable: with
+      // one response a document-wide query finds the same node and agrees,
+      // which would leave `scope` declared but never verified.
       //
-      // What this REPLACES, and why it mattered. An earlier version treated
-      // `processing-state-visible` and `has-thoughts` as generating signals.
-      // They are not — they are permanent. The same finished response carried
-      // `class="model-response-text has-thoughts processing-state-visible"`
-      // and a sibling `response-footer … has-thoughts complete`, and the
-      // finished footer is what proves the run was over. Treating those
-      // classes as "still generating" made isGenerating() return true
-      // forever, so handleCollectAnswer waited out its full 120s budget and
-      // failed with collect_answer_timeout on an answer that had been
-      // finished for a minute.
+      // What this REPLACES. 4.7.13 keyed on `processing-state-visible` and
+      // `has-thoughts`. Both are permanent — the settled capture still
+      // carries both, beside a footer marked `complete`. Treating them as
+      // "still generating" made isGenerating() true forever, so
+      // handleCollectAnswer waited out its 120s budget and failed with
+      // collect_answer_timeout on answers finished for a minute.
       //
-      // The lesson is in the tests: they were written from that assumption
-      // rather than from a capture, so they passed against code that broke
-      // production. The fixtures in native-recovery-generating.test.mjs are
-      // now the measured before/after DOM.
+      // The contract in tests/helpers/dom-signal.mjs is what keeps the
+      // next selector honest: a DOM signal with no recorded capture fails
+      // the build. See also tests/dom-signal-contract.test.mjs.
       if (response.querySelector('[aria-busy="true"]')) {
         return { active: true, source: "response_aria_busy" };
       }

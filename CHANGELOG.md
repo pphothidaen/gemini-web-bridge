@@ -2,6 +2,42 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [4.7.15] - 2026-09-29
+
+### Added
+- **A DOM signal must be backed by a capture.** Every selector the extension
+  reads out of Gemini's page is now declared in
+  `cloudflare-worker/tests/helpers/dom-signal.mjs` with its expected value in
+  each state and the observation that justifies it. `checkDomSignals()` fails
+  the build when a signal has no recorded capture, names a fixture that does
+  not exist, or claims something its capture contradicts. Captures live in
+  `cloudflare-worker/tests/fixtures/` as structural attributes only — no text,
+  no tokens, nothing GUARDRAILS G1.2.1 forbids persisting.
+
+  This is the enforced form of a rule that was learned twice the hard way. In
+  KAN-192 a test asserted a manifest string while the JavaScript beside it was
+  older. In KAN-197/198 a test asserted that `has-thoughts` meant "currently
+  processing" — it means "has a thinking section", permanently — and shipped a
+  bridge that could not answer at all. Both were correct as data and wrong as
+  evidence, and nothing in the repo required the evidence to exist.
+- **A regression test for the delegation tooling's isolation gate.**
+  `agy-run --mode worktree` claimed the caller's repo was untouched; on
+  2026-09-29 that claim was false, because a packet with a hardcoded
+  `cd /Users/…/repo` sent an isolated delegate out of its worktree and the run
+  still reported success. The gate now snapshots the repo with
+  `git status --porcelain` before the agent starts, exits 71 on a breach, and
+  includes untracked files. The test pins all three.
+
+### Fixed
+- **The handoff document misstated the tree.** Its header named `cd205ea` and
+  459 tests where the truth was `561a126` and 492, and described the extension
+  as 4.7.11 while the worker was still the deployed version. A document that
+  lies about the tree is the same defect one level up.
+
+### Notes
+- Not deployed. The worker still runs 4.7.11; `wrangler deploy` is left to the
+  operator. This change is extension-side and test-side only.
+
 ## [4.7.14] - 2026-09-29
 
 ### Fixed

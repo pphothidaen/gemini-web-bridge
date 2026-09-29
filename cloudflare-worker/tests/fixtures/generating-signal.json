@@ -1,0 +1,113 @@
+{
+  "signal": "response.generating",
+  "captured": "2026-09-29",
+  "scope": "newest-response",
+  "note": "Structural attributes only: no text content, no tokens, no user data. Heights are the rendered pixel height of the markdown body, recorded because they are what established that the two states are the same element at different moments rather than two different elements.",
+  "method": "One whole generation, sampled every couple of seconds from the live page while the response was still growing. The 'generating' state is the sample at 3508px; the 'settled' state is the sample after the footer gained class 'complete' at 4311px. The spinner, stop-button and lottie selectors were queried at both moments and matched nothing at either.",
+  "states": {
+    "generating": {
+      "height": 3508,
+      "nodes": [
+        {
+          "tag": "div",
+          "class": "response-container-content ng-tns-c2808902342-11 has-thoughts"
+        },
+        {
+          "tag": "structured-content-container",
+          "class": "model-response-text has-thoughts processing-state-visible ng-star-inserted"
+        },
+        {
+          "tag": "div",
+          "class": "markdown markdown-main-panel md-content animate enable-luminous-fast-follows enable-updated-hr-color",
+          "attrs": {
+            "aria-busy": "true",
+            "aria-live": "polite"
+          }
+        },
+        {
+          "tag": "div",
+          "class": "response-footer animated gap has-thoughts"
+        }
+      ]
+    },
+    "settled": {
+      "height": 4311,
+      "nodes": [
+        {
+          "tag": "div",
+          "class": "response-container-content ng-tns-c2808902342-11 has-thoughts"
+        },
+        {
+          "tag": "structured-content-container",
+          "class": "model-response-text has-thoughts processing-state-visible ng-star-inserted"
+        },
+        {
+          "tag": "div",
+          "class": "markdown markdown-main-panel md-content animate enable-luminous-fast-follows enable-updated-hr-color",
+          "attrs": {
+            "aria-busy": "false",
+            "aria-live": "polite"
+          }
+        },
+        {
+          "tag": "div",
+          "class": "response-footer gap has-thoughts complete"
+        }
+      ]
+    },
+    "two_responses": {
+      "height": 3508,
+      "note": "An earlier turn (settled) plus the newest response (mid-generation). Present so the contract can verify `scope`, which a single-response capture cannot distinguish from a document-wide query.",
+      "responses": [
+        {
+          "nodes": [
+            {
+              "tag": "div",
+              "class": "response-container-content ng-tns-c2808902342-11 has-thoughts"
+            },
+            {
+              "tag": "structured-content-container",
+              "class": "model-response-text has-thoughts processing-state-visible ng-star-inserted"
+            },
+            {
+              "tag": "div",
+              "class": "markdown markdown-main-panel md-content animate enable-luminous-fast-follows enable-updated-hr-color",
+              "attrs": {
+                "aria-busy": "false",
+                "aria-live": "polite"
+              }
+            },
+            {
+              "tag": "div",
+              "class": "response-footer gap has-thoughts complete"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "tag": "div",
+              "class": "response-container-content ng-tns-c2808902342-11 has-thoughts"
+            },
+            {
+              "tag": "structured-content-container",
+              "class": "model-response-text has-thoughts processing-state-visible ng-star-inserted"
+            },
+            {
+              "tag": "div",
+              "class": "markdown markdown-main-panel md-content animate enable-luminous-fast-follows enable-updated-hr-color",
+              "attrs": {
+                "aria-busy": "true",
+                "aria-live": "polite"
+              }
+            },
+            {
+              "tag": "div",
+              "class": "response-footer animated gap has-thoughts"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

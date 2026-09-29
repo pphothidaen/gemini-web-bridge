@@ -1,489 +1,499 @@
 # Implementation Plan
 
-**Goal:** Close out the replay-path question left open by KAN-195 — determine
-whether the notebook reference is present in the request payload, using a
-capture that is safe under GUARDRAILS G1.2.1, then correct every document that
-states the opposite.
+**Goal:** Turn "measure a DOM signal across both states before trusting it"
+from a habit that has now been broken twice into a mechanism that fails the
+build when a signal ships without its evidence.
 
 ## Overview
 
-KAN-195 captured two sanitized `StreamGenerate` structures and produced a
-finding that contradicts the project's own architecture record. The two samples
-differ in exactly one top-level field, and only in its **length**; the slot
-`ARCHITECTURE.md` names as the `r_…` session token is a zero-length string in
-both. Grounded sample A and ungrounded sample B are the same shape.
+KAN-198 is the second time in one session that a defect reached production
+because a test was written from an assumption rather than from a
+measurement. The first was KAN-192: a build whose manifest said 4.7.10 while
+the JavaScript beside it was older, verified by a test that asserted the
+manifest string. The second was KAN-197/198: `isGenerating()` keyed on
+`processing-state-visible` and `has-thoughts`, class names that read like
+"currently processing" and are in fact permanent. That one shipped with ten
+passing tests, three clean mutation checks, and made the bridge stop answering
+altogether — `handleCollectAnswer` waited out its full 120s budget on answers
+that had been finished for a minute.
 
-That result cannot be acted on, because a sanitized capture reduces every
-string to `{type:"string", length:N}`. A length difference cannot be attributed:
-two different values can share a length, so "field `[3]` changed" does not tell
-us whether the notebook reference is in it, absent, or replaced by something
-else of similar size. The stated hard limit in
-`docs/payload-samples/2026-09-29-streamgenerate.json` is correct.
+Both failures share a shape. A proxy was read as the thing itself: the version
+string read as the code, a class name read as a state. Neither was wrong as
+data; both were wrong as evidence, because nothing in the repo required the
+evidence to exist. A test can be written to agree with whatever the code does,
+and the suite stays green — which is exactly what happened. The 4.7.13 tests
+asserted "a finished response with only `has-thoughts` is inactive", which is
+false, and the stub was constructed to satisfy it.
 
-This plan changes the capture so the limit no longer applies, runs the one
-experiment that decides the question, and then rewrites the documentation to
-match the measured result — whichever way it lands.
+The fix is not more discipline. It is a requirement that is checkable: every
+DOM signal declares the observation it rests on, and the build fails if one
+does not. A signal without a recorded before-and-after capture is not trusted,
+so the class of defect that produced both incidents cannot ship quietly.
 
-Scope is `injected.js` (the sanitizer and the probe) plus documentation. No
-worker logic changes, no protocol changes, no new dependencies. The existing
-grounded path is not touched.
+Three things are built, in the order they can each stop the next mistake:
 
-### Why classification is safe, and why it is enough
+1. **A signal contract** — one declaration per DOM signal, carrying its
+   selector, its expected value in each state, and the capture that justifies
+   it. Reading a signal and consulting its evidence become the same act.
+2. **A capture corpus** — real DOM snapshots, generating and settled, stored
+   in the repo so the contract is checked against observation rather than
+   against the code's own idea of itself.
+3. **A gate on the delegation tooling** — `agy-run`'s isolation check, added
+   after it silently failed once, tested so it cannot silently fail again.
 
-The current sanitizer records a string's length. The change is to additionally
-record which **closed-set class** a string belongs to, using a fixed allowlist
-### What the two existing samples cannot do
+The handoff document is also corrected here, because it currently names
+`cd205ea` and 459 tests where the truth is `561a126` and 483, and a document
+that lies about the tree is the same defect one level up.
 
-Sample A and sample B were captured with the length-only sanitizer. Their
-content was discarded at capture time and **cannot be re-classified
-retroactively** — the class was never computed and the strings are gone. Any
-conclusion about classes requires a fresh capture. This is why the plan
-captures a new pair rather than reusing the existing file, and why steps 7–8
-re-capture both members of the comparison instead of only the grounded one.
+Scope is `extension-cloudflare/`, `cloudflare-worker/tests/`, and
+documentation. No worker logic changes, no protocol changes, no new
+dependencies, no deployment.
 
-### The experiment, and how it decides
+### Why a contract rather than a checklist
 
-Two captures from the **same conversation**, consecutive turns:
+A checklist says "observe both states before using a DOM selector". It is
+followed until the day it is not, and nothing breaks when it is skipped — which
+is the property that let two incidents through. A contract inverts that: the
+signal and its evidence are declared together, and a signal with no evidence is
+a hard failure. The cost is that adding a selector becomes a deliberate act
+rather than a one-line edit, which is the point. Each of the selectors already
+in the tree cost a production incident or a wasted debugging session to
+validate, and none of that cost is recorded in code today.
 
-- **C** — fresh conversation, turn 1, notebook attached. Expected: grounded.
-- **D** — same conversation, turn 2. The attachment is consumed per message,
-  so this turn carries no fresh chip. Expected: ungrounded.
+The contract is deliberately small. It covers the signals the extension reads
+out of the page — about a dozen selectors across two files — not the whole
+DOM surface, and not the worker's own logic. Anything that does not read the
+live page is already testable by other means.
 
-Same conversation removes conversation age as a variable, which the existing
-A/B pair confounded: A was a mature conversation, B was a fresh one, so their
-difference cannot be attributed to the chip rather than to accumulated
-context. Consecutive turns also keep the context blob similar in size, so a
-large length delta is not mistaken for the signal.
+### What counts as evidence
 
-Decision rule, applied to the class-level diff of C against D:
+A capture is a pair of DOM snapshots of the same element in the two states
+that matter, taken from a real browser while the state actually held. For the
+generating signal that means: mid-stream, verified by the response still
+growing between two samples, and settled, verified by the response having
+stopped changing and the footer marked complete. One snapshot is not evidence,
+which is the rule KAN-197 broke by sampling once.
 
-| Observation | Conclusion | Consequence |
-|---|---|---|
-| C contains a `notebook_ref` class that D does not | the payload **does** carry the notebook reference; shape is more derivable than the record claims | replay construction is a real engineering problem, scoped separately; the "never grounded" claim is falsified |
-| C and D are class-identical | payload shape does **not** determine grounding; the determining state is server-side and outside the capture | replay is permanently out of scope for grounding; the record's **reason** is replaced, its conclusion stands |
-| C is itself ungrounded | the fresh-conversation path does not ground, and C is not a grounded sample | stop; the blocker is upstream of the payload and the next step is a Gemini-side investigation, not more capture |
-
-All three outcomes are recorded. The third is a real possibility and the plan
-does not assume it away.
-
+Captures are stored as fixtures in the repo. They contain no user text and no
 ### Context and constraints
 
-- `GUARDRAILS.md` G1.2.1 — prompt text never persisted.
-- `GUARDRAILS.md` CSRF rule — "the CSRF token must never leave MAIN-world
-  memory". The probe never touches `activeCsrfToken`; it dumps
-  `requestStructure`, which is derived from the request body but contains no
-  token field.
-- Version consistency is enforced by
-  `cloudflare-worker/tests/version-consistency.test.mjs` across 5 source
-  locations plus the build output — a bump touches all of them together.
-- `scripts/build-extension.py --verify` must pass before any live result is
-  believed; a stale build has silently invalidated a live run once already
+- **GUARDRAILS G1.2.1** — prompt text is never persisted. Fixtures therefore
+  hold structural attributes only, never text content.
+- **Version consistency** — `cloudflare-worker/tests/version-consistency.test.mjs`
+  ties the worker, npm package, lockfile and extension manifest to one version
+  across 5 source locations plus the build output. Any behavioural change bumps
+  all of them or the suite fails.
+- **`scripts/build-extension.py --verify`** must report current before any live
+  result is believed. A stale build silently invalidated a live run once
   (KAN-192).
-- Reloading the extension invalidates every content script, so a Gemini tab
-  reload is required after. Two manual steps the operator performs; the plan
-  does not attempt to automate them.
-- Delegation tooling (`agy-run`, `agy-quota`) and 9 skills exist under `~/`
-  and may be used for the test-authoring step. `agy-run --mode worktree` is
-  the isolation path; agy accounts have no native worktree flag, so
-  `agy-run` creates one.
+- **Two manual steps stay manual** — reloading the extension at
+  `chrome://extensions` and reloading the Gemini tab. Kapture cannot reach the
+  first, and it cannot type into a hidden tab reliably, which cost two failed
+  attempts during the KAN-198 measurement.
+- **The worker is three versions behind** (production runs 4.7.11, the
+  extension is 4.7.14). Every finding since 4.7.11 was diagnosed against a
+  live system but never against the deployed one. This plan does not deploy;
+  it notes the gap and leaves the decision with the operator.
+- **`agy-run` is outside the repo** (`~/.local/bin/agy-run`), so its test
+  cannot live in `cloudflare-worker/tests/` and run by `npm test`. It is
+  tested by the same source-reading technique `build-stamp.test.mjs` uses, with
+  an absolute path, and that limitation is stated rather than hidden.
 
-
-of shapes that are defined by the protocol rather than by the user:
-
-- a string beginning `notebook://` is a notebook reference
-- a string beginning `http://` or `https://` is a URL
 ## Types
 
-No type declarations exist in this codebase — it is plain JavaScript (ESM in
-the worker, IIFE-with-`module.exports` in the extension) and Python 3 for the
-build script. The type-like contracts below are the object shapes that cross
-module boundaries.
+No type declarations exist in this codebase — plain JavaScript (ESM in the
+worker, IIFE with `module.exports` in the extension) and Python 3 for the
+build script. The contracts below are the data shapes that cross the boundary
+between a signal and its evidence.
 
-**`StringClass` — new closed enum, `extension-cloudflare/injected.js`**
-
-```js
-const STRING_CLASS = {
-  NOTEBOOK_REF: "notebook_ref",   // starts with "notebook://"
-  URL:         "url",            // starts with "http://" or "https://"
-  UUID:        "uuid",           // /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-  BUILD_LABEL: "build_label",    // starts with "boq_"
-  JSON_BLOB:   "json_blob",      // first char is "[" or "{" and JSON.parse succeeds
-  OPAQUE:      "opaque"          // everything else — includes the user's prompt
-};
-```
-
-Six members, fixed. Adding a member is a reviewable change because each one
-names a protocol shape.
-
-**Sanitized string — changed shape, `extractBoundedStructure` output**
-
-```js
-// before
-{ type: "string", length: 349 }
-// after
-{ type: "string", length: 349, cls: "opaque" }
-```
-
-`length` is retained. Bucketing it is unnecessary: length is not user text, it
-is already in the current artifacts, and exact lengths are what let C and D be
-compared at all. `cls` is additive, so every consumer that ignores it keeps
-working.
-
-**Probe record — new, written to the page console only**
+**`DomSignal` — new, the unit of the contract**
 
 ```js
 {
-  endpoint: "StreamGenerate" | "BatchExecute",
-  transport: "fetch" | "xhr",
-  buildLabel: string | null,
-  sessionEpoch: string,
-  canonicalModelId: string | null,
-  structure: { outerLength: number, hasEnvelope: boolean, structure: unknown }
+  id: "response.generating",          // stable, referenced by tests
+  file: "native-recovery.js",
+  selector: '[aria-busy="true"]',
+  scope: "newest-response",           // "newest-response" | "document" | "element"
+  states: {                            // what must be TRUE in each state
+    generating: true,
+    settled:    false
+  },
+  measured: {
+    date: "2026-09-29",
+    fixture: "generating-signal.json",
+    method: "DOM sampled across one whole generation; heights 1242px and
+              3508px while streaming, footer class 'complete' once settled"
+  }
 }
 ```
 
-Unchanged from the KAN-195 probe. It is deliberately not routed to the content
-script or the worker: the console is the only sink that cannot persist anything,
-and that property is what made the KAN-195 capture acceptable.
+`measured` is **required**. A signal without it is a build failure, not a
+warning — that is the mechanism the whole plan rests on.
 
+`scope` is explicit because the sidenav guard exists precisely because an
+unscoped spinner match was read as a generation signal in KAN-177, and the
+same mistake in a new selector would be invisible without it in the record.
+
+**Fixture shape — new, `cloudflare-worker/tests/fixtures/`**
+
+```json
+{
+  "signal": "response.generating",
+  "captured": "2026-09-29",
+  "note": "structural attributes only; no text content, no tokens",
+  "states": {
+    "generating": {
+      "height": 3508,
+      "nodes": [
+        { "tag": "div", "class": "response-container-content has-thoughts" },
+        { "tag": "structured-content-container",
+          "class": "model-response-text has-thoughts processing-state-visible ng-star-inserted" },
+        { "tag": "div", "class": "markdown markdown-main-panel md-content animate",
+          "attrs": { "aria-busy": "true", "aria-live": "polite" } },
+        { "tag": "div", "class": "response-footer animated gap has-thoughts" }
+      ]
+    },
+    "settled": { "height": 4311, "nodes": [ "… same three …",
+        { "tag": "div", "class": "response-footer gap has-thoughts complete" } ] }
+  }
+}
 ## Files
 
 ### New
 
-**`cloudflare-worker/tests/payload-classifier.test.mjs`**
-
-Pins the classifier and, more importantly, pins the guarantee that no user text
-survives it. 12 cases, listed in the Testing section.
-**`ARCHITECTURE.md`**
-
-- §"Why the replay path can never be grounded" (line 232) — rewritten. The
-  current text asserts an `r_…` token that is "single-use" and "~40 dynamic
-  inner fields"; both are contradicted by the measurements. Replaced with the
-  measured result and the outcome from the decision table.
-- §"Replay Path vs Grounded Path" table (line 227) — the "When to use" and
-  "Grounding" cells are retained; the *reason* is corrected. The bifurcation
-  itself is not in question and the CAUTION block at line 240 stands.
-- Line 66 diagram — "Model Adapter Replay Payload Construction" stays; the path
-  still exists and is still reachable for stateless text.
-
-**`cloudflare-worker/src/index.js`**
-
-- Comment block at lines 1657–1672 — its reasoning ("replay posts the bare
-  prompt, with no `notebook://…` reference") is wire-verified from KAN-182 and
-  independent of the `r_…` claim. Left substantively intact; a cross-reference
-  to the corrected `ARCHITECTURE.md` section is added so the two do not drift
-  again.
-- `WORKER_VERSION` (line 35) and the header comment (line 3) — bumped only if
-  step 12 proceeds.
-
-**`extension-cloudflare/content.js`**
-
-- Comment at line 1345 states the replay payload "is built from a schema Google
-  has since changed". That claim is about rejection, is supported by the
-  KAN-182 wire capture, and stays. A cross-reference is added.
-
-**`docs/payload-samples/2026-09-29-streamgenerate.json`** — one factual defect
-to fix: `findings[2]` records the token slot as `[0][2][0][0][3]`. The correct
-path is `inner[0][3][0][0][3]`. This was corrected in the handoff document
-during KAN-195 and missed here. Verified by re-running the path against the
-stored structure before the edit.
-
-**`docs/HANDOFF-NEXT-SESSION.md`**
-
-- §9 — append the KAN-196 outcome alongside the KAN-190…195 table.
-- §10.1 — replace the blocker text; it is resolved by this work or explicitly
-  re-scoped by its third outcome.
-- §10.2 — drop the "reconcile ARCHITECTURE.md" row once step 11 lands.
-
-**`CHANGELOG.md`** — one entry for the classifier and one for the corrected
-record.
-
-**Version locations, bumped together in step 12 only** —
-`cloudflare-worker/src/index.js:3` and `:35`, `cloudflare-worker/package.json:3`,
-`cloudflare-worker/package-lock.json:3` and `:9`,
-`extension-cloudflare/manifest.json:4`. The build produces the sixth, in
-`dist/extension/manifest.json`.
-
-### Not touched
-
-- `cloudflare-worker/src/index.js` control flow — the typed path, the
-  `requireGrounding` routing (line 1700), and the grounding verdict (line 3672)
-  are correct as they stand.
-- `model-adapter.js` — `buildReplayPayload` (line 134) consumes a string; the
-  class annotation is additive and invisible to it.
-- `evidence-registry.js` — stores `requestSignature` opaquely; unaffected.
-- `scripts/build-extension.py`, `.gitignore`, CI workflows.
-
-## Functions
-### Modified: `extractBoundedStructure(val, depth = 0)`
-
-`extension-cloudflare/injected.js:387`. The string branch (line 395) becomes:
-
-```js
-if (typeof val === "string") {
-  return { type: "string", length: val.length, cls: classifyString(val) };
-}
-```
-
-Every other branch — depth cap at 6, the 20-element array slice, the 20-key
-object slice, the number/boolean/null/undefined handling — is unchanged. The
-recursive call sites (lines 400, 406) need no edit.
-
-### Modified: `XMLHttpRequest.prototype.send` and `window.fetch`
-
-`extension-cloudflare/injected.js:420` and `:499`. Each gains a guarded probe
-call immediately after `requestStructure` is computed and before the response
-is awaited, so a slow response cannot delay or reorder the record:
-
-```js
-if (payloadProbeEnabled) {
-  console.log("PAYLOAD_PROBE " + JSON.stringify(
-    probeRecord(matched, "fetch", requestStructure, modelIdAtRequestTime)));
-}
-```
-
-### Unchanged, verified not to need edits
-
-- `decodeAndSanitizePayload` (`:353`) — return shape grows a nested key only.
-- `buildReplayPayload` (`model-adapter.js:134`) — takes and returns strings.
-- `validateModelEvidence` (`model-adapter.js:80`) — its validator inspects
-  `sig.hasEnvelope`, `sig.outerLength`, and `Array.isArray(sig.structure)`
-  (line 33); none of those are touched.
-- `readGroundingEvidence` (`notebook-attach.js:488`) — reads the DOM, not the
-  payload.
-
-### Classes
-
-None. The codebase is procedural throughout: the worker exposes a Durable
-Object class (`GeminiBridgeDO`) and the extension uses IIFEs with a registry
-`Map` (`model-adapter.js:17`, `schemaValidators`). No new class, and no
-existing class signature changes.
-
-## Dependencies
-
-None added. No package changes, no version bumps of existing packages, no new
-runtime or dev dependencies. `node:test`, `node:assert/strict`, `node:vm`,
-and `node:fs` are already used by the test suite; the classifier is six prefix
-and regex tests over built-in string methods.
-
-The only integration requirement is the one the project already has: the
-operator reloads the extension at `chrome://extensions`, then reloads the
-Gemini tab. Neither is automatable here — Kapture cannot reach
-## Testing
-
-**New file `cloudflare-worker/tests/payload-classifier.test.mjs`**, run by the
-existing glob `node --test 'tests/**/*.test.mjs'`. Loaded via
-`createRequire(import.meta.url)` against `../../extension-cloudflare/injected.js`,
-matching the pattern in `extension-injected.test.mjs:13`.
-
-Cases:
-
-1. A `notebook://notebooks/<id>/sources/<uuid>` string classifies as
-   `notebook_ref`.
-2. An `https://` string classifies as `url`; `http://` likewise.
-3. A bare UUID classifies as `uuid`.
-4. A `boq_…` string classifies as `build_label`.
-5. A string that is valid JSON classifies as `json_blob`; a string opening with
-   `[` that is **not** valid JSON classifies as `opaque` — this is the case
-   that would otherwise misfile a prompt.
-6. A Thai-language prompt classifies as `opaque`.
-7. **The canary test.** Serialize the output of `extractBoundedStructure` over
-   a fixture payload containing a distinctive Thai prompt, then assert the
-   prompt's text appears nowhere in the serialized result. This is the test
-   that makes the guardrail claim checkable rather than asserted, and it is
-   the one that must fail if anyone later adds a prefix or substring to the
-   output.
-8. `decodeAndSanitizePayload` on a real-shaped `f.req` body returns structures
-   in which every string node has a `cls`, and the shape is otherwise
-   identical to the pre-change shape — `outerLength`, `hasEnvelope`, and the
-   non-string nodes are byte-equal to the current output for the same input.
-9. Non-string nodes are unaffected: numbers, booleans, `null`, and `undefined`
-   serialize as they did before, with no `cls` key.
-10. Depth and breadth caps hold: a structure deeper than 6 yields
-    `"max_depth"`, an array longer than 20 is sliced to 20.
-11. `classifyString` and `STRING_CLASS` are exported on the API object and on
-    `globalThis`, matching the contract test in
-    `extension-injected.test.mjs:16` — which asserts the export surface is
-    **exactly** the expected set, so the expected set must be extended there
-    too or that test fails.
-12. `payloadProbeEnabled` defaults to `false` and `handleProbeSet` ignores a
-    non-boolean argument.
-
-**Mutation checks — required before commit, following the practice used for
-KAN-193 and KAN-194.** Each must be observed to fail, then reverted:
-
-- make `classifyString` return `OPAQUE` unconditionally → cases 1–4 must fail
-- add `prefix: str.slice(0, 8)` to the string branch → case 7 must fail
-- widen `NOTEBOOK_REF` to match any string containing `//` → case 5 or 6 must
-  fail
-
-A mutation that does not change the result means the test is not pinning what
-it claims, and the test is rewritten before proceeding.
-
-**Regression.** Full suite `cd cloudflare-worker && npm test` — currently 459
-pass / 0 fail / 5 skipped, expected to rise by 12 with 0 new failures.
-`python3 scripts/build-extension.py --verify` must report current before any
-live capture is believed.
-
-**Not unit-testable, stated plainly.** Whether Gemini actually grounds the
-answer is a live property. The unit tests cover classification, the guardrail,
-and shape stability; the grounding outcome comes only from the step 8 capture,
-and the plan does not present a green suite as evidence about it.
-
-
-`chrome://extensions`.
-
-
-
-### New: `classifyString(str)`
-
-`extension-cloudflare/injected.js`. Returns one `STRING_CLASS` value.
-## Implementation Order
-
-1. **Classify.** Add `STRING_CLASS` and `classifyString` to `injected.js`;
-   wire `cls` into the string branch of `extractBoundedStructure`. Extend the
-   expected export set in `extension-injected.test.mjs:16` in the same commit,
-   since that test asserts an exact surface and will otherwise fail.
-
-2. **Test.** Write `payload-classifier.test.mjs` with all 12 cases. Run it,
-   then run the three mutations and confirm each fails. Fix the test, not the
-   assertion, if any mutation passes.
-
-3. **Full suite.** `npm test` — 0 new failures. `node --check` on
-   `injected.js`.
-
-4. **Probe, gated.** Add `probeRecord`, the runtime toggle
-   (`PAYLOAD_PROBE_SET` → `handleProbeSet`) defaulting to **off**, and the two
-   guarded call sites. The KAN-195 probe was unconditional and hand-inserted;
-   this one ships disabled and is toggled from the console, so a later capture
-   costs one message rather than a rebuild and a reload.
-
-5. **Commit and build.** Commit as `KAN-196: feat(injected): classify sanitized
-   payload strings; probe behind a runtime flag`. Rebuild and confirm
-   `python3 scripts/build-extension.py --verify` reports current.
-
-6. **Operator reloads** the extension at `chrome://extensions`, then the Gemini
-   tab. **Stop and wait for confirmation** — every later step depends on the
-   running extension carrying this build, which cannot be verified from inside
-   this process.
-
-7. **Enable the probe.** From the page console, send
-   `window.postMessage({source:"GEMINI_CONTENT", type:"PAYLOAD_PROBE_SET",
-   enabled:true}, "*")`. Confirm a `PAYLOAD_PROBE` line appears on the next
-   Gemini request; if none appears, the toggle did not take and the capture is
-   aborted rather than run blind.
-
-8. **Capture C.** Start a **fresh** Gemini conversation. Run
-   `node scripts/ask-each-skill.mjs --tools=horo_consult`. Record the tool's
-   own reported grounding verdict alongside the console structure — the two
-   are independent and both are needed.
-
-9. **Capture D.** In that **same** conversation, run `horo_consult` once more.
-   The attachment is consumed per message, so this turn should be ungrounded.
-   Record its structure and verdict.
-
-10. **Disable the probe** via the same message with `enabled:false`, and confirm
-    the flag took, so no further capture is possible by accident.
-
-11. **Decide.** Apply the decision table to the class-level diff of C against
-    D. Write the outcome, the diff, and the rule that produced it into
-    `docs/payload-samples/2026-09-30-streamgenerate-classes.json`. This step
-    is analysis of captured data and may conclude that the question is
-    answered, that it is answered negatively, or that it is not answerable
-    from the payload at all.
-
-12. **Correct the record.** Rewrite the "Why the replay path can never be
-    grounded" section of `ARCHITECTURE.md` to state the measured result,
-    whichever branch of the table applied. Fix the `[0][2]…` path error in
-    `2026-09-29-streamgenerate.json` — after re-verifying the correct path
-    against the stored structure. Update the cross-references in
-    `cloudflare-worker/src/index.js:1657` and `content.js:1345`. Update
-    `docs/HANDOFF-NEXT-SESSION.md` §9, §10.1, §10.2. Add the `CHANGELOG.md`
-    entries.
-
-13. **Version bump, if and only if the outcome warrants a release.** 4.7.11 →
-    4.7.12 across the 5 source locations. `version-consistency.test.mjs` must
-    pass. Rebuild. Note that a worker-side bump additionally requires
-    `npx wrangler deploy` to take effect, which touches production and is left
-    to the operator; if the change is extension-only, bump the extension
-    locations and say so in the handoff rather than forcing a deploy.
-
-14. **Final verification.** Full suite, `node --check` on every changed JS,
-    `--verify` on the build, `git status` clean. Report the measured test
-    count rather than the expected one.
-
-Steps 6 and 7 are the only ones that require the operator, and the plan halts
-at each rather than assuming success — the stale-build and
-stale-content-script failures earlier in this project were both cases of
-continuing past a step whose verification was assumed rather than observed.
-
-
-Order is significant and must be fixed: `NOTEBOOK_REF` before `URL` (a
-`notebook://` reference is protocol-specific and must not be swallowed by a
-looser prefix test), then `URL`, `UUID`, `BUILD_LABEL`, `JSON_BLOB`, else
-`OPAQUE`. `JSON_BLOB` is last among the specific classes because it is the
-most expensive test and the least specific — a serialized notebook reference
-list is more usefully reported as a blob than as a notebook reference, and
-whether it is a blob is itself the interesting fact.
-
-`JSON_BLOB` requires `JSON.parse` to succeed, not merely a leading bracket, so
-a prompt that opens with `[` is classified `OPAQUE`.
-
-### New: `probeRecord(matched, transport, requestStructure, modelId)`
-
-`extension-cloudflare/injected.js`, one shared body for both interceptors —
-the KAN-195 version duplicated it, and the duplication is how the two copies
-drifted apart in the first place. Returns the record object above or `null`
-when `requestStructure` is null. Does not touch `activeCsrfToken` or any other
-session state.
-
-### New: `handleProbeSet(msg)`
-
-`extension-cloudflare/injected.js`, registered in the §4 message bus. Sets the
-module-level `payloadProbeEnabled` flag from `msg.enabled`. Accepts only a
-boolean; anything else leaves the flag unchanged. Default `false`.
-
-
-
-**`docs/payload-samples/2026-09-30-streamgenerate-classes.json`**
-
-Samples C and D with the class-annotated structures, the class-level diff
-between them, the decision reached, and the three-outcome rule that produced
-it. The existing `2026-09-29-streamgenerate.json` stays as the record of what
-was known on the 29th; it is corrected, not replaced.
+**`cloudflare-worker/tests/helpers/dom-signal.mjs`**
+
+The contract itself: `DOM_SIGNALS` (the declarations), `checkDomSignals()`
+(produces a `DomSignalReport`), and `buildStubFromFixture(fixture, state)` —
+a minimal DOM stub built from a captured fixture. The stub builder is the piece
+that matters: it means tests are written against a real capture by
+construction, so a test cannot quietly drift into asserting the code's own
+behaviour.
+
+`buildStubFromFixture` supports exactly the selector forms the extension uses
+(`tag`, `.class`, `tag.class`, `[attr="v"]`, `tag[attr*="v"]`, comma lists) and
+returns `false` for anything unrecognised rather than a hopeful `true`. That
+is deliberate: the KAN-198 stub silently failed to match
+`div.loading-content-spinner-container` and two tests failed for the wrong
+reason, which is how a matcher becomes a thing that hides problems.
+
+**`cloudflare-worker/tests/fixtures/generating-signal.json`**
+
+The capture already taken during the KAN-198 measurement, transcribed. Both
+states, structural attributes only. This is the fixture the shipped
+`response.generating` signal is checked against, so it is the evidence that the
+4.7.14 fix rests on — currently living only in a test file's comments and in
+this conversation.
+
+**`cloudflare-worker/tests/fixtures/grounding-chips.json`**
+
+A capture for the second unmeasured signal: `readGroundingEvidence` in
+`notebook-attach.js` reads `source-inline-chip` and counts `[cite: N]`
+markers. Both were introduced in KAN-182 and KAN-177 respectively and neither
+has a recorded before-and-after capture. The fixture records a settled
+notebook-grounded response with chips and markers, and a settled ungrounded
+one with neither.
+
+**`cloudflare-worker/tests/dom-signal-contract.test.mjs`**
+
+Runs `checkDomSignals()` and asserts `ok === true`. It is a meta-test: it
+exists so that adding a selector without a capture fails CI, and it is
+written so that deleting the evidence also fails.
+
+**`cloudflare-worker/tests/agy-run-isolation.test.mjs`**
+
+Reads `~/.local/bin/agy-run` as source — the technique
+`build-stamp.test.mjs` already uses for `scripts/build-extension.py` — and
+pins the three properties added after the 2026-09-29 breach:
+
+1. the repo is snapshotted with `git status --porcelain` **before** the agent
+   runs, not only compared afterwards
+2. a post-run difference exits **71**, distinct from the agent's own exit code
+   and from the circuit breaker's 75, so a breach cannot be read as success
+3. `git status --porcelain` is used rather than `git diff`, because `diff`
+   alone misses untracked files — which is how the new test file the agent
+   created would have escaped notice
+
+The path is absolute because the script lives outside the repo. The test skips
+loudly with a reason if the file is absent, rather than passing silently.
 
 ### Modified
 
-**`extension-cloudflare/injected.js`**
+**`extension-cloudflare/native-recovery.js`**
 
-| Region | Change |
-|---|---|
-| §2, near `extractBoundedStructure` (line ~387) | add `STRING_CLASS` and `classifyString(str)`; call it from the string branch of `extractBoundedStructure` so the returned object gains `cls` |
-| §2, `decodeAndSanitizePayload` (line ~353) | unchanged — signature and return shape preserved, so `model-adapter.js` and `evidence-registry.js` need no edit |
-| §3, fetch interceptor (line ~420) | gated probe call after `requestStructure` is computed |
-| §3, XHR interceptor (line ~499) | same gated probe; the prompt travels over XHR, so a fetch-only probe never sees it |
-| §4, message bus (line ~537) | new `PAYLOAD_PROBE_SET` handler |
-| `api` export object (line ~683) | export `classifyString` and `STRING_CLASS` so tests can exercise them directly |
+- `generatingSignal` (line 277) — the `aria-busy` check gains a comment
+  pointing at its fixture and capture date, so a reader can verify the claim
+  without leaving the file. The behaviour does not change; KAN-198 is correct
+  and this plan does not touch it.
+- No selector is added or removed. The four dead checks (spinner, stop button,
+  two lottie forms) are **kept**: they cost nothing and may match on another
+  Gemini build. Their contract entries record that they were *not observed* on
+  this build, which is a different statement from "wrong".
 
-**`extension-cloudflare/notebook-attach.js`** — no change. Its
-`readGroundingEvidence` (line 488) already reports `chipCount` and
-`citeMarkers` per response; the probe records the matching side.
+**`extension-cloudflare/notebook-attach.js`**
+
+- `readGroundingEvidence` (line 488) — a comment recording the capture that
+  justifies `source-inline-chip` and the `[cite: N]` regex, and the date. No
+  behaviour change.
+
+**`docs/HANDOFF-NEXT-SESSION.md`**
+
+Corrected against the tree, because it currently misstates all three facts a
+reader would check first:
+
+| field | says | is |
+|---|---|---|
+| HEAD | `cd205ea` | `561a126` |
+| tests | 459 passing | 483 passing |
+| extension | `v4.7.11` | `v4.7.14`, worker still `4.7.11` |
+
+- §9 gains KAN-196, 197, 198 alongside 190–195.
+- §10.1's blocker is re-scoped: the C/D capture it describes has not been run,
+  and it cannot be run until the 4.7.14 bridge is verified live, which is the
+## Functions
+
+### New: `checkDomSignals(options = {})`
+
+`cloudflare-worker/tests/helpers/dom-signal.mjs`. Returns a `DomSignalReport`.
+Checks, in order of cost:
+
+1. every entry in `DOM_SIGNALS` has a non-empty `measured` block with a `date`
+   and a `fixture` → otherwise `unmeasured`
+2. every named fixture file exists and parses → otherwise `unbacked`
+3. for each signal, `buildStubFromFixture(fixture, state)` is asked the
+   signal's selector for each declared state, and the boolean must equal
+   `states[state]` → otherwise `mismatched`
+
+`options.signals` narrows the run to a subset, so a test can pin one signal
+without re-validating the corpus. `options.repo` defaults to the repo root
+resolved from `import.meta.url`, so the helper works from any test file.
+
+### New: `buildStubFromFixture(fixture, state)`
+
+Same file. Returns a document stub exposing `querySelector`,
+`querySelectorAll` and `closest`, wired to the nodes recorded for `state` in
+the fixture. It understands the selector forms the extension actually uses
+and nothing else; an unrecognised selector is a development error and is
+reported as such rather than resolving to `null`, because a matcher that
+quietly returns `null` is indistinguishable from a matcher that is wrong.
+
+### New: `recordCapture(fixturePath, signalId, {generating, settled})`
+
+Same file, used by whoever takes the next capture. Exists so the capture
+format has one writer and the corpus cannot drift into six shapes. It is not
+called by any test — it is the tool that makes step 3 of the implementation
+order a mechanical step rather than a documentation exercise.
+
+### Modified: `generatingSignal(doc)`
+
+`extension-cloudflare/native-recovery.js:277`. **No behaviour change.** The
+`aria-busy` check at line 330 gains a three-line comment naming the fixture,
+the capture date and the two observed states. KAN-198's implementation is
+correct and this plan does not second-guess it.
+
+### Modified: `readGroundingEvidence(opts = {})`
+
+`extension-cloudflare/notebook-attach.js:488`. **No behaviour change.** Gains a
+comment naming the fixture and date for `SELECTORS.sourceChip`
+(`source-inline-chip`) and for the `\[cite:\s*\d+\]` marker regex, both of
+which are currently asserted by `grounding-settle.test.mjs` against stubs
+rather than captures.
+
+### Unchanged, verified not to need edits
+
+- `handleVerifyGrounding` (`content.js`) — reads grounding through
+  `Attach.readGroundingEvidence`; the contract covers the evidence it consumes,
+  not the settle loop that KAN-197 already fixed and mutation-checked.
+- `handleCollectAnswer` (`content.js`) — consumes `isGenerating`, which the
+  contract now backs.
+- `buildStubFromFixture` consumers: `native-recovery-generating.test.mjs` keeps
+  its current hand-written fixtures for the scoping and robustness cases, and
+  gains fixture-built cases for the two measured states. Both are kept — the
+  hand-written stubs prove the function survives minimal DOM shapes, which a
+  real capture does not test.
+
+### Classes
+
+None. The codebase is procedural: the worker exposes a Durable Object class
+## Dependencies
+
+None added. No package changes, no version bumps of existing packages. The
+helpers use `node:fs`, `node:path` and `node:url` — all already used by
+`build-stamp.test.mjs`, which is the direct precedent for reading a script as
+source and asserting on its decisions.
+
+No new integration requirement. Everything in this plan runs under
+`npm test` with no browser.
 
 
-- a bare UUID is a UUID
-- a string beginning `boq_` is a build label
-- a string that parses as JSON is a serialized blob
-- anything else is opaque text — the class that covers the user's prompt
+  next step after this plan.
+- §10.2's "reconcile ARCHITECTURE.md" row stays open and is re-stated with the
+  specific claim to correct — the `r_…` token and the "~40 dynamic inner
+  fields" figure, both contradicted by the two captured samples.
+- A new subsection records the 4.7.13 incident: what shipped, why the tests
+  passed, and the rule that now prevents it. This is the artefact that makes
+  the next session's first instinct correct.
 
-This is sufficient because the question is not "what does field `[3]` contain"
-but "does any field in the payload carry a notebook reference at all". The
-answer is a single bit per field, and the bit is carried by the protocol, not
-by the user. GUARDRAILS G1.2.1 requires prompt text to be sanitized 100% and
-forbids persisting personal text; a class label is not text, and opaque text
-records only its length. The prompt lands in the `opaque` class and nothing
-about it is retained.
+**`CHANGELOG.md`** — one `4.7.15` entry describing the contract and the
+fixture corpus, and a `Fixed` line for the stale handoff header.
 
-The one rule that keeps this safe: **only the five protocol prefixes above are
-ever recorded verbatim.** No arbitrary prefix, substring, hash, or first-N of
-any string is stored. A prefix allowlist over a closed set cannot leak user
-text, because a user prompt cannot match a protocol prefix.
+### Not touched
+
+- `cloudflare-worker/src/index.js` — no worker logic changes in this plan.
+  `executeThroughExtension`, the `requireGrounding` routing and the grounding
+  verdict are correct and are exercised by live runs, not by this contract.
+- `extension-cloudflare/injected.js`, `model-adapter.js`, `evidence-registry.js`
+  — no DOM signals of the kind covered here; `injected.js` reads `WIZ_global_data`
+  and request bodies, both already covered by their own tests.
+- `scripts/build-extension.py` — the staleness stamp is KAN-192's answer to
+  the same class of problem and works. This plan adds the missing sibling for
+  DOM signals, not a replacement.
+- CI workflows, `.githooks/`, `.gitignore`.
+
+
+```
+
+Both states are stored, and they are near-identical on purpose: the settled
+state still carries `has-thoughts` and `processing-state-visible`. That
+similarity is the finding, and a reader can see it without opening a browser.
+
+**`DomSignalReport` — the return of the contract self-check**
+
+```js
+{ ok: boolean, unmeasured: string[], unbacked: string[], mismatched: string[] }
+```
+
+`unmeasured` — declared with no `measured` block.
+`unbacked` — names a fixture file that does not exist or does not parse.
+`mismatched` — the fixture does not produce the declared `states`.
+
+Three failure classes rather than one boolean, so the message says which
+mistake was made.
+
+
+tokens: attribute names, class names, tag names and one numeric height per
+state, which is all any of these decisions rest on. That keeps them inside
+GUARDRAILS G1.2.1, which forbids persisting prompt text, and it means a
+reviewer can check a fixture by reading it.
+
+Each signal's declaration records the date and the conditions of its capture,
+so a reader can tell a fresh measurement from a two-day-old one — the same
+reason the per-account skills carry a `Measured:` line, added earlier in this
+session for the same reason.
+
+## Testing
+
+**The meta-test** — `cloudflare-worker/tests/dom-signal-contract.test.mjs`
+asserts `checkDomSignals().ok === true`. It exists so that a future selector
+without a capture fails CI.
+
+That single assertion is not enough on its own, because a test asserting "the
+contract is satisfied" is itself unfalsifiable if the contract can be edited to
+match reality. So it is mutation-checked like everything else here:
+
+- delete the `measured` block from any declaration → the test must fail with
+  `unmeasured`
+- point a declaration at a fixture that does not exist → must fail with
+  `unbacked`
+- flip a `states` value so the fixture no longer agrees → must fail with
+  `mismatched`
+- delete the whole contract check and leave the test calling it → must fail,
+  proving the test is not vacuous
+
+The last one is the one that catches a contract that has quietly become
+decorative.
+
+**Per-signal cases** — added to `native-recovery-generating.test.mjs`, keeping
+its existing ten:
+
+- the generating fixture state reads as active with
+  `source === "response_aria_busy"`
+- the settled fixture state reads as inactive
+- the settled fixture — which still carries `has-thoughts` and
+  `processing-state-visible` — is the regression case, and it is the reason the
+  4.7.13 defect is caught
+
+**Grounding chips** — a new case in `grounding-settle.test.mjs` driven from
+`grounding-chips.json`: a fixture with chips and markers reports `verified`,
+one without reports `no_citations_in_response`. The second is the one that
+matters — a grounding check that cannot say "finished, genuinely ungrounded"
+is the defect KAN-182 warned about.
+
+**Tooling gate** — `agy-run-isolation.test.mjs` reads the script as text and
+asserts the three properties listed in Files. It is a source-reading test
+because the script is a shell program outside the repo; it cannot execute it
+without a real agent, and pretending otherwise would be the same class of
+mistake this plan exists to prevent. What it does check is real: that the
+snapshot is taken before the run, that the breach exit code is distinct, and
+that untracked files are included.
+
+**Regression** — full suite `cd cloudflare-worker && npm test`, currently 483
+pass / 0 fail / 5 skipped. Expected: 483 + the new cases, 0 new failures.
+`version-consistency.test.mjs` must pass after the bump.
+
+**Stated plainly** — none of this verifies that Gemini behaves correctly. It
+verifies that the claims the extension makes about Gemini's DOM are backed by
+observations. Whether a notebook-grounded answer is actually grounded remains
+a live property, proven only by running `horo_consult` and reading the health
+report, and the plan does not present a green suite as evidence about it.
+
+## Implementation Order
+
+1. **Helper.** Write `dom-signal.mjs` with `DOM_SIGNALS`, `checkDomSignals`,
+   `buildStubFromFixture` and `recordCapture`. Declare the six signals already
+   in the tree: `response.generating` (measured), and the spinner, stop-button
+   and two lottie forms (declared, explicitly unobserved on this build).
+
+2. **First fixture.** Transcribe the KAN-198 capture into
+   `fixtures/generating-signal.json`. Both states, structural attributes only.
+   Check it against `aria-busy` by hand before wiring it to anything.
+
+3. **Ground the second fixture.** With the browser: open a fresh Gemini
+   conversation, attach the Horo notebook, send a question, and capture
+   `readGroundingEvidence`'s inputs — `source-inline-chip` presence and any
+   `[cite: N]` markers — once the answer has settled. Then repeat in a
+   conversation with no notebook attached. Record both as
+   `fixtures/grounding-chips.json`.
+   **This is the one step that needs the operator**, because
+   `chrome://extensions` is unreachable from here and typing into a hidden tab
+   is unreliable. Stop and wait rather than guessing the selector.
+
+4. **Meta-test.** Write `dom-signal-contract.test.mjs` and run the four
+   mutations listed in Testing. Each must be observed to fail, then reverted.
+   A mutation that does not change the result means the contract check is
+   decorative and must be rewritten before proceeding.
+
+5. **Pin the shipped signal.** Add the two fixture-built cases to
+   `native-recovery-generating.test.mjs`, keeping the existing ten. Confirm
+   the 4.7.13 defect — keying on the permanent classes — still fails the
+   regression case, since that is the exact defect the corpus exists to catch.
+
+6. **Pin the grounding signal.** Add the fixture-driven case to
+   `grounding-settle.test.mjs`.
+
+7. **Annotate the source.** Add the fixture-and-date comments to
+   `generatingSignal` and `readGroundingEvidence`. No behaviour change; verify
+   with `node --check` and a zero-line diff on the executable code.
+
+8. **Tooling gate.** Write `agy-run-isolation.test.mjs`. If `~/.local/bin/agy-run`
+   is absent, the test skips with a printed reason rather than passing.
+
+9. **Fix the handoff.** Correct the header table, add §9 entries for
+   KAN-196/197/198, re-scope §10.1, re-state the `ARCHITECTURE.md` row with
+   the specific false claims, and add the 4.7.13 incident record.
+
+10. **Bump.** 4.7.14 → 4.7.15 across the five source locations, add the
+    `CHANGELOG.md` entry, run `version-consistency.test.mjs`, rebuild, and
+    confirm `build-extension.py --verify` reports current.
+
+11. **Final verification.** Full suite with the measured count, `node --check`
+    on every changed file, `--verify` on the build, `git status` clean. State
+    the measured numbers rather than the expected ones.
+
+Steps 3 is the only one that needs the operator, and the plan halts there
+rather than assuming a capture. Everything else runs under `npm test` with no
+browser, which is the point: the next selector someone adds will be checked
+against a capture by default, not by intention.
+
+(`GeminiBridgeDO`), the extension uses IIFEs with a registry `Map`
+(`model-adapter.js:17`). The contract is a plain frozen array of objects.
