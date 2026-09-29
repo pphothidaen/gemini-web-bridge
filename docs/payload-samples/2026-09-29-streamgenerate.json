@@ -1,0 +1,227 @@
+{
+  "purpose": "Sanitized StreamGenerate request structures, captured 2026-09-29 by a temporary probe in injected.js (KAN-195). No prompt text and no CSRF token: every string is {type,length}.",
+  "capture_method": "console.log('PAYLOAD_PROBE '+JSON) in both the fetch and XHR interceptors, read from the page console via Kapture. The network API was not usable: the buffer holds dozens of analytics and asset requests per second.",
+  "samples": [
+    {
+      "label": "A",
+      "conversation": "839c52c989eb69df (6 prior responses)",
+      "captured_at": null,
+      "endpoint": "StreamGenerate",
+      "transport": "xhr",
+      "buildLabel": "boq_gemini-web-uiserver_20260928.16_p0",
+      "sessionEpoch": "epoch_1790687784183_84rh9j",
+      "canonicalModelId": "gemini-3.8-flash-extended",
+      "grounding_outcome": "grounded",
+      "structure": {
+        "outerLength": 2,
+        "hasEnvelope": true,
+        "structure": [
+          [
+            {
+              "type": "string",
+              "length": 349
+            },
+            "number",
+            null,
+            [
+              [
+                [
+                  null,
+                  "number",
+                  "number",
+                  {
+                    "type": "string",
+                    "length": 0
+                  }
+                ],
+                {
+                  "type": "string",
+                  "length": 4
+                },
+                {
+                  "type": "string",
+                  "length": 88
+                }
+              ]
+            ],
+            null,
+            null,
+            "number"
+          ],
+          [
+            {
+              "type": "string",
+              "length": 2
+            }
+          ],
+          null,
+          {
+            "type": "string",
+            "length": 2488
+          },
+          {
+            "type": "string",
+            "length": 32
+          },
+          null,
+          [
+            "number"
+          ],
+          "number",
+          null,
+          null,
+          "number",
+          "number",
+          null,
+          null,
+          null,
+          null,
+          null,
+          [
+            [
+              "number"
+            ]
+          ],
+          "number",
+          null
+        ]
+      },
+      "context_blob_length": 2488
+    },
+    {
+      "label": "B",
+      "conversation": "new conversation (0 prior responses)",
+      "captured_at": null,
+      "endpoint": "StreamGenerate",
+      "transport": "xhr",
+      "buildLabel": "boq_gemini-web-uiserver_20260928.16_p0",
+      "sessionEpoch": "epoch_1790687882655_khrv0m",
+      "canonicalModelId": "gemini-3.8-flash-extended",
+      "grounding_outcome": "ungrounded",
+      "structure": {
+        "outerLength": 2,
+        "hasEnvelope": true,
+        "structure": [
+          [
+            {
+              "type": "string",
+              "length": 349
+            },
+            "number",
+            null,
+            [
+              [
+                [
+                  null,
+                  "number",
+                  "number",
+                  {
+                    "type": "string",
+                    "length": 0
+                  }
+                ],
+                {
+                  "type": "string",
+                  "length": 4
+                },
+                {
+                  "type": "string",
+                  "length": 88
+                }
+              ]
+            ],
+            null,
+            null,
+            "number"
+          ],
+          [
+            {
+              "type": "string",
+              "length": 2
+            }
+          ],
+          null,
+          {
+            "type": "string",
+            "length": 1657
+          },
+          {
+            "type": "string",
+            "length": 32
+          },
+          null,
+          [
+            "number"
+          ],
+          "number",
+          null,
+          null,
+          "number",
+          "number",
+          null,
+          null,
+          null,
+          null,
+          null,
+          [
+            [
+              "number"
+            ]
+          ],
+          "number",
+          null
+        ]
+      },
+      "context_blob_length": 1657
+    }
+  ],
+  "field_comparison": {
+    "identical": [
+      0,
+      1,
+      2,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+    ],
+    "different": [
+      {
+        "index": 3,
+        "A": {
+          "type": "string",
+          "length": 2488
+        },
+        "B": {
+          "type": "string",
+          "length": 1657
+        }
+      }
+    ]
+  },
+  "findings": [
+    "The endpoint is StreamGenerate over XHR, as KAN-182 recorded. batchexecute is used for the auxiliary RPCs, not for the prompt.",
+    "19 of 20 top-level fields are byte-identical in shape between two different conversations. Only field [3] differs, and only in length (2488 vs 1657) \u2014 it is the conversation context blob.",
+    "The slot ARCHITECTURE.md calls the r_\u2026 session token, [0][2][0][0][3], is a ZERO-LENGTH string in BOTH samples. It is not a varying token.",
+    "CRITICAL: sample B came back UNGROUNDED with a structure identical to the grounded sample A. Request shape therefore does not determine whether the answer is grounded. Something outside the captured shape varies.",
+    "Consequently the premise in ARCHITECTURE.md \u2014 that ~40 dynamic inner fields including a per-attachment r_ token make the payload underivable \u2014 is NOT supported by these two samples. The structure is far more stable than that."
+  ],
+  "what_is_still_missing": [
+    "A control sample from a request with NO notebook attached. The ping run did not produce one: it emitted only BatchExecute probes with hasEnvelope:false and never went through the typing path, so it is not a usable control.",
+    "Content-level data. Lengths alone cannot identify which field carries the notebook, because two different values can share a length. This is the hard limit of a sanitized capture \u2014 and it is why A and B being the same shape proves nothing about where the notebook lives.",
+    "A sample from a run that grounds in a NEW conversation, to see whether the ungrounded outcome in B is about conversation age rather than the payload."
+  ],
+  "next_experiment": "Re-run horo_consult in a fresh conversation until it grounds, then diff that grounded sample against these two. If a grounded fresh conversation still matches B exactly, the difference is not in the payload at all."
+}
