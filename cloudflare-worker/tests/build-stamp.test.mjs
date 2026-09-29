@@ -36,6 +36,14 @@ const buildScript = fs.readFileSync(
 );
 const gitignore = fs.readFileSync(path.join(REPO, '.gitignore'), 'utf8');
 
+/** Source text of verify_build(), so tests can inspect its decisions. */
+function verifyBody() {
+  const start = buildScript.indexOf('def verify_build(');
+  assert.ok(start > -1, 'build-extension.py must define verify_build()');
+  const end = buildScript.indexOf('\ndef ', start + 1);
+  return buildScript.slice(start, end > -1 ? end : start + 3000);
+}
+
 test('every build artifact lives under one root', () => {
   // Two output roots is how the two copies drifted apart in the first place.
   assert.match(buildScript, /DIST_DIR\s*=\s*REPO_ROOT\s*\/\s*"dist"/);
@@ -125,6 +133,35 @@ test('clean removes every packaged artifact, not just the current version', () =
   assert.ok(start > -1, 'clean() must exist');
   const fn = buildScript.slice(start, start + 900);
   assert.match(fn, /glob\("extension-\*\.zip\*"\)/);
+});
+
+test('a moved HEAD alone is not staleness', () => {
+  // First version compared commit SHAs and reported STALE whenever HEAD moved.
+  // That was wrong: a commit touching docs, tests, or the worker does not
+  // change what Chrome loads, so the build was still current. A check that
+  // cries wolf on every doc commit is a check people learn to ignore — which
+  // is how the real STALE gets missed.
+  const body = verifyBody();
+  assert.doesNotMatch(
+    body,
+    /problems\.append\(\s*f?"commit:/,
+    'a commit difference must not be added to problems'
+  );
+  assert.match(body, /problems\.append\(\s*f?"version:/);
+  assert.match(body, /problems\.append\(\s*f?"source changed:/);
+});
+
+test('the digest, not the commit, is what fails the check', () => {
+  // Only version and source content may hard-fail.
+  const hard = [...verifyBody().matchAll(/problems\.append\(\s*f?"([^:"]+):/g)]
+    .map((m) => m[1]);
+  assert.ok(hard.length > 0, 'there must be hard failure reasons');
+  for (const reason of hard) {
+    assert.ok(
+      ['version', 'source changed'].includes(reason),
+      `unexpected hard-failure reason: ${reason}`
+    );
+  }
 });
 
 test('the stamp is written before the build is reported as complete', () => {

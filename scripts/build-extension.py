@@ -457,9 +457,6 @@ def verify_build() -> int:
             f"source changed: built from {built_digest}, source is now {src_digest}"
         )
 
-    if head and stamp.get("commit") and stamp["commit"] != head and not problems:
-        problems.append(f"commit: built {stamp['commit']}, HEAD is {head}")
-
     if problems:
         print(f"❌ STALE build at {out_dir}")
         for p in problems:
@@ -470,6 +467,13 @@ def verify_build() -> int:
 
     print(f"✅ Build is current: v{built_ver} from {stamp.get('commit') or 'unknown'}"
           f", built {stamp.get('built_at', 'unknown')}")
+
+    # A newer commit is only worth mentioning, never a failure: commits that
+    # touch docs, tests, or the worker do not change what Chrome loads, and
+    # flagging those would train the reader to ignore a real STALE.
+    if head and stamp.get("commit") and stamp["commit"] != head:
+        print(f"   ℹ️  HEAD is {head}, built from {stamp['commit']} — but the "
+              f"extension source is unchanged, so the loaded code is current.")
     if stamp.get("dirty"):
         print("   ⚠️  built from a dirty working tree")
     return 0
