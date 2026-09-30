@@ -2381,13 +2381,13 @@ export class GeminiBridgeDO extends DurableObject {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 
-    const BRIDGE_SECRET = this.env.BRIDGE_SECRET;
+    const BRIDGE_AUTH_TOKEN = this.env.BRIDGE_AUTH_TOKEN;
     const CLIENT_API_KEY = this.env.CLIENT_API_KEY;
 
     // ─── 1. WebSocket Endpoint สำหรับ Chrome Extension (/bridge) ───
     if (url.pathname === "/bridge") {
       const token = url.searchParams.get("token") || request.headers.get("x-bridge-token");
-      if (!BRIDGE_SECRET || !token || token !== BRIDGE_SECRET) {
+      if (!BRIDGE_AUTH_TOKEN || !token || token !== BRIDGE_AUTH_TOKEN) {
         return new Response("Unauthorized: Invalid Bridge Secret", { status: 401, headers: corsHeaders });
       }
 
@@ -2609,8 +2609,8 @@ export class GeminiBridgeDO extends DurableObject {
 
     if (url.pathname === "/bridge/auth-check") {
       const supplied=request.headers.get("x-bridge-token");
-      return new Response(JSON.stringify({ok:Boolean(BRIDGE_SECRET && supplied===BRIDGE_SECRET),protocolVersion:3,minSupportedVersion:2,maxSupportedVersion:3}),
-        {status:BRIDGE_SECRET && supplied===BRIDGE_SECRET ? 200 : 401,headers:{...corsHeaders,"Content-Type":"application/json","Cache-Control":"no-store"}});
+      return new Response(JSON.stringify({ok:Boolean(BRIDGE_AUTH_TOKEN && supplied===BRIDGE_AUTH_TOKEN),protocolVersion:3,minSupportedVersion:2,maxSupportedVersion:3}),
+        {status:BRIDGE_AUTH_TOKEN && supplied===BRIDGE_AUTH_TOKEN ? 200 : 401,headers:{...corsHeaders,"Content-Type":"application/json","Cache-Control":"no-store"}});
     }
 
     // ─── Emergency connection reset ───────────────────────────────────────────
@@ -2619,7 +2619,7 @@ export class GeminiBridgeDO extends DurableObject {
     // broken without waiting for the stale-connection TTL.
     if (url.pathname === "/bridge/reset" && request.method === "POST") {
       const supplied = url.searchParams.get("token");
-      if (!supplied || supplied !== BRIDGE_SECRET) {
+      if (!supplied || supplied !== BRIDGE_AUTH_TOKEN) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
       const evicted = [];

@@ -20,7 +20,7 @@
  * The service worker logs its own WebSocket URL, and that URL carries the
  * bridge auth token as a query parameter:
  *
- *     wss://…/bridge?token=<BRIDGE_SECRET>&instanceId=…
+ *     wss://…/bridge?token=<BRIDGE_AUTH_TOKEN>&instanceId=…
  *
  * wrangler tail has the same exposure: it redacts instanceId but leaves token=
  * in plain text. Anything that prints these URLs — this script, tail output

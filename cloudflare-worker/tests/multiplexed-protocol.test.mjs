@@ -102,7 +102,7 @@ function mockSocket() {
 function createBridge() {
   const b = new GeminiBridgeDO(makeCtx(), {
     CLIENT_API_KEY: 'test-token',
-    BRIDGE_SECRET: 'bridge-secret',
+    BRIDGE_AUTH_TOKEN: 'bridge-secret',
   });
   b.currentTokens = { sessionReady: true };
   b.lastNotebookScope = 'notebook:test-nb-id';

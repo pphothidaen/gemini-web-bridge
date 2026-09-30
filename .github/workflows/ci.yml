@@ -213,7 +213,7 @@ jobs:
 
   # ─── Job 5: Build & Package Extension ──────────────────────────
   # RULE: Extension MUST be built via build-extension.py before zipping.
-  # Never zip extension-cloudflare/ directly — it contains __BRIDGE_SECRET__ placeholder.
+  # Never zip extension-cloudflare/ directly — it contains __BRIDGE_AUTH_TOKEN__ placeholder.
   # Load unpacked from dist/extension/ OR download the CI artifact.
   package-extension:
     name: Build & Package Extension
@@ -323,7 +323,7 @@ jobs:
         run: |
           echo "=== Scanning for unresolved placeholders ==="
           PLACEHOLDERS=(
-            "__BRIDGE_SECRET__"
+            "__BRIDGE_AUTH_TOKEN__"
             "__CLIENT_API_KEY__"
             "__WORKER_URL__"
             "__MCP_ENDPOINT__"

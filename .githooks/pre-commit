@@ -36,7 +36,7 @@ PATTERN='hermes-[a-f0-9]{16,}|gemini-bridge-[a-f0-9]{16,}'
 # The allowlisted values below are the build-time placeholders and the fixed
 # constants from .gitleaks.toml. Keep the two files in step: if you add one
 # there, add it here, or the hook will reject a commit CI considers clean.
-ALLOW_VALUE_RE='__BRIDGE_SECRET__|__CLIENT_API_KEY__|<BRIDGE_SECRET>|<CLIENT_API_KEY>|<OLD_CLIENT_TOKEN>|<NEW_CLIENT_TOKEN>|<OLD_BRIDGE_TOKEN>|staging-token-change-me|dGhlIHNhbXBsZSBub25jZQ=='
+ALLOW_VALUE_RE='__BRIDGE_AUTH_TOKEN__|__CLIENT_API_KEY__|<BRIDGE_SECRET>|<CLIENT_API_KEY>|<OLD_CLIENT_TOKEN>|<NEW_CLIENT_TOKEN>|<OLD_BRIDGE_TOKEN>|staging-token-change-me|dGhlIHNhbXBsZSBub25jZQ=='
 
 # Staged blobs, with their paths. -z keeps paths with spaces intact.
 # NOTE: read into an array field-by-field. Using $(...) here would silently
@@ -122,7 +122,7 @@ for file in "${STAGED[@]}"; do
   # spew bytes into the pattern.
   #
   # The content check always runs, including on allowlisted paths. What the
-  # allowlist removes is the known-constant shapes (__BRIDGE_SECRET__ and
+  # allowlist removes is the known-constant shapes (__BRIDGE_AUTH_TOKEN__ and
   # friends), not the file. A real token pasted into docs/ is still rejected —
   # exempting the path wholesale would turn the runbook into the one place a
   # credential can be committed with no complaint, which is the opposite of
@@ -150,7 +150,7 @@ if (( ${#OFFENDERS[@]} > 0 )); then
   done
   echo ""
   echo "👉 Never commit a real BRIDGE_SECRET / CLIENT_API_KEY."
-  echo "   Use the build-time placeholders __BRIDGE_SECRET__ /"
+  echo "   Use the build-time placeholders __BRIDGE_AUTH_TOKEN__ /"
   echo "   __CLIENT_API_KEY__, substituted by scripts/build-extension.py."
   echo "   If this is a false positive, add an entry to the allowlist in"
   echo "   .gitleaks.toml and the matching exclusion in"

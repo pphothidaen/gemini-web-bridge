@@ -21,7 +21,7 @@ import fs from 'node:fs';
 
 // A syntactically realistic value, in the shape the real token has.
 //
-// Deliberately NOT shaped like a real token. The real BRIDGE_SECRET starts
+// Deliberately NOT shaped like a real token. The real BRIDGE_AUTH_TOKEN starts
 // with the literal prefix `gemini-bridge-` followed by a long hex run, which is
 // exactly what the pre-commit Secret Guard matches on — a fixture that
 // reproduced the real shape would block its own commit and teach the next

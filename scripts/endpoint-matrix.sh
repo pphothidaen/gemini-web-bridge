@@ -13,7 +13,7 @@ print(m.group(1).strip().strip('\"') if m else '')
 BR=$(python3 -c "
 import re
 env = open('.env').read()
-m = re.search(r'^BRIDGE_SECRET=(.*)$', env, re.M)
+m = re.search(r'^BRIDGE_AUTH_TOKEN=(.*)$', env, re.M)
 print(m.group(1).strip().strip('\"') if m else '')
 ")
 [ -n "$KEY" ] && echo "client key loaded (${#KEY} chars)" || { echo "NO CLIENT KEY"; exit 1; }

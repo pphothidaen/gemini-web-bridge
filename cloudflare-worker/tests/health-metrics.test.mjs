@@ -46,7 +46,7 @@ const { GeminiBridgeDO } = vm.runInNewContext(
 );
 
 const createBridge = () => {
-  const b = new GeminiBridgeDO(makeCtx(), { CLIENT_API_KEY: 'k', BRIDGE_SECRET: 'b' });
+  const b = new GeminiBridgeDO(makeCtx(), { CLIENT_API_KEY: 'k', BRIDGE_AUTH_TOKEN: 'b' });
   b.currentTokens = { sessionReady: true };
   return b;
 };

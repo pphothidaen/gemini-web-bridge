@@ -81,7 +81,7 @@ jobs:
       # Fail loudly and early. The previous version ran
       #   doppler setup ... 2>/dev/null || true
       # then `doppler secrets get`, which returned empty strings, so the job
-      # died 3 steps later with a misleading "BRIDGE_SECRET is empty".
+      # died 3 steps later with a misleading "BRIDGE_AUTH_TOKEN is empty".
       # A missing service token is a configuration error with a known fix —
       # say so, and say exactly where to get it.
       - name: Preflight — require a usable DOPPLER_SERVICE_TOKEN
@@ -116,18 +116,18 @@ jobs:
           #   2. Right project, wrong config. A token issued for config `prd`
           #      DOES list gemini-web-bridge, so a project-level check passes
           #      it — then every `secrets get --config prd_worker` is denied
-          #      and the fetch step reports "BRIDGE_SECRET /
+          #      and the fetch step reports "BRIDGE_AUTH_TOKEN /
           #      CLIENT_API_KEY are missing from ... prd_worker".
           #
           # So test the exact read the fetch step performs, here, where the
           # cause is still unambiguous — and report which projects/configs the
           # token can actually reach so the mis-scoping is readable from the
           # log alone.
-          if ! doppler secrets get BRIDGE_SECRET \
+          if ! doppler secrets get BRIDGE_AUTH_TOKEN \
                --token "$DOPPLER_SERVICE_TOKEN" \
                --project gemini-web-bridge --config prd_worker --plain \
                >/dev/null 2>&1; then
-            echo "::error::DOPPLER_SERVICE_TOKEN cannot read BRIDGE_SECRET from gemini-web-bridge/prd_worker."
+            echo "::error::DOPPLER_SERVICE_TOKEN cannot read BRIDGE_AUTH_TOKEN from gemini-web-bridge/prd_worker."
             echo ""
             if ! doppler projects --token "$DOPPLER_SERVICE_TOKEN" --json \
                  | grep -q '"id": *"gemini-web-bridge"'; then
@@ -151,7 +151,7 @@ jobs:
             echo "Or re-run with skip_doppler=true to fall back to GitHub Secrets."
             exit 1
           fi
-          echo "✅ DOPPLER_SERVICE_TOKEN can read BRIDGE_SECRET from gemini-web-bridge/prd_worker"
+          echo "✅ DOPPLER_SERVICE_TOKEN can read BRIDGE_AUTH_TOKEN from gemini-web-bridge/prd_worker"
 
       - name: Fetch secrets from Doppler
         id: fetch
@@ -172,7 +172,7 @@ jobs:
           # `|| true` is required: under `set -e` a failed command substitution
           # aborts the step on the spot, before the empty-value check below can
           # explain what happened. Capture the failure and report it instead.
-          bridge=$(doppler secrets get BRIDGE_SECRET \
+          bridge=$(doppler secrets get BRIDGE_AUTH_TOKEN \
                      --token "$DOPPLER_SERVICE_TOKEN" \
                      --project gemini-web-bridge --config prd_worker --plain) || true
           client=$(doppler secrets get CLIENT_API_KEY \
@@ -185,7 +185,7 @@ jobs:
             if ! doppler me --token "$DOPPLER_SERVICE_TOKEN" >/dev/null 2>&1; then
               echo "::error::DOPPLER_SERVICE_TOKEN is invalid or expired. Re-issue it in Doppler Dashboard -> Access -> Service Tokens, then: gh secret set DOPPLER_SERVICE_TOKEN"
             else
-              echo "::error::Doppler returned an empty value — check BRIDGE_SECRET / CLIENT_API_KEY exist in gemini-web-bridge/prd_worker"
+              echo "::error::Doppler returned an empty value — check BRIDGE_AUTH_TOKEN / CLIENT_API_KEY exist in gemini-web-bridge/prd_worker"
             fi
             exit 1
           fi
@@ -201,7 +201,7 @@ jobs:
           # in exchange for never materialising a live credential in run
           # metadata.
           echo "source=doppler" >> $GITHUB_OUTPUT
-          echo "✅ Verified BRIDGE_SECRET and CLIENT_API_KEY exist in gemini-web-bridge/prd_worker"
+          echo "✅ Verified BRIDGE_AUTH_TOKEN and CLIENT_API_KEY exist in gemini-web-bridge/prd_worker"
 
   # ─── Production Deploy ────────────────────────────────────────────
   # This is now the ONLY job that touches a worker, so this is the only
@@ -248,19 +248,19 @@ jobs:
       - name: Resolve worker secrets
         env:
           DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
-          GH_BRIDGE_TOKEN: ${{ secrets.BRIDGE_SECRET }}
+          GH_BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
           GH_CLIENT_TOKEN: ${{ secrets.CLIENT_API_KEY }}
         run: |
           set -euo pipefail
           if [ "${{ inputs.skip_doppler }}" = "true" ] || [ -z "$DOPPLER_SERVICE_TOKEN" ]; then
             echo "⚠️ Using GitHub Secrets (skip_doppler or no service token)"
-            [ -n "$GH_BRIDGE_TOKEN" ] || { echo "::error::BRIDGE_SECRET missing from GitHub Secrets"; exit 1; }
+            [ -n "$GH_BRIDGE_AUTH_TOKEN" ] || { echo "::error::BRIDGE_AUTH_TOKEN missing from GitHub Secrets"; exit 1; }
             [ -n "$GH_CLIENT_TOKEN" ] || { echo "::error::CLIENT_API_KEY missing from GitHub Secrets"; exit 1; }
-            bridge="$GH_BRIDGE_TOKEN"; client="$GH_CLIENT_TOKEN"
+            bridge="$GH_BRIDGE_AUTH_TOKEN"; client="$GH_CLIENT_TOKEN"
           else
             # `|| true` so a doppler failure is caught by the empty-value
             # check below rather than aborting the step under `set -e`.
-            bridge=$(doppler secrets get BRIDGE_SECRET --token "$DOPPLER_SERVICE_TOKEN" \
+            bridge=$(doppler secrets get BRIDGE_AUTH_TOKEN --token "$DOPPLER_SERVICE_TOKEN" \
                        --project gemini-web-bridge --config prd_worker --plain) || true
             client=$(doppler secrets get CLIENT_API_KEY --token "$DOPPLER_SERVICE_TOKEN" \
                        --project gemini-web-bridge --config prd_worker --plain) || true
@@ -272,7 +272,7 @@ jobs:
           echo "::add-mask::$bridge"
           echo "::add-mask::$client"
           {
-            echo "bridge_token=$bridge"
+            echo "bridge_auth_token=$bridge"
             echo "client_token=$client"
           } >> $GITHUB_ENV
 
@@ -281,10 +281,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          BRIDGE_SECRET: ${{ env.bridge_token }}
+          BRIDGE_AUTH_TOKEN: ${{ env.bridge_auth_token }}
           CLIENT_API_KEY: ${{ env.client_token }}
         run: |
-          echo "$BRIDGE_SECRET" | npx wrangler secret put BRIDGE_SECRET
+          echo "$BRIDGE_AUTH_TOKEN" | npx wrangler secret put BRIDGE_AUTH_TOKEN
           echo "$CLIENT_API_KEY" | npx wrangler secret put CLIENT_API_KEY
 
       - name: Deploy to production

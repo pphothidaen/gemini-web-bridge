@@ -27,7 +27,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
 
-  // No [vars] here on purpose. BRIDGE_SECRET / CLIENT_API_KEY must be
+  // No [vars] here on purpose. BRIDGE_AUTH_TOKEN / CLIENT_API_KEY must be
   // set with `wrangler secret put`; a token in a committed config file is a
   // leaked token (see cloudflare-worker/wrangler.staging.toml, which used to
   // ship a guessable "staging-token-change-me").

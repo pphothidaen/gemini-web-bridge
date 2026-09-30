@@ -48,7 +48,7 @@ const { GeminiBridgeDO } = vm.runInNewContext(
 );
 
 function createBridge() {
-  const b = new GeminiBridgeDO(makeCtx(), { CLIENT_API_KEY: 'secret-token-123', BRIDGE_SECRET: 'bridge-secret' });
+  const b = new GeminiBridgeDO(makeCtx(), { CLIENT_API_KEY: 'secret-token-123', BRIDGE_AUTH_TOKEN: 'bridge-secret' });
   b.currentTokens = { sessionReady: true };
   b.replaceModelCatalog({
     protocolVersion: 2,

@@ -40,7 +40,7 @@ const { GeminiBridgeDO } = vm.runInNewContext(
 function createTestDO(env = {}) {
   const bridge = new GeminiBridgeDO(makeCtx(), {
     CLIENT_API_KEY: 'client-bearer-secret-2026',
-    BRIDGE_SECRET: 'bridge-secret-token-2026',
+    BRIDGE_AUTH_TOKEN: 'bridge-secret-token-2026',
     ...env
   });
   bridge.currentTokens = { sessionReady: true };
@@ -423,7 +423,7 @@ test('RED TEAM: hostile horo_consult query is never echoed into error messages',
   assert.ok(!serialized.includes('<script>'), 'no raw HTML from the query may be reflected');
 });
 
-test('RED TEAM: horo_consult response object never contains CLIENT_API_KEY or BRIDGE_SECRET values', async () => {
+test('RED TEAM: horo_consult response object never contains CLIENT_API_KEY or BRIDGE_AUTH_TOKEN values', async () => {
   const doHub = createTestDO();
   doHub.activeSocket = { readyState: 1, send: () => {} };
   doHub.prepareScope = async (scope) => ({ scope });
@@ -447,7 +447,7 @@ test('RED TEAM: horo_consult response object never contains CLIENT_API_KEY or BR
   assert.equal(res.status, 200);
   const serialized = JSON.stringify(await res.json());
   assert.ok(!serialized.includes('client-bearer-secret-2026'), 'CLIENT_API_KEY value must never appear in the response');
-  assert.ok(!serialized.includes('bridge-secret-token-2026'), 'BRIDGE_SECRET value must never appear in the response');
+  assert.ok(!serialized.includes('bridge-secret-token-2026'), 'BRIDGE_AUTH_TOKEN value must never appear in the response');
 
   // Same assertion on the canonical artifact 404 surface
   doHub.env.ARTIFACT_KV = mockArtifactKv();

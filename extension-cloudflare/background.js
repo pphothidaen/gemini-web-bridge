@@ -23,7 +23,7 @@ import {
 
 const DEFAULT_WORKER_URL = "https://prod.gemini-web-bridge.workers.dev";
 // Injected by scripts/build-extension.py at build time — never commit real values.
-const DEFAULT_BRIDGE_SECRET = "__BRIDGE_SECRET__";
+const DEFAULT_BRIDGE_AUTH_TOKEN = "__BRIDGE_AUTH_TOKEN__";
 const SCOPE_SWITCH_TIMEOUT_MS = 45000;
 const INSTANCE_ID_STORAGE_KEY = "bridge_instance_id";
 
@@ -447,7 +447,7 @@ export class CentralTabCoordinator {
 export class BridgeSocketManager {
   constructor(options = {}) {
     this.coordinator = options.coordinator || null;
-    this.settings = options.settings || { workerUrl: DEFAULT_WORKER_URL, bridgeToken: DEFAULT_BRIDGE_SECRET, enforcementMode: "strict" };
+    this.settings = options.settings || { workerUrl: DEFAULT_WORKER_URL, bridgeToken: DEFAULT_BRIDGE_AUTH_TOKEN, enforcementMode: "strict" };
     this.tabsApi = options.tabsApi || (typeof chrome !== "undefined" && chrome.tabs ? chrome.tabs : null);
     this.WebSocketImpl = options.WebSocketImpl || (typeof WebSocket !== "undefined" ? WebSocket : null);
     this.storageApi = options.storageApi || (typeof chrome !== "undefined" && chrome.storage?.sync ? chrome.storage.sync : null);
@@ -1241,7 +1241,7 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onConnect) {
       chrome.storage.sync.get(["workerUrl", "bridgeToken", "enforcementMode"]).then((settings) => {
         manager.settings = {
           workerUrl: (settings.workerUrl || DEFAULT_WORKER_URL).trim(),
-          bridgeToken: (settings.bridgeToken && settings.bridgeToken.trim()) ? settings.bridgeToken.trim() : DEFAULT_BRIDGE_SECRET,
+          bridgeToken: (settings.bridgeToken && settings.bridgeToken.trim()) ? settings.bridgeToken.trim() : DEFAULT_BRIDGE_AUTH_TOKEN,
           enforcementMode: settings.enforcementMode === "permissive" ? "permissive" : "strict"
         };
         manager.connect();

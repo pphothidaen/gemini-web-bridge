@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 
 const WORKER_URL = process.env.WORKER_URL || 'https://prod.gemini-web-bridge.workers.dev';
 const CLIENT_API_KEY = process.env.CLIENT_API_KEY || '';
-const BRIDGE_SECRET = process.env.BRIDGE_SECRET || '';
+const BRIDGE_AUTH_TOKEN = process.env.BRIDGE_AUTH_TOKEN || '';
 const PROTOCOL_VERSION = 3;
 
 // Every test in this file hits the LIVE worker, and all but /health and the
@@ -35,7 +35,7 @@ const PROTOCOL_VERSION = 3;
 // reports as skipped with a reason, so the summary reflects what actually
 // ran. Set CLIENT_API_KEY (and WORKER_URL to point at the target) to exercise it —
 // the redteam-token-test job already proves both tokens against production.
-const skip = (CLIENT_API_KEY || BRIDGE_SECRET) ? false : 'No tokens set — live-server tests not exercised';
+const skip = (CLIENT_API_KEY || BRIDGE_AUTH_TOKEN) ? false : 'No tokens set — live-server tests not exercised';
 
 // A further, harder dependency, and the two remaining tests split apart here.
 //
@@ -156,7 +156,7 @@ test('GET / returns dashboard HTML', { skip }, async () => {
 
 test('GET /bridge/auth-check returns ok with valid token', { skip }, async () => {
   const res = await fetch(`${WORKER_URL}/bridge/auth-check`, {
-    headers: { 'x-bridge-token': BRIDGE_SECRET }
+    headers: { 'x-bridge-token': BRIDGE_AUTH_TOKEN }
   });
   const body = await res.json();
   assert.equal(res.status, 200);
@@ -221,7 +221,7 @@ test('WebSocket upgrade succeeds with valid subprotocol', { skip: skipUpgrade },
   // defect that stopped the extension's fallback path connecting at all.
   // Without it this test can never pass, for reasons unrelated to whether
   // the bridge works.
-  const token = BRIDGE_SECRET ? `?token=${encodeURIComponent(BRIDGE_SECRET)}` : (CLIENT_API_KEY ? `?token=${encodeURIComponent(CLIENT_API_KEY)}` : '');
+  const token = BRIDGE_AUTH_TOKEN ? `?token=${encodeURIComponent(BRIDGE_AUTH_TOKEN)}` : (CLIENT_API_KEY ? `?token=${encodeURIComponent(CLIENT_API_KEY)}` : '');
   const instanceId = crypto.randomUUID();
   const url = `${wsUrl}/bridge${token}&instanceId=${instanceId}`;
 

@@ -18,7 +18,7 @@ set -euo pipefail
 # ─── Configuration ────────────────────────────────────────────────────
 
 WORKER_URL="${1:-https://prod.gemini-web-bridge.workers.dev}"
-BRIDGE_SECRET="${BRIDGE_SECRET:-}"
+BRIDGE_AUTH_TOKEN="${BRIDGE_AUTH_TOKEN:-}"
 CLIENT_API_KEY="${CLIENT_API_KEY:-}"
 TIMEOUT=10
 WARN_LATENCY_MS=2000
@@ -102,14 +102,14 @@ check_basic_health() {
 check_auth() {
   log_section "Authentication Check"
   
-  if [[ -z "$BRIDGE_SECRET" ]]; then
-    log_warn "BRIDGE_SECRET not set — skipping auth checks"
+  if [[ -z "$BRIDGE_AUTH_TOKEN" ]]; then
+    log_warn "BRIDGE_AUTH_TOKEN not set — skipping auth checks"
     return
   fi
   
   local response
   response=$(curl -s -w "\n%{http_code}" --max-time "$TIMEOUT" \
-    -H "x-bridge-token: ${BRIDGE_SECRET}" \
+    -H "x-bridge-token: ${BRIDGE_AUTH_TOKEN}" \
     "${WORKER_URL}/bridge/auth-check" 2>/dev/null)
   
   local http_code

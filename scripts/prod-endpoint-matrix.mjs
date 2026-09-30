@@ -17,9 +17,9 @@ const key = (name) =>
   (env.match(new RegExp(`^${name}=(.*)$`, "m"))?.[1] ?? "").trim().replace(/^["']|["']$/g, "");
 
 const CLIENT_API_KEY = key("CLIENT_API_KEY") || key("CLIENT_API_TOKEN");
-const BRIDGE_SECRET = key("BRIDGE_SECRET") || key("BRIDGE_AUTH_TOKEN");
-if (!CLIENT_API_KEY || !BRIDGE_SECRET) {
-  console.error("Missing CLIENT_API_KEY or BRIDGE_SECRET in .env");
+const BRIDGE_AUTH_TOKEN = key("BRIDGE_AUTH_TOKEN") || key("BRIDGE_AUTH_TOKEN");
+if (!CLIENT_API_KEY || !BRIDGE_AUTH_TOKEN) {
+  console.error("Missing CLIENT_API_KEY or BRIDGE_AUTH_TOKEN in .env");
   process.exit(1);
 }
 
@@ -102,7 +102,7 @@ console.log("\n═══ AUTH ENFORCEMENT ═══");
   });
   record("POST /mcp rejects missing key", mcpNoKey.status === 401, `${mcpNoKey.status}`);
 
-  const ac = await req("/bridge/auth-check", { auth: false, headers: { "x-bridge-token": BRIDGE_SECRET } });
+  const ac = await req("/bridge/auth-check", { auth: false, headers: { "x-bridge-token": BRIDGE_AUTH_TOKEN } });
   record("GET /bridge/auth-check valid token",
     ac.status === 200 && ac.json?.ok === true, `${ac.status} ${JSON.stringify(ac.json)}`);
 
@@ -284,10 +284,10 @@ console.log("\n═══ BRIDGE WEBSOCKET + ADMIN ═══");
   const badTok = wsStatus(`${BASE}/bridge?token=wrong`);
   record("WS /bridge rejects bad token", badTok === "401", `HTTP ${badTok}`);
 
-  const badId = wsStatus(`${BASE}/bridge?token=${encodeURIComponent(BRIDGE_SECRET)}&instanceId=not-a-uuid`);
+  const badId = wsStatus(`${BASE}/bridge?token=${encodeURIComponent(BRIDGE_AUTH_TOKEN)}&instanceId=not-a-uuid`);
   record("WS /bridge rejects bad instanceId", badId === "401", `HTTP ${badId}`);
 
-  const noId = wsStatus(`${BASE}/bridge?token=${encodeURIComponent(BRIDGE_SECRET)}`);
+  const noId = wsStatus(`${BASE}/bridge?token=${encodeURIComponent(BRIDGE_AUTH_TOKEN)}`);
   record("WS /bridge rejects missing instanceId", noId === "401", `HTTP ${noId}`);
 
   const resetBad = await rpc("/bridge/reset?token=wrong", null, { auth: false });
@@ -297,7 +297,7 @@ console.log("\n═══ BRIDGE WEBSOCKET + ADMIN ═══");
   // /bridge/reset is NOT on the public-path allowlist, so a GET with only
   // ?token= is stopped by the auth gate with 401 before route matching runs.
   // It never reaches the 404 — that ordering is the intended behaviour.
-  const resetGet = await req(`/bridge/reset?token=${encodeURIComponent(BRIDGE_SECRET)}`, { auth: false });
+  const resetGet = await req(`/bridge/reset?token=${encodeURIComponent(BRIDGE_AUTH_TOKEN)}`, { auth: false });
   record("GET /bridge/reset is auth-gated before routing",
     resetGet.status === 401, `${resetGet.status} (auth gate precedes route match)`);
 }

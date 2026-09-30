@@ -109,10 +109,10 @@ function loadDO() {
 // ─── Harness ────────────────────────────────────────────────────────────────
 
 export function createMockWorker(options = {}) {
-  const BRIDGE_SECRET = options.BRIDGE_SECRET ?? 'mock-bridge-secret-0123456789abcdef';
+  const BRIDGE_AUTH_TOKEN = options.BRIDGE_AUTH_TOKEN ?? 'mock-bridge-secret-0123456789abcdef';
   const CLIENT_API_KEY = options.CLIENT_API_KEY ?? 'mock-client-key-0123456789abcdef';
   const GeminiBridgeDO = loadDO();
-  const bridge = new GeminiBridgeDO(makeCtx(), { BRIDGE_SECRET, CLIENT_API_KEY });
+  const bridge = new GeminiBridgeDO(makeCtx(), { BRIDGE_AUTH_TOKEN, CLIENT_API_KEY });
 
   let delayMs = options.delayMs ?? Number(process.env.TEST_MOCK_DELAY_MS ?? 0);
 
@@ -144,7 +144,7 @@ export function createMockWorker(options = {}) {
     upgradeWebSocket,
     setDelay: (ms) => { delayMs = ms; },
     getDelay: () => delayMs,
-    BRIDGE_SECRET,
+    BRIDGE_AUTH_TOKEN,
     CLIENT_API_KEY,
     dispose: async () => {},
   };
@@ -168,7 +168,7 @@ export async function connectFakeExtension(worker, {
 } = {}) {
   const id = instanceId ?? randomUUID();
   const upgrade = await worker.upgradeWebSocket(
-    `/bridge?token=${encodeURIComponent(worker.BRIDGE_SECRET)}&client=background_sw&instanceId=${id}`
+    `/bridge?token=${encodeURIComponent(worker.BRIDGE_AUTH_TOKEN)}&client=background_sw&instanceId=${id}`
   );
   if (upgrade.status !== 101 || !upgrade.server) {
     throw new Error(`fake extension upgrade failed: HTTP ${upgrade.status}`);

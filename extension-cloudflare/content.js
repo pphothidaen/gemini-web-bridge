@@ -11,10 +11,10 @@
     ? globalThis.GeminiBridgeSettings
     : {
         DEFAULT_WORKER_URL: "https://prod.gemini-web-bridge.workers.dev",
-        DEFAULT_BRIDGE_SECRET: "__BRIDGE_SECRET__",
+        DEFAULT_BRIDGE_AUTH_TOKEN: "__BRIDGE_AUTH_TOKEN__",
         resolveSettings: (s = {}) => ({
           workerUrl: s.workerUrl || "https://prod.gemini-web-bridge.workers.dev",
-          bridgeToken: s.bridgeToken || "__BRIDGE_SECRET__",
+          bridgeToken: s.bridgeToken || "__BRIDGE_AUTH_TOKEN__",
           rawBridgeToken: s.bridgeToken || "",
           enforcementMode: s.enforcementMode === "permissive" ? "permissive" : "strict",
           isDefaultToken: !s.bridgeToken
@@ -2260,7 +2260,7 @@
       if (changes.bridgeToken) {
         resolvedSettings.bridgeToken = (changes.bridgeToken.newValue && changes.bridgeToken.newValue.trim())
           ? changes.bridgeToken.newValue.trim()
-          : Settings.DEFAULT_BRIDGE_SECRET;
+          : Settings.DEFAULT_BRIDGE_AUTH_TOKEN;
         resolvedSettings.rawBridgeToken = changes.bridgeToken.newValue || "";
         authFailed = false;
         needsReconnect = true;

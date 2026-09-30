@@ -57,7 +57,7 @@ const { GeminiBridgeDO } = vm.runInNewContext(
 // A DO with no extension attached: isExtensionReady() is false, which is
 // exactly the state in which the old ordering produced a 503 after 12s.
 const disconnectedBridge = () =>
-  new GeminiBridgeDO(makeCtx(), { CLIENT_API_KEY: 'client-secret', BRIDGE_SECRET: 'bridge-secret' });
+  new GeminiBridgeDO(makeCtx(), { CLIENT_API_KEY: 'client-secret', BRIDGE_AUTH_TOKEN: 'bridge-secret' });
 
 const post = (b, body) =>
   b.fetch(new Request('https://test/v1/chat/completions', {

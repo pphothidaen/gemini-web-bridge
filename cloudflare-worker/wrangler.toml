@@ -14,7 +14,7 @@ compatibility_flags = ["nodejs_compat"]
 # workers_dev = true is what publishes it; there is no custom route.
 workers_dev = true
 
-# Configure BRIDGE_SECRET and CLIENT_API_KEY with wrangler secret put.
+# Configure BRIDGE_AUTH_TOKEN and CLIENT_API_KEY with wrangler secret put.
 
 # Gitleaks: allow .env to exist locally but NEVER commit it (see .gitignore)
 # Doppler secrets are downloaded to .env for local dev only.

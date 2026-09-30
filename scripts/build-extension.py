@@ -3,7 +3,7 @@
 build-extension.py — Build extension with secrets injected at build time.
 
 Replaces placeholders in source files with secrets from Doppler:
-  __BRIDGE_SECRET__  -> from Doppler BRIDGE_SECRET
+  __BRIDGE_AUTH_TOKEN__  -> from Doppler BRIDGE_AUTH_TOKEN
   __CLIENT_API_KEY__   -> from Doppler CLIENT_API_KEY
   __WORKER_URL__         -> from Doppler WORKER_URL (optional)
   __MCP_ENDPOINT__       -> from Doppler MCP_ENDPOINT (optional)
@@ -53,7 +53,7 @@ RELEASE_DIR = DIST_DIR
 STAMP_NAME = "BUILD.json"
 
 PLACEHOLDER_PATTERNS = {
-    "__BRIDGE_SECRET__": "BRIDGE_SECRET",
+    "__BRIDGE_AUTH_TOKEN__": "BRIDGE_AUTH_TOKEN",
     "__CLIENT_API_KEY__": "CLIENT_API_KEY",
     "__WORKER_URL__": "WORKER_URL",
     "__MCP_ENDPOINT__": "MCP_ENDPOINT",

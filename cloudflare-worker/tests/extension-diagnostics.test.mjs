@@ -22,7 +22,7 @@ test('shared settings resolver handles defaults, empty tokens, and enforcement m
   // Empty / undefined settings
   const emptyRes = Settings.resolveSettings({});
   assert.equal(emptyRes.workerUrl, Settings.DEFAULT_WORKER_URL);
-  assert.equal(emptyRes.bridgeToken, Settings.DEFAULT_BRIDGE_SECRET);
+  assert.equal(emptyRes.bridgeToken, Settings.DEFAULT_BRIDGE_AUTH_TOKEN);
   assert.equal(emptyRes.rawBridgeToken, '');
   assert.equal(emptyRes.isDefaultToken, true);
   assert.equal(emptyRes.enforcementMode, 'strict');

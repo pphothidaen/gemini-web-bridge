@@ -38,7 +38,7 @@ const { GeminiBridgeDO } = vm.runInNewContext(
 const NOTEBOOK_ID = 'b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0';
 
 function createBridge() {
-  const b = new GeminiBridgeDO(makeCtx(), { CLIENT_API_KEY: 'secret-token-123', BRIDGE_SECRET: 'bridge-secret' });
+  const b = new GeminiBridgeDO(makeCtx(), { CLIENT_API_KEY: 'secret-token-123', BRIDGE_AUTH_TOKEN: 'bridge-secret' });
   b.currentTokens = { sessionReady: true };
   b.lastNotebookScope = `notebook:${NOTEBOOK_ID}`;
   return b;

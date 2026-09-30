@@ -6,7 +6,7 @@
 // Two rules are enforced here:
 //
 //   1. The extension NEVER ships a literal secret. Values must be the build-time
-//      placeholders `__BRIDGE_SECRET__` / `__CLIENT_API_KEY__` that
+//      placeholders `__BRIDGE_AUTH_TOKEN__` / `__CLIENT_API_KEY__` that
 //      scripts/build-extension.py substitutes from Doppler/env.
 //   2. No literal `hermes-*` / `gemini-bridge-*` value may appear ANYWHERE in
 //      the repo — including inside committed .zip archives, which is how both
@@ -135,9 +135,9 @@ test('repo: no build artifacts are tracked', () => {
 test('extension: default secret/token constants must be build-time placeholders', () => {
   const offenders = [];
   for (const { name, text } of extSources) {
-    for (const match of text.matchAll(/(DEFAULT_BRIDGE_SECRET|DEFAULT_CLIENT_API_KEY)\s*[:=]\s*["']([^"']*)["']/g)) {
+    for (const match of text.matchAll(/(DEFAULT_BRIDGE_AUTH_TOKEN|DEFAULT_CLIENT_API_KEY)\s*[:=]\s*["']([^"']*)["']/g)) {
       const [, constant, value] = match;
-      if (value !== `__${constant === 'DEFAULT_BRIDGE_SECRET' ? 'BRIDGE_SECRET' : 'CLIENT_API_KEY'}__`) {
+      if (value !== `__${constant === 'DEFAULT_BRIDGE_AUTH_TOKEN' ? 'BRIDGE_AUTH_TOKEN' : 'CLIENT_API_KEY'}__`) {
         offenders.push(`${name}: ${constant} = "${value}"`);
       }
     }
@@ -147,7 +147,7 @@ test('extension: default secret/token constants must be build-time placeholders'
 
 test('extension: the placeholder substitution contract still exists in the build script', () => {
   const build = fs.readFileSync(new URL('../../scripts/build-extension.py', import.meta.url), 'utf8');
-  assert.ok(build.includes('__BRIDGE_SECRET__'), 'build script must substitute __BRIDGE_SECRET__');
+  assert.ok(build.includes('__BRIDGE_AUTH_TOKEN__'), 'build script must substitute __BRIDGE_AUTH_TOKEN__');
   assert.ok(build.includes('__CLIENT_API_KEY__'), 'build script must substitute __CLIENT_API_KEY__');
 });
 
@@ -167,7 +167,7 @@ test('worker config files: no secrets in wrangler toml files', () => {
     const lines = text
       .split('\n')
       .map((l) => l.trim())
-      .filter((l) => /^(BRIDGE_SECRET|CLIENT_API_KEY|GEMINI_API_KEY|CLOUDFLARE_API_TOKEN)\s*[:=]/.test(l));
+      .filter((l) => /^(BRIDGE_AUTH_TOKEN|CLIENT_API_KEY|GEMINI_API_KEY|CLOUDFLARE_API_TOKEN)\s*[:=]/.test(l));
     assert.deepEqual(lines, [], `${name} must not assign secrets as plain vars:\n${lines.join('\n')}`);
   }
 });

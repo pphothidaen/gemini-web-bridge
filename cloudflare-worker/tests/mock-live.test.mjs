@@ -26,7 +26,7 @@ test('MOCK: WebSocket upgrade succeeds against in-process worker', async (t) => 
   const id = uuid();
 
   const res = await worker.upgradeWebSocket(
-    '/bridge?token=' + encodeURIComponent(worker.BRIDGE_SECRET) + '&client=background_sw&instanceId=' + id
+    '/bridge?token=' + encodeURIComponent(worker.BRIDGE_AUTH_TOKEN) + '&client=background_sw&instanceId=' + id
   );
   assert.equal(res.status, 101, 'upgrade must return 101');
   assert.ok(res.server, 'DO must record a server-side socket');
@@ -45,7 +45,7 @@ test('MOCK: upgrade rejects a wrong bridge token', async (t) => {
 
 test('MOCK TS-005: same instanceId reconnect is accepted (not 409)', async (t) => {
   const worker = createMockWorker();
-  const tok = encodeURIComponent(worker.BRIDGE_SECRET);
+  const tok = encodeURIComponent(worker.BRIDGE_AUTH_TOKEN);
   const id = uuid();
 
   const first = await worker.upgradeWebSocket(`/bridge?token=${tok}&client=background_sw&instanceId=${id}`);
@@ -59,7 +59,7 @@ test('MOCK TS-005: same instanceId reconnect is accepted (not 409)', async (t) =
 
 test('MOCK TS-007/TS-012: 409 decision matrix', async (t) => {
   const worker = createMockWorker();
-  const tok = encodeURIComponent(worker.BRIDGE_SECRET);
+  const tok = encodeURIComponent(worker.BRIDGE_AUTH_TOKEN);
 
   // Row 1: no active connection -> accepted.
   const a = await worker.upgradeWebSocket(`/bridge?token=${tok}&client=background_sw&instanceId=${uuid()}`);

@@ -3,7 +3,7 @@
 
 Packages dist/extension/ — the output of scripts/build-extension.py, with the
 real secrets substituted — and NEVER extension-cloudflare/ (the committed
-source, which still contains the __BRIDGE_SECRET__ / __CLIENT_API_KEY__
+source, which still contains the __BRIDGE_AUTH_TOKEN__ / __CLIENT_API_KEY__
 placeholders).
 
 Packaging the source dir produces a zip that installs cleanly and then fails
@@ -22,7 +22,7 @@ DIST_DIR = REPO_ROOT / "dist" / "extension"
 RELEASE_DIR = REPO_ROOT / "release"
 
 PLACEHOLDERS = (
-    "__BRIDGE_SECRET__",
+    "__BRIDGE_AUTH_TOKEN__",
     "__CLIENT_API_KEY__",
     "__WORKER_URL__",
     "__MCP_ENDPOINT__",

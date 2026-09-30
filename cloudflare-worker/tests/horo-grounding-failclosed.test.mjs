@@ -55,7 +55,7 @@ const { GeminiBridgeDO } = vm.runInNewContext(
 function createGroundingBridge() {
   const b = new GeminiBridgeDO(makeCtx(), {
     CLIENT_API_KEY: 'secret-token-123',
-    BRIDGE_SECRET: 'bridge-secret',
+    BRIDGE_AUTH_TOKEN: 'bridge-secret',
     GEMINI_API_KEY: 'gcp-test-key'
   });
   b.currentScope = 'app';
@@ -165,7 +165,7 @@ test('a notebook attach failure fails closed and never reaches the GCP fallback'
 test('a grounding-required empty response without GEMINI_API_KEY errors the same way', async () => {
   const b = new GeminiBridgeDO(makeCtx(), {
     CLIENT_API_KEY: 'secret-token-123',
-    BRIDGE_SECRET: 'bridge-secret'
+    BRIDGE_AUTH_TOKEN: 'bridge-secret'
   });
   b.currentScope = 'app';
   b.waitForExtension = async () => {};

@@ -1,13 +1,13 @@
 /**
  * Phase 5 WebSocket 409 Conflict Test — TS-007, TS-012 Row 4
  * Tests that a new connection from a DIFFERENT healthy instance gets HTTP 409.
- * Uses Node.js native WebSocket (v26+) with Doppler-injected BRIDGE_SECRET.
+ * Uses Node.js native WebSocket (v26+) with Doppler-injected BRIDGE_AUTH_TOKEN.
  */
 const WS_URL = (process.env.WORKER_URL || 'https://prod.gemini-web-bridge.workers.dev').replace('https://', 'wss://');
-const TOKEN = process.env.BRIDGE_SECRET;
+const TOKEN = process.env.BRIDGE_AUTH_TOKEN;
 
 if (!TOKEN) {
-  console.error('BRIDGE_SECRET not set');
+  console.error('BRIDGE_AUTH_TOKEN not set');
   process.exit(1);
 }
 
