@@ -352,14 +352,14 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           VERSION=${{ steps.bump-version.outputs.version }}
-          echo "=== Release zip: gemini-bridge-v${VERSION}.zip ==="
-          ls -lh release/gemini-bridge-v${VERSION}.zip
+          echo "=== Release zip: extension-${VERSION}.zip ==="
+          ls -lh dist/extension-${VERSION}.zip
           echo ""
           echo "=== Zip contents ==="
-          unzip -l release/gemini-bridge-v${VERSION}.zip
+          unzip -l dist/extension-${VERSION}.zip
           echo ""
           echo "=== Verify manifest in zip ==="
-          unzip -p release/gemini-bridge-v${VERSION}.zip manifest.json | python3 -c "
+          unzip -p dist/extension-${VERSION}.zip manifest.json | python3 -c "
           import json, sys
           m = json.load(sys.stdin)
           assert m['version'] == '${VERSION}', f'Version mismatch: {m[\"version\"]} != ${VERSION}'
@@ -376,7 +376,7 @@ jobs:
           # version never changed between runs, so successive builds reused
           # one name and overwrote each other's download slot.
           name: gemini-bridge-extension-v${{ steps.bump-version.outputs.version }}-run${{ github.run_number }}
-          path: release/gemini-bridge-v*.zip
+          path: dist/extension-*.zip
           if-no-files-found: error
           retention-days: 90
 
@@ -386,7 +386,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** ${{ steps.bump-version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "**Run:** #${{ github.run_number }}  •  **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          ls -lh release/ >> $GITHUB_STEP_SUMMARY
+          ls -lh dist/extension-*.zip >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ⚠️ Important" >> $GITHUB_STEP_SUMMARY
           echo "Download from: **Actions → Artifacts → gemini-bridge-extension-v${{ steps.bump-version.outputs.version }}-run${{ github.run_number }}**" >> $GITHUB_STEP_SUMMARY
