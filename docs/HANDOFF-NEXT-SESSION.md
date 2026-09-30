@@ -1,5 +1,13 @@
 # Session Handoff — start here
 
+> **⚠️ SUPERSEDED for the 2026-09-30 session.** The latest state is
+> [`SESSION_HANDOFF_2026-09-30.md`](../SESSION_HANDOFF_2026-09-30.md).
+> Everything below predates the `BRIDGE_SECRET` → `BRIDGE_AUTH_TOKEN` rename
+> and the credential rotation: the worker is now **v4.7.21**, the bridge token
+> is named `BRIDGE_AUTH_TOKEN` everywhere, and the canonical host is
+> `https://prod.gemini-web-bridge.workers.dev`. The version and test counts on
+> this page are out of date. Kept for the KAN-182…190 history it records.
+
 > **Written:** 2026-09-29, at the close of KAN-182
 > **Updated:** 2026-09-29 21:55 +07 — after KAN-190…199 (see §9, §12)
 > **Branch:** `main` · **HEAD:** see `git log -1` · working tree **clean**
