@@ -125,7 +125,7 @@ jobs:
         # holds it, so it is safe to run from CI.
         env:
           CLIENT_API_KEY: ${{ secrets.CLIENT_API_KEY }}
-          BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
+          BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
         run: |
           set -o pipefail
           node --test 'tests/**/*.test.mjs' 2>&1 | tee test-results.txt
@@ -307,7 +307,7 @@ jobs:
 
       - name: Build extension (inject secrets + version bump)
         env:
-          BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
+          BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
           CLIENT_API_KEY: ${{ secrets.CLIENT_API_KEY }}
           WORKER_URL: ${{ secrets.WORKER_URL || 'https://prod.gemini-web-bridge.workers.dev' }}
           MCP_ENDPOINT: ${{ secrets.MCP_ENDPOINT || 'https://prod.gemini-web-bridge.workers.dev/mcp' }}
@@ -588,8 +588,8 @@ jobs:
         env:
           OLD_CLIENT_TOKEN: ${{ secrets.OLD_CLIENT_API_KEY }}
           CURRENT_CLIENT_TOKEN: ${{ secrets.CLIENT_API_KEY }}
-          OLD_BRIDGE_TOKEN: ${{ secrets.OLD_BRIDGE_SECRET }}
-          CURRENT_BRIDGE_TOKEN: ${{ secrets.BRIDGE_SECRET }}
+          OLD_BRIDGE_AUTH_TOKEN: ${{ secrets.OLD_BRIDGE_AUTH_TOKEN }}
+          CURRENT_BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
           BASE_URL: ${{ vars.PROD_BASE_URL || 'https://prod.gemini-web-bridge.workers.dev' }}
         run: |
           echo "## 🔴 Redteam — Token Validation" >> $GITHUB_STEP_SUMMARY
@@ -675,12 +675,12 @@ jobs:
 
           # Live credentials must work.
           run_check assert_valid "Current CLIENT_API_KEY"  "$BASE_URL/v1/models"         "Authorization: Bearer $CURRENT_CLIENT_TOKEN"
-          run_check assert_valid "Current BRIDGE_SECRET" "$BASE_URL/bridge/auth-check" "x-bridge-token: $CURRENT_BRIDGE_TOKEN"
+          run_check assert_valid "Current BRIDGE_AUTH_TOKEN" "$BASE_URL/bridge/auth-check" "x-bridge-token: $CURRENT_BRIDGE_AUTH_TOKEN"
 
           # Retired credentials must NOT work. These are the assertions that
           # went red on 3e46a0f: both tokens were still live in production.
           run_check assert_revoked "Old CLIENT_API_KEY"  "$BASE_URL/v1/models"         "Authorization: Bearer $OLD_CLIENT_TOKEN"
-          run_check assert_revoked "Old BRIDGE_SECRET" "$BASE_URL/bridge/auth-check" "x-bridge-token: $OLD_BRIDGE_TOKEN"
+          run_check assert_revoked "Old BRIDGE_AUTH_TOKEN" "$BASE_URL/bridge/auth-check" "x-bridge-token: $OLD_BRIDGE_AUTH_TOKEN"
 
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "$TRANSIENT" = "1" ]; then

@@ -7,7 +7,7 @@
 - hooks ใน repo นี้บังคับอยู่แล้ว (`core.hooksPath=.githooks`):
   - `commit-msg` ตรวจรูปแบบ `KAN-<id>:` ในบรรทัดแรก
   - `pre-push` ถาม Jira ว่า ticket ที่ cite มีอยู่จริงไหม (fail-closed เมื่อ Jira ตอบว่าไม่มี)
-- ห้าม print/log BRIDGE_SECRET, CLIENT_API_KEY, SNlM0e (G1 Zero-Token-Leak)
+- ห้าม print/log BRIDGE_AUTH_TOKEN, CLIENT_API_KEY, SNlM0e (G1 Zero-Token-Leak)
   - อย่า commit secret ลง `.clinerules/` — ไฟล์นี้อยู่ใน git
   - ดึง secret สดด้วย `doppler secrets get <NAME> --project gemini-web-bridge --config prd`
 - ห้าม TODO/FIXME/HACK/XXX/BLOCKER ใน cloudflare-worker/src/ และ extension-cloudflare/ (G4.1.1)

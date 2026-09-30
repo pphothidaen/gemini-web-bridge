@@ -149,7 +149,7 @@ if (( ${#OFFENDERS[@]} > 0 )); then
     echo "   $o"
   done
   echo ""
-  echo "👉 Never commit a real BRIDGE_SECRET / CLIENT_API_KEY."
+  echo "👉 Never commit a real BRIDGE_AUTH_TOKEN / CLIENT_API_KEY."
   echo "   Use the build-time placeholders __BRIDGE_AUTH_TOKEN__ /"
   echo "   __CLIENT_API_KEY__, substituted by scripts/build-extension.py."
   echo "   If this is a false positive, add an entry to the allowlist in"
