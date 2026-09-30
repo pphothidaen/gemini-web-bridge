@@ -43,22 +43,37 @@ $key
 "*) return 0 ;;
   esac
 
-  local out
+  local out rc
   out=$(twg jira workitem get "$key" 2>&1)
+  rc=$?
 
-  # Success first: a fetched ticket's OWN body may legitimately contain the
-  # phrase "does not exist" (KAN-163's closure comment did, and the naive
-  # substring match below rejected a real push over it). twg's success and
-  # failure banners are mutually exclusive, so gating on "✗ Failed" before
-  # trusting the 404 text is what keeps the oracle honest.
-  if [[ "$out" == *"✓ Completed"* ]]; then
+  # Exit code is the verdict, and the body is only evidence.
+  #
+  # This previously keyed SUCCESS on the literal banner "✓ Completed". The twg
+  # build actually installed emits a raw JSON array instead, so that string was
+  # never present: every lookup fell through to the fail-open branch, and the
+  # guard silently validated nothing at all. Verified on this machine — even
+  # KAN-219, a real Done ticket, came back unverifiable. The test fixtures
+  # agreed because they emitted the banner the hook wanted rather than the
+  # output the CLI produces, which is the KAN-192 shape: a test constructed to
+  # satisfy the assertion. Measured on the real CLI: exit 0 for a ticket that
+  # exists, exit 1 for a 404, exit 2 for an unreachable oracle.
+  #
+  # Exit 0 alone is NOT sufficient — it is trusted only when the payload
+  # actually carries the key back. A ticket's own description may legitimately
+  # contain the phrase "does not exist" (KAN-163's closure comment did), so the
+  # 404 wording inside a successful body must never be read as a failure.
+  if [[ "$rc" -eq 0 ]] && printf '%s' "$out" | grep -qE "\"key\"[[:space:]]*:[[:space:]]*\"$key\""; then
     CACHE="${CACHE}
 ${key}"
     if [[ -z "$VALIDATED" ]]; then VALIDATED="$key"; else VALIDATED="$VALIDATED, $key"; fi
     return 0
   fi
 
-  if [[ "$out" == *"✗ Failed"* && "$out" == *"does not exist"* ]]; then
+  # Nonexistent: a failed lookup whose body says so. Both the JSON shape
+  # (statusCode 404) and the plain-text banner shape are accepted, because the
+  # two twg builds in the wild disagree on formatting but not on the verdict.
+  if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qE '"statusCode"[[:space:]]*:[[:space:]]*404|does not exist'; then
     BLOCKED="${BLOCKED}${key}
 "
     CACHE="${CACHE}

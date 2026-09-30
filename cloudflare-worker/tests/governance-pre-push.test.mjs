@@ -56,8 +56,14 @@ if [[ "$4" == "KAN-640" ]]; then
   # Regression fixture: a SUCCESSFUL fetch whose body contains the phrase
   # "does not exist" — the real KAN-163 closure comment did, and the hook's
   # original naive substring match rejected a real push over it.
+  #
+  # KAN-221: the quotes here were escaped as \" inside a JS template literal,
+  # which reached bash unescaped and printed [{key:KAN-640,...}] — not JSON at
+  # all. Nothing noticed, because the hook used to decide success from a banner
+  # and never read the payload. Single-quoted now so the body is the valid JSON
+  # it was always meant to be.
   echo "✓ Completed jira.workitem.get."
-  echo "[{\"key\":\"KAN-640\",\"comment\":\"rejects the push if the ticket does not exist, closing the failure mode\"}]"
+  echo '[{"key":"KAN-640","comment":"rejects the push if the ticket does not exist, closing the failure mode"}]'
   exit 0
 fi
 echo "✓ Completed jira.workitem.get."
@@ -191,6 +197,116 @@ test('push with no ticket keys validates nothing and calls Jira zero times', () 
   assert.equal(r.status, 0, 'hook must allow: ' + r.stderr);
   assert.match(r.stdout, /no ticket keys to validate/);
   assert.ok(!fs.existsSync(log) || fs.readFileSync(log, 'utf8').trim() === '', 'no Jira calls without keys');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ─── KAN-221: the real twg emits JSON, not a banner ─────────────────────────
+//
+// The tests above all pass, and for years they gave false assurance. Their fake
+// twg emits "✓ Completed jira.workitem.get." — but the twg actually installed
+// on this machine emits a raw JSON array and exits 0. The hook keyed its success
+// decision on the banner string, so on the real CLI every lookup fell through to
+// the fail-open branch and printed "could not verify". Verified directly: even
+// KAN-219, a real Done ticket, was reported as unverifiable. The guard that
+// exists to block predicted keys never once blocked anything on this machine.
+//
+// These fixtures reproduce the real output shape verbatim.
+function writeRealisticTwg(dir) {
+  const log = path.join(dir, 'twg-calls.log');
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(
+    path.join(bin, 'twg'),
+    `#!/usr/bin/env bash
+echo "$4" >> "${log}"
+# Mirrors the real twg build: JSON to stdout, exit code carries the verdict,
+# and NO "✓ Completed" banner anywhere.
+if [[ "$4" == "KAN-404" ]]; then
+  echo '{"ok": false, "error": {"code": "TWG_TOOL_EXECUTION_FAILED", "kind": "twg_tool_execution_failed", "message": "Issue does not exist or you do not have permission to see it.", "statusCode": 404}}'
+  exit 1
+fi
+if [[ "$4" == "KAN-999" ]]; then
+  echo "Error: network unreachable"
+  exit 2
+fi
+if [[ "$4" == "KAN-641" ]]; then
+  # Exits 0, but the payload is NOT a ticket: no "key" field, and it happens to
+  # mention the 404 phrase. The exit-code guard on the block branch is the only
+  # thing stopping this being read as a nonexistent ticket. Added because
+  # mutation testing KAN-221 showed that removing that guard changed no test
+  # result at all — the branch had no coverage.
+  echo '{"ok": true, "note": "ticket does not exist in the local cache"}'
+  exit 0
+fi
+echo '[{"key": "'"$4"'", "fields": {"summary": "a real ticket"}}]'
+exit 0
+`
+  );
+  fs.chmodSync(path.join(bin, 'twg'), 0o755);
+  return { bin, log };
+}
+
+test('KAN-221: a real ticket validates against the real JSON-emitting twg', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-guard-'));
+  const { bin } = writeRealisticTwg(dir);
+  const { repo, shas } = makeRepo(dir, ['KAN-170: cites a ticket that does exist']);
+  const r = runHook(repo, {
+    bin,
+    line: `refs/heads/main ${shas[0]} refs/heads/main 0000000000000000000000000000000000000000`,
+  });
+  assert.equal(r.status, 0, 'hook must allow: ' + r.stderr);
+  // Before the fix this said "could not verify" and listed no validated ticket.
+  assert.match(
+    r.stdout,
+    /validated against Jira/,
+    'the hook must recognise the real twg success shape, not fall through to fail-open'
+  );
+  assert.match(r.stdout, /KAN-170/);
+  assert.doesNotMatch(r.stderr, /could not verify/, 'no fall-through to the unverifiable branch');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('KAN-221: a nonexistent ticket is blocked against the real JSON-emitting twg', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-guard-'));
+  const { bin } = writeRealisticTwg(dir);
+  const { repo, shas } = makeRepo(dir, ['KAN-170: tip cites KAN-404']);
+  const r = runHook(repo, {
+    bin,
+    line: `refs/heads/main ${shas[0]} refs/heads/main 0000000000000000000000000000000000000000`,
+  });
+  assert.equal(r.status, 1, 'the guard must actually block a predicted key: ' + r.stdout + r.stderr);
+  assert.match(r.stderr, /KAN-404/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('KAN-221: unreachable oracle still fails OPEN against the real twg', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-guard-'));
+  const { bin } = writeRealisticTwg(dir);
+  const { repo, shas } = makeRepo(dir, ['KAN-999: oracle unreachable']);
+  const r = runHook(repo, {
+    bin,
+    line: `refs/heads/main ${shas[0]} refs/heads/main 0000000000000000000000000000000000000000`,
+  });
+  assert.equal(r.status, 0, 'an unavailable oracle must not block an incident push: ' + r.stderr);
+  assert.match(r.stderr, /could not verify KAN-999/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('KAN-221: exit 0 with no ticket payload fails OPEN even when the body mentions "does not exist"', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-guard-'));
+  const { bin } = writeRealisticTwg(dir);
+  const { repo, shas } = makeRepo(dir, ['KAN-641: success exit but not a ticket payload']);
+  const r = runHook(repo, {
+    bin,
+    line: `refs/heads/main ${shas[0]} refs/heads/main 0000000000000000000000000000000000000000`,
+  });
+  assert.equal(
+    r.status,
+    0,
+    'the 404 phrase alone must not block when twg exited 0: ' + r.stdout + r.stderr
+  );
+  assert.doesNotMatch(r.stderr, /do not exist in Jira/);
+  assert.match(r.stderr, /could not verify KAN-641/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
