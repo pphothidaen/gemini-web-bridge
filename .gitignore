@@ -35,3 +35,11 @@ scripts/chrome-dev-shortcut.app/
 
 # Workspace MCP config contains a Bearer secret — never commit
 .zcode/config.json
+
+# Built extension archives — the leak vector in docs/SECURITY_TOKEN_ROTATION.md.
+# scripts/zip-extension.py writes gemini-bridge-v<version>.zip here with the
+# real token substituted into options.js/background.js/settings.js. A tracked
+# zip made both live tokens downloadable from the public repo front page, and
+# *.zip above did not cover it because Finder-zipped archives landed at the
+# repo ROOT, not here. Ignore the whole directory.
+/release/
