@@ -1,0 +1,18 @@
+{
+  "extension": {
+    "source": "extension-cloudflare",
+    "unpacked": "dist/extension",
+    "build_stamp": "dist/extension/BUILD.json",
+    "zip_pattern": "dist/extension-{version}.zip",
+    "notes": [
+      "Paths are relative to the repository root so they survive a move and",
+      "never bake a developer home directory into a script, a log, or a doc.",
+      "'unpacked' is the single directory Chrome's \"Load unpacked\" must point",
+      "at. It is the build output, NOT extension-cloudflare/: the source tree",
+      "still holds the __BRIDGE_AUTH_TOKEN__ / __CLIENT_API_KEY__ placeholders",
+      "and a browser cannot connect with those.",
+      "Both scripts/build-extension.py and scripts/zip-extension.py resolve",
+      "these, so there is exactly one definition. Change it here."
+    ]
+  }
+}

@@ -46,8 +46,27 @@ function verifyBody() {
 
 test('every build artifact lives under one root', () => {
   // Two output roots is how the two copies drifted apart in the first place.
-  assert.match(buildScript, /DIST_DIR\s*=\s*REPO_ROOT\s*\/\s*"dist"/);
-  assert.match(buildScript, /DEFAULT_OUT_DIR\s*=\s*DIST_DIR\s*\/\s*"extension"/);
+  // The literals moved into extension.config.json so the path has ONE
+  // definition shared with zip-extension.py. What is asserted here is the
+  // invariant, not the expression that happens to encode it:
+  //   - the unpacked build is dist/extension
+  //   - it is derived from the configured relative path, not hardcoded
+  //   - the packaged zip lives under dist/, not in a sibling release/
+  const cfg = JSON.parse(
+    fs.readFileSync(path.join(REPO, 'extension.config.json'), 'utf8'),
+  ).extension;
+
+  assert.equal(cfg.unpacked, 'dist/extension', 'unpacked build must be dist/extension');
+  assert.match(
+    buildScript,
+    /DIST_DIR\s*=\s*REPO_ROOT\s*\/\s*_EXTENSION_CFG\["unpacked"\]\.rsplit/,
+    'DIST_DIR must derive from the configured path, not a hardcoded literal',
+  );
+  assert.match(
+    buildScript,
+    /DEFAULT_OUT_DIR\s*=\s*REPO_ROOT\s*\/\s*_EXTENSION_CFG\["unpacked"\]/,
+    'DEFAULT_OUT_DIR must be the configured unpacked path',
+  );
   assert.match(
     buildScript,
     /RELEASE_DIR\s*=\s*DIST_DIR\s*$/m,

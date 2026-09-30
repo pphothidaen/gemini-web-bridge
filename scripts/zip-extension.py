@@ -17,8 +17,12 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-EXT_DIR = REPO_ROOT / "extension-cloudflare"
-DIST_DIR = REPO_ROOT / "dist" / "extension"
+# Paths come from extension.config.json, shared with build-extension.py, so
+# there is one definition of the directory Chrome's "Load unpacked" points at.
+# Stored relative to the repo root: no developer home path in a log or a doc.
+_EXTENSION_CFG = json.loads((REPO_ROOT / "extension.config.json").read_text())["extension"]
+EXT_DIR = REPO_ROOT / _EXTENSION_CFG["source"]
+DIST_DIR = REPO_ROOT / _EXTENSION_CFG["unpacked"]
 RELEASE_DIR = REPO_ROOT / "release"
 
 PLACEHOLDERS = (

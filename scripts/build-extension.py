@@ -45,8 +45,13 @@ SRC_DIR = REPO_ROOT / "extension-cloudflare"
 #
 # The old repo-root release/ directory is gone; RELEASE_DIR is kept only so
 # existing callers raise a clear error instead of silently writing elsewhere.
-DIST_DIR = REPO_ROOT / "dist"
-DEFAULT_OUT_DIR = DIST_DIR / "extension"
+#
+# The paths themselves come from extension.config.json so there is one
+# definition shared with scripts/zip-extension.py, stored relative to the
+# repo root so no developer home directory ends up in a log or a doc.
+_EXTENSION_CFG = json.loads((REPO_ROOT / "extension.config.json").read_text())["extension"]
+DIST_DIR = REPO_ROOT / _EXTENSION_CFG["unpacked"].rsplit("/", 1)[0]
+DEFAULT_OUT_DIR = REPO_ROOT / _EXTENSION_CFG["unpacked"]
 MANIFEST_PATH = SRC_DIR / "manifest.json"
 RELEASE_DIR = DIST_DIR
 
@@ -406,6 +411,10 @@ def write_build_stamp(output_dir: Path, version: str) -> Path:
         "commit": _git("rev-parse", "--short", "HEAD"),
         "dirty": bool(_git("status", "--porcelain")),
         "built_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        # Relative to the repo root, and the same string extension.config.json
+        # declares, so a tool holding only this file knows where "Load unpacked"
+        # must point without a developer's home directory baked into it.
+        "unpacked_path": _EXTENSION_CFG["unpacked"],
     }
     path = output_dir / STAMP_NAME
     path.write_text(json.dumps(stamp, indent=2) + "\n", encoding="utf-8")
