@@ -150,11 +150,23 @@ test('the canonical production host is pinned where the spec says it is', () => 
     read('docs/client-configs.md').includes(CANONICAL_HOST),
     `docs/client-configs.md must name ${CANONICAL_HOST}`
   );
-  assert.match(
-    read('cloudflare-worker/.env'),
-    new RegExp(`WORKER_URL=https://${CANONICAL_HOST.replace(/\./g, '\\.')}\\s*$`, 'm'),
-    'cloudflare-worker/.env WORKER_URL must be the canonical host'
+
+  // The extension's built-in default is the one endpoint that cannot be fixed
+  // by editing a config file at runtime — it is compiled into settings.js and
+  // decides where the WebSocket goes when the user has not overridden it.
+  assert.ok(
+    read('extension-cloudflare/content.js').includes(CANONICAL_HOST),
+    `extension-cloudflare/content.js DEFAULT_WORKER_URL must be ${CANONICAL_HOST}`
   );
+
+  // Deliberately NOT asserted here: `cloudflare-worker/.env`.
+  //
+  // The first run of this test failed in CI for exactly that reason. .env is
+  // gitignored, so it exists on a developer machine and not on the runner — a
+  // test that reads it passes locally and fails in CI, which is the worst
+  // possible split. The env file is a local deployment artifact, not a tracked
+  // authority: when the two disagree the spec is right and the local file is
+  // stale, and the rotation workflow owns keeping it in step.
 });
 
 test('no committable file outside the allowlist names the retired production host', () => {
