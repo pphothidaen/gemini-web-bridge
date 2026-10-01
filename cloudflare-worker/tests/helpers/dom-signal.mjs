@@ -151,14 +151,8 @@ export const DOM_SIGNALS = [
     states: { thinking: true, streaming: false, settled: false },
     observed: true,
     evidenceKind: 'captured',
-    notYetWiredIntoCode: true,
-    notYetWiredBecause:
-      'Declaring it is not the same as changing isGenerating(), and the two ' +
-      'deserve separate decisions. The code change alters extension ' +
-      'behaviour and needs a version bump plus a reload of the unpacked ' +
-      'build; the declaration is only a statement of what was measured. ' +
-      'Wiring it is tracked separately so this record cannot be mistaken ' +
-      'for a fix.',
+    wiredIntoCode: true,
+    wiredInVersion: '4.7.23',
     measured: {
       date: '2026-10-01',
       fixture: 'prompt-typing.json',
@@ -455,6 +449,13 @@ export function buildStubFromFixture(fixture, state) {
   // `input-area-v2 button` can be evaluated. Previously children were dropped
   // and parents did not exist, which made every such selector silently
   // unmatchable rather than loudly unsupported.
+  // KAN-235: a captured node needs the same surface a real element has. The
+  // extension calls `response.querySelector(...)` on the node returned by
+  // querySelectorAll, and the stub returned bare objects — so the function
+  // took its `typeof ... === "function"` guard and silently reported "not
+  // generating" for a streaming response the fixture clearly shows as busy.
+  // A stub that under-reports matches is the same failure as one that
+  // over-reports them: both are confidently wrong.
   const link = (n) => {
     const out = { tag: n.tag, class: n.class, attrs: Object.assign({}, n.attrs || {}) };
     out.children = (n.children || []).map((c) => {
@@ -462,9 +463,22 @@ export function buildStubFromFixture(fixture, state) {
       built._parent = out;
       return built;
     });
+    const subtree = [];
+    const collect = (x) => { for (const d of flattenChildren(x)) subtree.push(d); };
+    collect(out);
+    out.querySelector = (sel) => subtree.find((d) => matchesDescendant(d, sel)) || null;
+    out.querySelectorAll = (sel) => (sel === '*' ? subtree.slice() : subtree.filter((d) => matchesDescendant(d, sel)));
+    out.closest = (sel) => {
+      for (let a = out._parent; a; a = a._parent) if (matchesDescendant(a, sel)) return a;
+      return null;
+    };
     return out;
   };
-  const nodes = (captured.nodes || []).map(link);
+  const nodes = (captured.nodes || []).map((n) => {
+    const built = link(n);
+    // Collect after the parent's child link is set, so subtree is complete.
+    return built;
+  });
   const allNodes = nodes;
 
   const container = (children) => {

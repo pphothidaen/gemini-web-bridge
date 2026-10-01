@@ -8,6 +8,65 @@ All notable changes to the Gemini Web-Bridge project.
 > anywhere. Production is `prod.gemini-web-bridge.workers.dev` and has been
 > since commit `fa97a5d` (KAN-157).
 
+## [4.7.23] - 2026-10-01
+
+### Fixed
+- **`isGenerating()` was silent during the thinking phase.** The shipped signal
+  is `[aria-busy="true"]` scoped to the newest `model-response`. Measured
+  2026-10-01 across one real generation, that is false for the whole thinking
+  phase — and during that phase there is no new `model-response` at all, so the
+  scope has nothing to look at:
+
+  | phase | `aria-busy` | `model-response` | `thinking-dots` |
+  | :--- | :--- | :--- | :--- |
+  | T1 thinking | **0** | 3 (unchanged) | **1** |
+  | T2 streaming | 1 | 4 | 0 |
+  | T3 settled | 0 | 4 | 0 |
+
+  So between "prompt submitted" and "aria-busy fires" the extension reads a
+  settled-looking page. `aria-busy` proxies *streaming*; the question is
+  *generating* — KAN-197/198's shape one level up.
+
+  `generatingSignal` now also reports a visible thinking indicator, placed
+  AFTER the response-scoped block so it fires only when the newest response
+  looks settled and something is still pending. Checking it first would let it
+  mask `response_aria_busy`.
+
+  It cannot latch the way 4.7.13 did: `thinking-dots-animation` is transient,
+  removed the moment streaming starts, unlike `has-thoughts` and
+  `processing-state-visible`, which are permanent.
+
+### Added
+- **`tests/native-recovery-thinking.test.mjs`** — 6 tests driving the real
+  `generatingSignal` against a stub built from the capture: true while
+  thinking, true while streaming via `response_aria_busy`, false once settled,
+  false at the input surface in both editor states, and an explicit regression
+  test that the permanent classes still mean nothing.
+
+  Mutation-checked. Removing the thinking check fails exactly one test.
+  Swapping it for `processing-state-visible` — reproducing 4.7.13 — fails
+  three.
+
+### Fixed in the test harness
+- **A captured node had no `querySelector`.** The extension calls
+  `response.querySelector(...)` on the node returned by `querySelectorAll` and
+  takes a `typeof === "function"` guard, so the stub made `isGenerating()`
+  report "not generating" for a streaming response the fixture clearly shows
+  as busy. A stub that under-reports matches is the same failure as one that
+  over-reports them.
+
+### Fixed in the capture
+- **Responses were ordered newest-first.** `lastModelResponse` takes
+  `all[all.length - 1]`, so document order decides which response counts as
+  newest. The live page appends below, oldest-first; the capture did not. A
+  test now asserts the ordering, because getting it wrong makes a correctly
+  scoped query look at the wrong response.
+
+- `npm test` → 619 tests / 613 pass / 0 fail / 5 skipped
+- Extension rebuilt at `dist/extension` (v4.7.23). **It must be reloaded at
+  `chrome://extensions` before this takes effect** — the worker deploy does not
+  touch it.
+
 ## [4.7.22] - 2026-10-01
 
 Ships the two changes recorded under `[Unreleased]`:

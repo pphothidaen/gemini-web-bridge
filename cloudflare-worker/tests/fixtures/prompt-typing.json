@@ -226,7 +226,7 @@
                   "tag": "div",
                   "class": "markdown markdown-main-panel md-content animate",
                   "attrs": {
-                    "aria-busy": "true",
+                    "aria-busy": "false",
                     "aria-live": "polite"
                   },
                   "children": []
@@ -235,7 +235,7 @@
             },
             {
               "tag": "div",
-              "class": "response-footer animated gap has-thoughts",
+              "class": "response-footer gap has-thoughts complete",
               "attrs": {},
               "children": []
             }
@@ -261,7 +261,7 @@
                   "tag": "div",
                   "class": "markdown markdown-main-panel md-content animate",
                   "attrs": {
-                    "aria-busy": "false",
+                    "aria-busy": "true",
                     "aria-live": "polite"
                   },
                   "children": []
@@ -270,14 +270,15 @@
             },
             {
               "tag": "div",
-              "class": "response-footer gap has-thoughts complete",
+              "class": "response-footer animated gap has-thoughts",
               "attrs": {},
               "children": []
             }
           ]
         }
       ],
-      "finding": "aria-busy is now 1. The shipped signal fires — but only from this point onward."
+      "finding": "aria-busy is now 1. The shipped signal fires — but only from this point onward.",
+      "ordering_note": "Newest first would break lastModelResponse, which takes all[all.length-1]. Document order must be oldest-first, matching the live page where a new turn appends below."
     },
     "settled": {
       "label": "generation complete",

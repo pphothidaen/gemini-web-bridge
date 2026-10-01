@@ -332,6 +332,35 @@
       }
     }
 
+    // KAN-235: the thinking phase. During T1 there is no model-response for
+    // the new turn yet — the answer is a `pending-response` sibling inside a
+    // `pending-request` container — so every check above returns false while
+    // Gemini is visibly working. Measured 2026-10-01:
+    //
+    //   T1 thinking   aria-busy=0  model-response=3 (unchanged)  thinking-dots=1
+    //   T2 streaming  aria-busy=1  model-response=4               thinking-dots=0
+    //
+    // `aria-busy` proxies "streaming". The question is "generating", and the
+    // window between those two is exactly where a poll used to see a settled
+    // page. Evidence: tests/fixtures/prompt-typing.json.
+    //
+    // Placed after the response-scoped block on purpose: it must only fire
+    // when the newest response looks settled AND something is still pending.
+    // Checking it first would let it mask a response-scoped signal.
+    //
+    // Safe against the 4.7.13 failure mode, which keyed on a PERMANENT
+    // class. `thinking-dots-animation` is transient — it is removed the
+    // moment streaming starts — so it cannot latch true the way
+    // `has-thoughts` and `processing-state-visible` did. The `settled` state
+    // in the fixture carries no thinking-dots node, which is the regression
+    // case for exactly this.
+    if (
+      doc.querySelector("pending-request thinking-dots-animation") ||
+      doc.querySelector("thinking-dots-animation")
+    ) {
+      return { active: true, source: "pending_thinking_dots" };
+    }
+
     // Document-wide match: only report it as a real signal if it is NOT
     // the chat-history loader in the sidenav. Named so a future log line
     // shows the guard fired instead of the wait hanging invisibly.
