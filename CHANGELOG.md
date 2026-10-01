@@ -4,6 +4,80 @@ All notable changes to the Gemini Web-Bridge project.
 
 ## [Unreleased]
 
+### Changed
+- **Every GitHub Actions pin was moved off the removed Node 20 runtime.**
+  23 pins across all five workflows targeted Node 20, which reached end-of-life
+  in April 2026, defaulted runners to Node 24 on Jun 16, and was **removed from
+  GitHub Actions on Sep 23 2026** — eight days before KAN-227 was filed.
+
+  Every pipeline had been green only because GitHub was still routing these
+  actions onto Node 24 through a forced fallback past the removal date. That is
+  the state where everything works and nothing says why, which is the state that
+  tends to fail at the worst moment.
+
+  | action | from | to | count |
+  |---|---|---|---|
+  | `actions/checkout` | `@v4` | `@v7` | 12 |
+  | `actions/setup-node` | `@v4` | `@v7` | 6 |
+  | `actions/setup-python` | `@v5` | `@v7` | 3 |
+  | `actions/upload-artifact` | `@v4` | `@v7` | 1 |
+  | `gitleaks/gitleaks-action` | `@v2` | `@v3` | 1 |
+
+  **Every runtime was read from `runs.using` in the upstream `action.yml` at the
+  specific tag, not from release notes.** That distinction is load-bearing:
+  `upload-artifact@v5`'s release notes read *"**BREAKING CHANGE:** this update
+  supports Node `v24.x`"* while its `action.yml` says `using: node20`. A bump
+  that trusted the notes would have looked correct, been recorded as done here,
+  and left the repo on the removed runtime one pin short of the goal.
+
+  Each workflow was bumped in its own commit so a failure names its cause, with
+  `cd.yml` last because it is the single deploy authority. `NODE_VERSION` is
+  untouched — that is the project under test, not the actions' own runtime.
+
+- **Every job now runs on an explicit image label.** All 13 `runs-on:`
+  declarations used the floating `ubuntu-latest`, which upstream rolls to Ubuntu
+  26.04 beginning Oct 19 2026 ([runner-images#14748]). A floating label means the
+  image moves underneath the repo with no commit and no diff to review.
+
+  Per KAN-228, this migrates deliberately to `ubuntu-26.04` **now**, while
+  `ubuntu-latest` is still 24.04 — upstream's own recommendation, and the reason
+  a regression is attributable to the image rather than to the label shifting.
+
+  | | Ubuntu 24.04 | Ubuntu 26.04 |
+  |---|---|---|
+  | OS | 24.04.5 LTS | 26.04.1 LTS |
+  | kernel | 6.17.0-1022-azure | 7.0.0-1012-azure |
+  | systemd | 255.4 | 259.5 |
+
+  Docker, Minikube, the AWS/Azure/GCloud CLIs, Rust, Firefox and Java are
+  identical across both images, so the exposure is concentrated in the kernel and
+  init system rather than the toolchain.
+
+### Added
+- **`cloudflare-worker/tests/action-runtime-pins.test.mjs`** and
+  **`cloudflare-worker/tests/runner-image-pins.test.mjs`** (16 tests) pin both
+  properties, so the next pin that re-introduces `@v4` — or the next
+  `ubuntu-latest` — fails CI instead of shipping.
+
+  KAN-227's own note was the finding: *"Nothing in the repo asserts anything
+  about action runtime versions, so a future pin re-introducing @v4 would pass
+  every test."* Both guards were written **before** the workflow edits and
+  observed failing first, then mutation-verified: reverting a pin, setting the
+  `upload-artifact` floor to 5, restoring a `with:` block on the gitleaks step,
+  making the gitleaks checkout shallow, restoring a floating label, adding a
+  branch-ref pin, and splitting the runner set across two majors each turn the
+  suite red with the mutation named.
+
+  Two of those checks caught real defects in the guards themselves — a SHA
+  beginning with a digit parsed as `major: 8` and sailed past every floor, and a
+  job-boundary regex anchored at column 0 swallowed the whole file so its
+  assertions passed on unrelated content. Both are now guarded, because a guard
+  that silently checks nothing is the failure mode these tickets exist to stop.
+
+  The runtimes live in `tests/helpers/action-pins.mjs` as a literal with a
+  `measured` date, not as a fetch: CI job 0 runs before any `npm ci`, and a
+  guard that needs network access is a guard that can fail open.
+
 ### Fixed
 - **Every extension build was labelled with a version a month stale.** Releases
   4.7.0 through 4.7.21 all shipped without a git tag, and `ci.yml`'s
