@@ -19,11 +19,18 @@ All notable changes to the Gemini Web-Bridge project.
 
   Tagged `v4.7.21` on `666c577`, the commit declaring that version in both
   `package.json` and `manifest.json`, which live `/health` confirms is what
-  production runs. **The eleven intermediate versions are deliberately left
-  untagged**: whether each reached production cannot be established from the
-  repo, and the field is not a 1:1 release counter (4.4.3 → 4.7.0 → 4.7.9 →
-  4.7.18 → 4.7.21), so a tag per version would encode a release history nobody
-  has evidence for.
+  production runs.
+
+  At the operator's direction the eleven intermediate releases were then tagged
+  too: `v4.7.0`, `v4.7.9`–`v4.7.18`. **Each of those tags records its own
+  provenance in its message**, because they are not the same kind of evidence as
+  `v4.7.21`: verified is the version the commit declares, in both files;
+  unverified is whether that commit ever reached production. The repo keeps no
+  deploy history and the version field is not a 1:1 release counter (it skips
+  4.7.1–4.7.8 and 4.7.19–4.7.20), so "the version changed" does not imply
+  "released to prod". The tags are version-line markers, and they say so, so
+  nobody later mistakes one for a deployment record. `v4.7.21` is the only tag
+  carrying live confirmation.
 
   The tag alone only fixes today. `Determine version` now **fails closed** when
   the tag base is behind `package.json`, so the next forgotten release line goes
