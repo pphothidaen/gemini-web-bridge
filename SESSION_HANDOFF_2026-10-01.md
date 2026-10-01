@@ -1,5 +1,13 @@
 # Session Handoff — 2026-10-01
 
+> **⚠️ Stale host warning.** This file names the RETIRED production host
+> `gemini-web-bridge.pansakorn-pho.workers.dev` in §8, purely to warn the reader
+> away from it. **Do NOT point a client at it.** Production is
+> `prod.gemini-web-bridge.workers.dev`. The retired host still answers 200 and
+> still lists all 9 MCP tools, so a config copied from it connects fine and then
+> reports an empty model catalogue — a silent failure, not an error.
+> `production-host.test.mjs` enforces this banner's presence.
+
 **งานวันนี้:** ทำให้ `horo_consult` (grounded BaZi reading) เดินครบวงจรใน
 production และวัดว่า payload ของ Gemini หน้าตาเป็นอย่างไร เพื่อประเมินว่า
 จะเลิกขับ DOM แล้วยิง API ตรงได้ไหม
@@ -13,11 +21,16 @@ production และวัดว่า payload ของ Gemini หน้าต�
 
 | | |
 | :--- | :--- |
-| HEAD | `1a872d6` (main) |
-| **ยังไม่ push** | **2 commits** — `920da49`(docs), `1a872d6`(fixture) |
+| HEAD | `11524c2` (main) |
+| **ยังไม่ push** | **3 commits** — `20d2e01`(docs), `1a872d6`(fixture), `11524c2`(handoff) |
 | untracked | `prompts/` 7 ไฟล์ — **ยังไม่ commit ตั้งใจ** |
 | production | **4.7.24**, `CONNECTED_AND_READY`, `consecutive_errors: 2` |
-| tests | 619 / 608 pass / **0 fail** / 5 skipped |
+| tests @`11524c2` | 622 / 616 pass / **1 fail** / 5 skipped |
+
+> **แก้แล้ว (2026-10-02):** ตัวเลข `0 fail` ข้างบนเป็นค่าที่ถูกต้อง ณตอนเขียน
+> แต่ไม่ใช่ค่าที่ `11524c2` ทิ้งไว้ — commit นี้เองทำให้ `production-host.test.mjs`
+> แดง เพราะไฟล์นี้พูดถึง retired host โดยไม่ได้อยู่ใน allowlist
+> (ดู §10 ข้อ 0)
 
 **push ก่อนเสมอ** — `cd.yml` deploy เมื่อ `cloudflare-worker/**` เปลี่ยน
 และต้องอนุมัติที่ environment `production` (required reviewer)
@@ -229,6 +242,20 @@ twg jira workitem comment create --issue-id KAN-<n> --body "..." --body-format m
    (ข้อสรุปอาจเป็น **"ยิงตรงไม่ได้"** ซึ่งเป็นผลที่ถูกต้อง)
 4. **KAN-242** — typed path ล้มเมื่อ conversation ยาว ต้องแก้ก่อนใช้งานจริงเป็นประจำ
 5. **`prompts/`** — ทิ้งหรือรื้อ หลังมีหลักฐานว่าใช้ได้
+
+> **แก้ลำดับ (2026-10-02)** — ข้างบนคือลำดับเดิม ซึ่ง**ใช้ไม่ได้แล้ว** เพราะ
+> `11524c2` ทำให้ `npm test` แดง (`production-host.test.mjs`: ไฟล์นี้พูดถึง
+> retired host โดยไม่ได้อยู่ใน allowlist) และ `.clinerules/01-governance.md`
+> บังคับ **0 fail ก่อน push** — ต้องแก้ให้เขียวก่อนจึงค่อย push
+>
+> ลำดับที่ใช้จริงอยู่ใน `implementation_plan.md`:
+> **0.** แก้ suite ให้เขียว (ทำแล้ว 2026-10-02 — เพิ่ม allowlist + banner)
+> **1.** Rotate GitHub PAT
+> **2.** ยืนยัน KAN-242 มีจริง (`twg jira workitem get KAN-242`)
+> **3.** push 3 commits (`20d2e01`, `1a872d6`, `11524c2`)
+> **4.** KAN-242 — ย้ายมาก่อน KAN-236 เพราะเป็นรายเดียวที่กระทบผู้ใช้จริง
+> **5.** KAN-236 — capture chip-absent → diff tool → assessment
+> **6.** `prompts/` — ทิ้งหรือรื้อ หลังมีหลักฐาน
 
 > **ทั้งหมดนี้ยังไม่มีการ deploy** — production คือ 4.7.24 ที่ deploy ไปแล้ว
 > ส่วนที่เหลือเป็นงานวัด ไม่ใช่งานแก้ production

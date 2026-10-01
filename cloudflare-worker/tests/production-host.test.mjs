@@ -71,6 +71,11 @@ const HISTORICAL_ALLOWLIST = new Map([
     'names the retired host explicitly as "stale host, do NOT use"',
   ],
   [
+    'SESSION_HANDOFF_2026-10-01.md',
+    'names the retired host explicitly as a trap to avoid, same as the ' +
+      '2026-09-30 handoff above it; carries the banner for the same reason',
+  ],
+  [
     'HANDOFF.md',
     'banner names the retired host as the one this stale doc must not be used for',
   ],
