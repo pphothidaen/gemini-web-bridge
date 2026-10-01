@@ -740,3 +740,59 @@ flowchart TD
 
 > [!IMPORTANT]
 > **เอกสารนี้เป็น living document** — ควรอัปเดตเมื่อเริ่มทำแต่ละ Roadmap Item โดยย้ายจาก TODO → DOING → DONE พร้อมบันทึก decisions และ deviations จากแผนเดิม
+---
+
+## 8. Open Verification — KAN-229 Dependabot has not yet been seen opening a PR
+
+> **Recorded 2026-10-01.** KAN-227, KAN-228 and KAN-229 are all **Done**. One
+> acceptance item was deliberately left open rather than closed for tidiness.
+
+`.github/dependabot.yml` was added under **KAN-229** and its first two runs
+completed successfully. What has been proven, from the Dependabot job log:
+
+| Property | Evidence |
+|:---|:---|
+| Config is read | `"package_manager":"github_actions"` in the parsed job definition |
+| All groups resolve | 6 groups, patterns matching each action |
+| **No major is suppressed** | `"ignore-conditions":[]` — the design's central constraint |
+| Nothing to update | 5 × *"Nothing to update"* |
+
+That last row is **correct, not a failure.** The repo pins floating majors
+(`@v7`), which already resolve to the newest v7.x — verified: checkout v7.0.1,
+setup-node v7.0.0, setup-python v7.0.0, upload-artifact v7.0.1. Dependabot
+opens a pull request when a **new major** appears.
+
+### What is NOT yet proven
+
+**Dependabot has never been observed creating a pull request in this repo.**
+Two runs parsing correctly and reporting nothing to update proves the config is
+read. It does not prove a PR would actually be raised, opened, or pass review.
+
+### How to close it
+
+On the next Dependabot run — the first weekly run, or sooner if any of these
+ships a new major — check:
+
+1. `gh pr list --author dependabot` returns a PR
+2. That PR's CI is **green**, in particular `action-runtime-pins.test.mjs`. A
+   Dependabot bump to a major *above* the floor is the one case the floor guard
+   will not catch, which is the whole reason both mechanisms exist.
+3. The PR carries a `KAN-<id>` key before merge. Dependabot cannot know the
+   ticket number, so `.githooks/commit-msg` will reject an unedited commit —
+   correctly, since an unattended dependency bump is a change nobody has
+   accounted for.
+
+If a major bump lands and CI is green, raise the floor in
+`cloudflare-worker/tests/helpers/action-pins.mjs` — **after reading
+`runs.using` from the new tag's `action.yml`**, not the release notes. The
+`upload-artifact@v5` case is the reason: its notes announced Node 24 and its
+manifest said `node20`.
+
+### If it does not open a PR
+
+Re-check the run log for a parse or auth error. A silent no-op is the failure
+mode `dependabot-config.test.mjs` exists to prevent — it asserts the ecosystem,
+the directory, the schedule, the absence of an `ignore:` block, the groups and
+the PR limit, because each of those parses cleanly while watching nothing.
+
+---
