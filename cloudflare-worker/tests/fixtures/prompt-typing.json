@@ -1,0 +1,418 @@
+{
+  "signal": "prompt.typing-surface",
+  "captured": "2026-10-01T06:24:21Z",
+  "capturedBy": "KAN-231, driven through Kapture against the live gemini.google.com tab that runs the extension",
+  "scope": "document",
+  "note": "Structural attributes only: no prompt text, no answer text, no tokens (GUARDRAILS G1.2.1). Where a length was needed to distinguish states, the LENGTH is recorded and the text itself is not.",
+  "why_this_exists": "prompt-typing.js carries four selectors that decide whether a request is ever submitted, and it had no capture behind any of them. This file is that capture. It was taken because three live horo_consult attempts failed at step=send_button with send_button_not_found, and nothing in the repo could say whether that was a stale selector or a real precondition.",
+  "method": "One real generation on a focused tab (document.hasFocus() === true, visibilityState 'visible'). The prompt was typed through the live editor and submitted by clicking the actual send control. 23 samples at 1.5s across the generation; only values that changed were recorded. Five states, keyed so every declared signal in this contract can be checked against them.",
+  "states": {
+    "empty": {
+      "label": "editor empty, before anything is typed",
+      "nodes": [
+        {
+          "tag": "input-area-v2",
+          "class": "ng-tns-c2197198206-5 with-toolbox-drawer input-box-shadow single-line-input lm-input-redesign ng-star-inserted",
+          "attrs": {},
+          "children": [
+            {
+              "tag": "rich-textarea",
+              "class": "rich-textarea ng-star-inserted",
+              "attrs": {},
+              "children": [
+                {
+                  "tag": "div",
+                  "class": "ql-editor ql-blank",
+                  "attrs": {
+                    "contenteditable": "true"
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "tag": "div",
+              "class": "trailing-actions-wrapper with-model-picker",
+              "attrs": {},
+              "children": [
+                {
+                  "tag": "button",
+                  "class": "mdc-icon-button mat-mdc-icon-button",
+                  "attrs": {
+                    "data-test-id": "bard-mode-menu-button"
+                  },
+                  "children": [
+                    {
+                      "tag": "mat-icon",
+                      "class": "mat-icon notranslate",
+                      "attrs": {
+                        "data-mat-icon-name": "keyboard_arrow_down"
+                      },
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "tag": "button",
+                  "class": "mdc-icon-button mat-mdc-icon-button",
+                  "attrs": {},
+                  "children": [
+                    {
+                      "tag": "mat-icon",
+                      "class": "mat-icon notranslate",
+                      "attrs": {
+                        "data-mat-icon-name": "mic"
+                      },
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "filled": {
+      "label": "editor has content; the send control exists and is enabled",
+      "nodes": [
+        {
+          "tag": "input-area-v2",
+          "class": "ng-tns-c2197198206-5 with-toolbox-drawer input-box-shadow single-line-input lm-input-redesign ng-star-inserted",
+          "attrs": {},
+          "children": [
+            {
+              "tag": "rich-textarea",
+              "class": "rich-textarea ng-star-inserted",
+              "attrs": {},
+              "children": [
+                {
+                  "tag": "div",
+                  "class": "ql-editor ql-blank",
+                  "attrs": {
+                    "contenteditable": "true"
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "tag": "div",
+              "class": "trailing-actions-wrapper with-model-picker",
+              "attrs": {},
+              "children": [
+                {
+                  "tag": "button",
+                  "class": "mdc-icon-button mat-mdc-icon-button",
+                  "attrs": {
+                    "data-test-id": "bard-mode-menu-button"
+                  },
+                  "children": [
+                    {
+                      "tag": "mat-icon",
+                      "class": "mat-icon notranslate",
+                      "attrs": {
+                        "data-mat-icon-name": "keyboard_arrow_down"
+                      },
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "tag": "button",
+                  "class": "mdc-icon-button mat-mdc-icon-button",
+                  "attrs": {},
+                  "children": [
+                    {
+                      "tag": "mat-icon",
+                      "class": "mat-icon notranslate",
+                      "attrs": {
+                        "data-mat-icon-name": "mic"
+                      },
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "tag": "button",
+                  "class": "mdc-icon-button mat-mdc-icon-button",
+                  "attrs": {},
+                  "children": [
+                    {
+                      "tag": "mat-icon",
+                      "class": "mat-icon notranslate",
+                      "attrs": {
+                        "data-mat-icon-name": "arrow_upward"
+                      },
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "thinking": {
+      "label": "PROMPT SUBMITTED, GEMINI THINKING — no model-response exists yet",
+      "nodes": [
+        {
+          "tag": "pending-request",
+          "class": "conversation-container",
+          "attrs": {},
+          "children": [
+            {
+              "tag": "user-query",
+              "class": "ng-star-inserted",
+              "attrs": {},
+              "children": []
+            },
+            {
+              "tag": "thinking-dots-animation",
+              "class": "ng-star-inserted",
+              "attrs": {},
+              "children": [
+                {
+                  "tag": "div",
+                  "class": "thinking-dots-animation",
+                  "attrs": {
+                    "lottie-animation": "(present)"
+                  },
+                  "children": [
+                    {
+                      "tag": "svg",
+                      "class": "",
+                      "attrs": {
+                        "viewBox": "0 0 28 28"
+                      },
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "tag": "pending-response",
+              "class": "",
+              "attrs": {},
+              "children": []
+            }
+          ]
+        }
+      ],
+      "finding": "THE GAP. aria-busy is 0 and the shipped response.generating signal does not fire. Its scope is newest-response, and there is no new model-response to scope to."
+    },
+    "streaming": {
+      "label": "answer promoted to model-response and is streaming",
+      "nodes": [
+        {
+          "tag": "model-response",
+          "class": "ng-star-inserted",
+          "attrs": {},
+          "children": [
+            {
+              "tag": "div",
+              "class": "response-container-content has-thoughts",
+              "attrs": {},
+              "children": []
+            },
+            {
+              "tag": "structured-content-container",
+              "class": "model-response-text has-thoughts processing-state-visible ng-star-inserted",
+              "attrs": {},
+              "children": [
+                {
+                  "tag": "div",
+                  "class": "markdown markdown-main-panel md-content animate",
+                  "attrs": {
+                    "aria-busy": "true",
+                    "aria-live": "polite"
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "tag": "div",
+              "class": "response-footer animated gap has-thoughts",
+              "attrs": {},
+              "children": []
+            }
+          ]
+        },
+        {
+          "tag": "model-response",
+          "class": "ng-star-inserted",
+          "attrs": {},
+          "children": [
+            {
+              "tag": "div",
+              "class": "response-container-content has-thoughts",
+              "attrs": {},
+              "children": []
+            },
+            {
+              "tag": "structured-content-container",
+              "class": "model-response-text has-thoughts processing-state-visible ng-star-inserted",
+              "attrs": {},
+              "children": [
+                {
+                  "tag": "div",
+                  "class": "markdown markdown-main-panel md-content animate",
+                  "attrs": {
+                    "aria-busy": "false",
+                    "aria-live": "polite"
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "tag": "div",
+              "class": "response-footer gap has-thoughts complete",
+              "attrs": {},
+              "children": []
+            }
+          ]
+        }
+      ],
+      "finding": "aria-busy is now 1. The shipped signal fires — but only from this point onward."
+    },
+    "settled": {
+      "label": "generation complete",
+      "nodes": [
+        {
+          "tag": "model-response",
+          "class": "ng-star-inserted",
+          "attrs": {},
+          "children": [
+            {
+              "tag": "div",
+              "class": "response-container-content has-thoughts",
+              "attrs": {},
+              "children": []
+            },
+            {
+              "tag": "structured-content-container",
+              "class": "model-response-text has-thoughts processing-state-visible ng-star-inserted",
+              "attrs": {},
+              "children": [
+                {
+                  "tag": "div",
+                  "class": "markdown markdown-main-panel md-content animate",
+                  "attrs": {
+                    "aria-busy": "false",
+                    "aria-live": "polite"
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "tag": "div",
+              "class": "response-footer gap has-thoughts complete",
+              "attrs": {},
+              "children": []
+            }
+          ]
+        },
+        {
+          "tag": "model-response",
+          "class": "ng-star-inserted",
+          "attrs": {},
+          "children": [
+            {
+              "tag": "div",
+              "class": "response-container-content has-thoughts",
+              "attrs": {},
+              "children": []
+            },
+            {
+              "tag": "structured-content-container",
+              "class": "model-response-text has-thoughts processing-state-visible ng-star-inserted",
+              "attrs": {},
+              "children": [
+                {
+                  "tag": "div",
+                  "class": "markdown markdown-main-panel md-content animate",
+                  "attrs": {
+                    "aria-busy": "false",
+                    "aria-live": "polite"
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "tag": "div",
+              "class": "response-footer gap has-thoughts complete",
+              "attrs": {},
+              "children": []
+            }
+          ]
+        }
+      ],
+      "finding": "processing-state-visible is present on every response including the finished one, re-confirming KAN-197."
+    }
+  },
+  "dom_shape_during_thinking": {
+    "note": "Full ancestry of the thinking indicator, captured because the scope question is the whole finding.",
+    "ancestry": [
+      {
+        "tag": "thinking-dots-animation",
+        "class": ""
+      },
+      {
+        "tag": "pending-request",
+        "class": "conversation-container"
+      },
+      {
+        "tag": "infinite-scroller",
+        "class": "chat-history"
+      },
+      {
+        "tag": "div",
+        "class": "chat-history-scroll-container"
+      },
+      {
+        "tag": "chat-window-content",
+        "class": ""
+      },
+      {
+        "tag": "div",
+        "class": "chat-container"
+      },
+      {
+        "tag": "chat-window",
+        "class": ""
+      },
+      {
+        "tag": "bard-sidenav-content",
+        "class": ""
+      },
+      {
+        "tag": "main",
+        "class": "chat-app"
+      }
+    ],
+    "siblings_within_pending_request": [
+      "user-query",
+      "thinking-dots-animation",
+      "pending-response"
+    ],
+    "containment": {
+      "model-response": false,
+      "user-query": false,
+      "pending-response": false,
+      "chat-window": true
+    }
+  },
+  "conclusion": "There are TWO distinct generating phases and the shipped signal covers only the second. Phase 1 (thinking) is marked by thinking-dots-animation inside a pending-request container; phase 2 (streaming) by aria-busy on a model-response. A correct 'is Gemini working right now' predicate has to OR the two. This file records the observation; it does not change the code.",
+  "selector_corrections": {
+    "note": "Recorded because a wrong search produced a false negative during this capture, and a false negative written into a fixture becomes a fabricated observation.",
+    "wrong": "document.querySelectorAll('lottie-player, lottie-airo') -> 0",
+    "right": "document.querySelectorAll('[lottie-animation]') -> 1, and its element is <div lottie-animation class=\"thinking-dots-animation\">",
+    "lesson": "An element with a dash in the name is not always a custom element tag. thinking-dots-animation IS a tag, but the lottie inside it is a plain div carrying an attribute. Searching for a tag name that does not exist yields a confident zero."
+  }
+}

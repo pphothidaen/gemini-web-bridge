@@ -40,6 +40,18 @@ const SPINNER = 'div.loading-content-spinner-container, mat-progress-spinner.mat
 const STOP_BTN = 'button[aria-label*="หยุดการสร้าง"], button[aria-label*="Stop generating"]';
 const LOTTIE = 'clipPath[id^="__lottie_element"], svg[clip-path*="__lottie_element"]';
 
+// KAN-231. Measured on a live tab while the extension was running; see
+// fixtures/prompt-typing.json. These are the selectors prompt-typing.js uses
+// to decide whether a request is ever submitted, and until 2026-10-01 none of
+// them had a capture behind them.
+const THINKING_DOTS = 'thinking-dots-animation';
+const PENDING_REQUEST = 'pending-request';
+const PENDING_RESPONSE = 'pending-response';
+const RICH_TEXTAREA = 'input-area-v2 rich-textarea';
+const EDITOR = 'input-area-v2 .ql-editor[contenteditable="true"]';
+const SEND_BUTTON = 'input-area-v2 button:has(mat-icon[data-mat-icon-name="arrow_upward"])';
+const SEND_BUTTON_FALLBACK = "input-area-v2 button.send-button, input-area-v2 [data-test-id='send-button']";
+
 /**
  * One entry per DOM signal the extension reads.
  *
@@ -120,6 +132,165 @@ export const DOM_SIGNALS = [
     }
   },
   {
+    // KAN-231. The signal that covers the phase aria-busy misses.
+    //
+    // Measured 2026-10-01: while Gemini is thinking, aria-busy is 0 and no
+    // model-response exists yet — the answer is still inside a
+    // `pending-request` container as a `pending-response` sibling. So the
+    // shipped `response.generating` signal is silent for the whole thinking
+    // phase, and its declared `newest-response` scope has nothing new to
+    // inspect. The gap between "prompt submitted" and "aria-busy fires" is a
+    // window in which the extension concludes nothing is happening.
+    //
+    // This is KAN-197/198's shape one level up: a proxy read as the state
+    // itself. aria-busy proxies "streaming"; the question is "generating".
+    id: 'generation.thinking_dots',
+    file: 'extension-cloudflare/native-recovery.js',
+    selector: THINKING_DOTS,
+    scope: 'document',
+    states: { thinking: true, streaming: false, settled: false },
+    observed: true,
+    evidenceKind: 'captured',
+    notYetWiredIntoCode: true,
+    notYetWiredBecause:
+      'Declaring it is not the same as changing isGenerating(), and the two ' +
+      'deserve separate decisions. The code change alters extension ' +
+      'behaviour and needs a version bump plus a reload of the unpacked ' +
+      'build; the declaration is only a statement of what was measured. ' +
+      'Wiring it is tracked separately so this record cannot be mistaken ' +
+      'for a fix.',
+    measured: {
+      date: '2026-10-01',
+      fixture: 'prompt-typing.json',
+      method:
+        '23 samples at 1.5s across one real generation, submitted by ' +
+        'clicking the actual send control on a focused tab. T1_thinking: ' +
+        'thinking-dots-animation=1, aria-busy=0, model-response still 3. ' +
+        'T2_streaming: aria-busy=1, model-response=4. T3_settled: ' +
+        'aria-busy=0. Only changed values were recorded.'
+    }
+  },
+  {
+    // The container the answer is born in. Recorded because it is what makes
+    // the scope question decidable: during thinking, the pending response is
+    // NOT inside any model-response, so a newest-response-scoped query cannot
+    // see the generation in progress no matter how good its selector is.
+    id: 'generation.pending_request',
+    file: 'extension-cloudflare/native-recovery.js',
+    selector: PENDING_REQUEST,
+    scope: 'document',
+    states: { thinking: true, streaming: false, settled: false },
+    observed: true,
+    evidenceKind: 'captured',
+    measured: {
+      date: '2026-10-01',
+      fixture: 'prompt-typing.json',
+      method:
+        'Ancestry traced from the thinking indicator. pending-request holds ' +
+        'exactly three element children in this order: user-query, ' +
+        'thinking-dots-animation, pending-response. It sits under ' +
+        'infinite-scroller.chat-history, NOT under any model-response.'
+    }
+  },
+  {
+    id: 'generation.pending_response',
+    file: 'extension-cloudflare/native-recovery.js',
+    selector: PENDING_RESPONSE,
+    scope: 'document',
+    states: { thinking: true, streaming: false, settled: false },
+    observed: true,
+    evidenceKind: 'captured',
+    measured: {
+      date: '2026-10-01',
+      fixture: 'prompt-typing.json',
+      method:
+        'Present as a sibling of thinking-dots-animation during the thinking ' +
+        'phase with zero model-response to match. Disappears when the ' +
+        'answer promotes to model-response.'
+    }
+  },
+  {
+    // The editor. Recorded because sendButton only exists once this has
+    // content, which is the entire reason a send_button_not_found failure is
+    // ambiguous between "the selector is stale" and "the text never landed".
+    id: 'prompt.editor',
+    file: 'extension-cloudflare/prompt-typing.js',
+    selector: EDITOR,
+    scope: 'document',
+    states: { empty: true, filled: true },
+    observed: true,
+    evidenceKind: 'captured',
+    measured: {
+      date: '2026-10-01',
+      fixture: 'prompt-typing.json',
+      method:
+        'Present in both captured states. Text length 0 when empty and 30 ' +
+        'after typing — recorded as a length, not as text, under GUARDRAILS ' +
+        'G1.2.1.'
+    }
+  },
+  {
+    id: 'prompt.rich_textarea',
+    file: 'extension-cloudflare/prompt-typing.js',
+    selector: RICH_TEXTAREA,
+    scope: 'document',
+    states: { empty: true, filled: true },
+    observed: true,
+    evidenceKind: 'captured',
+    measured: {
+      date: '2026-10-01',
+      fixture: 'prompt-typing.json',
+      method: 'Present in both states; input-area-v2 also carries classes "single-line-input" and "lm-input-redesign".'
+    }
+  },
+  {
+    // The control that decides whether a request is ever sent. This is the
+    // selector three live horo_consult calls failed on.
+    id: 'prompt.send_button',
+    file: 'extension-cloudflare/prompt-typing.js',
+    selector: SEND_BUTTON,
+    scope: 'document',
+    states: { empty: false, filled: true },
+    observed: true,
+    evidenceKind: 'captured',
+    measured: {
+      date: '2026-10-01',
+      fixture: 'prompt-typing.json',
+      method:
+        'Absent while the editor is empty; PRESENT and enabled once text has ' +
+        'landed. Clicking it cleared the editor and raised the user-query ' +
+        'count from 3 to 4, confirming the control submits rather than ' +
+        'merely existing. The selector is CORRECT — the three ' +
+        'send_button_not_found failures were a precondition state, not a ' +
+        'stale selector.'
+    }
+  },
+  {
+    // Declared because it exists in the code and is meant to be a safety net.
+    // It matched nothing in any captured state, including the one where the
+    // button was present and enabled.
+    id: 'prompt.send_button_fallback',
+    file: 'extension-cloudflare/prompt-typing.js',
+    selector: SEND_BUTTON_FALLBACK,
+    scope: 'document',
+    states: { empty: null, filled: null },
+    observed: false,
+    unobservedBecause:
+      'Matched zero elements in every captured state, including ' +
+      'editor_filled where input-area-v2 held an enabled button wrapping a ' +
+      'mat-icon named arrow_upward. It provides no fallback on this build: ' +
+      'if the primary selector breaks, this cannot catch it. Kept because ' +
+      'it is harmless and the control may be named differently on another ' +
+      'build — but the record says plainly that today it is decoration, ' +
+      'the same criticism this contract already makes of ' +
+      'grounding.cite_marker.',
+    measured: {
+      date: '2026-10-01',
+      fixture: 'prompt-typing.json',
+      method: 'Queried in all three input-area states; zero matches every time.'
+    }
+  },
+  {
     id: 'response.spinner',
     file: 'extension-cloudflare/native-recovery.js',
     selector: SPINNER,
@@ -128,9 +299,11 @@ export const DOM_SIGNALS = [
     observed: false,
     unobservedBecause:
       'Queried mid-generation and after settling on 2026-09-29; zero ' +
-      'elements both times. The document-wide fallback still exists and is ' +
-      'guarded against the chat-history loader in the sidenav.',
-    measured: { date: '2026-09-29', fixture: 'generating-signal.json', method: 'Absent in both captured states.' }
+      'elements both times. Re-queried across a full generation on ' +
+      '2026-10-01 including the thinking phase: still zero. The ' +
+      'document-wide fallback still exists and is guarded against the ' +
+      'chat-history loader in the sidenav.',
+    measured: { date: '2026-09-29', fixture: 'generating-signal.json', method: 'Absent in both captured states; re-confirmed absent 2026-10-01 in prompt-typing.json.' }
   },
   {
     id: 'response.stop_button',
@@ -184,10 +357,24 @@ export function matchesSelector(node, selector) {
 
 function matchesOne(node, selector) {
   if (selector === '*') return true;
-  const attr = selector.match(/\[([\w-]+)([*^$~]?)=("?)([^"\]]*)\3\]/);
-  let base = selector;
+
+  // KAN-231: `:has(inner)` — a descendant test. The extension's send-button
+  // selector is `input-area-v2 button:has(mat-icon[...="arrow_upward"])`,
+  // and a matcher that cannot evaluate `:has()` returns false for it. That is
+  // the same class of bug as KAN-198's stub silently failing to match: an
+  // unsupported selector form must be loud, not confidently false.
+  const has = selector.match(/:has\(([^)]+)\)/);
+  let rest = selector;
+  if (has) {
+    rest = selector.replace(has[0], '').trim();
+    const kids = flattenChildren(node);
+    if (!kids.some((k) => safeMatch(k, has[1]))) return false;
+  }
+
+  const attr = rest.match(/\[([\w-]+)([*^$~]?)=("?)([^"\]]*)\3\]/);
+  let base = rest;
   if (attr) {
-    base = selector.replace(attr[0], '').trim();
+    base = rest.replace(attr[0], '').trim();
     const name = attr[1];
     const op = attr[2];
     const value = attr[4];
@@ -210,6 +397,43 @@ function matchesOne(node, selector) {
 }
 
 /**
+ * Match a node against a descendant selector, e.g. `input-area-v2 button:has(...)`.
+ *
+ * KAN-231. A captured node carries its children, not its parents, so the
+ * trailing part has to be tested against the node and the leading part against
+ * its ancestors. Testing the node in isolation is what made `:has()` return a
+ * confident false on a selector the live page does match.
+ */
+function matchesDescendant(node, selector) {
+  const parts = String(selector).trim().split(/\s+/);
+  if (parts.length === 1) return safeMatch(node, selector);
+  const tail = parts.pop();
+  if (!safeMatch(node, tail)) return false;
+  // A descendant combinator is not a parent chain: `a b c` means c anywhere
+  // below a, with any number of elements in between. Walking one level at a
+  // time demanded a direct parent and reported real matches as absent.
+  const needed = parts.length;
+  let matched = 0;
+  for (let a = node._parent; a; a = a._parent) {
+    if (safeMatch(a, parts[needed - 1 - matched])) {
+      matched += 1;
+      if (matched === needed) return true;
+    }
+  }
+  return false;
+}
+
+/** Every descendant of a captured node, depth-first. KAN-231. */
+function flattenChildren(node) {
+  const out = [];
+  const walk = (n) => {
+    for (const c of (n && n.children) || []) { out.push(c); walk(c); }
+  };
+  walk(node);
+  return out;
+}
+
+/**
  * Build a document stub from a captured fixture.
  *
  * Routing tests through a capture is the point: the DOM they run against
@@ -226,24 +450,43 @@ export function buildStubFromFixture(fixture, state) {
     const have = Object.keys((fixture && fixture.states) || {}).join(', ') || 'none';
     throw new Error(`fixture has no state '${state}' (has: ${have})`);
   }
-  const nodes = (captured.nodes || []).map((n) => ({
-    tag: n.tag,
-    class: n.class,
-    attrs: Object.assign({}, n.attrs || {})
-  }));
+  // KAN-231: children are carried through and parents are linked, so both
+  // `:has()` (a descendant test) and a descendant selector like
+  // `input-area-v2 button` can be evaluated. Previously children were dropped
+  // and parents did not exist, which made every such selector silently
+  // unmatchable rather than loudly unsupported.
+  const link = (n) => {
+    const out = { tag: n.tag, class: n.class, attrs: Object.assign({}, n.attrs || {}) };
+    out.children = (n.children || []).map((c) => {
+      const built = link(c);
+      built._parent = out;
+      return built;
+    });
+    return out;
+  };
+  const nodes = (captured.nodes || []).map(link);
   const allNodes = nodes;
 
-  const container = (children) => ({
-    _nodes: children,
-    querySelector(sel) {
-      return children.find((n) => safeMatch(n, sel)) || null;
-    },
-    querySelectorAll(sel) {
-      if (sel === '*') return children;
-      return children.filter((n) => safeMatch(n, sel));
-    },
-    closest() { return null; }
-  });
+  const container = (children) => {
+    // KAN-231: query the whole tree, not just the captured top level. The
+    // input-area capture nests the editor three levels down and the send
+    // button two, so a top-level-only search reported a real match as absent
+    // — the same confidently-false failure as an unsupported selector form.
+    const every = [];
+    const walk = (n) => { every.push(n); for (const c of n.children || []) walk(c); };
+    for (const n of children) walk(n);
+    return {
+      _nodes: children,
+      querySelector(sel) {
+        return every.find((n) => matchesDescendant(n, sel)) || null;
+      },
+      querySelectorAll(sel) {
+        if (sel === '*') return every;
+        return every.filter((n) => matchesDescendant(n, sel));
+      },
+      closest() { return null; }
+    };
+  };
 
   if (fixture.scope === 'newest-response') {
     // A capture may hold several responses. That is the only way to tell a

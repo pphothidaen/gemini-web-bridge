@@ -48,8 +48,18 @@ test('the corpus is not empty, and ids are unique', () => {
   assert.equal(new Set(SIGNAL_IDS).size, SIGNAL_IDS.length, 'ids must be unique to be referenceable');
   for (const s of DOM_SIGNALS) {
     assert.ok(s.selector && s.file && s.scope, `${s.id} is missing selector/file/scope`);
-    assert.ok(s.states && ('generating' in s.states) && ('settled' in s.states),
-      `${s.id} must declare both states, even if as null`);
+    // KAN-231: this used to demand the literal pair `generating`/`settled` on
+    // every signal, which was true of all six originals only because all six
+    // happened to be about the generation lifecycle. The input-area signals
+    // are on a different axis entirely — the editor is not "generating" or
+    // "settled", it is empty or filled. Requiring the old vocabulary would
+    // have forced a lie into the declaration.
+    //
+    // What is actually required is that a signal names the states it can be
+    // observed in, and that the set is non-empty. Whether a signal belongs to
+    // the generation lifecycle is then stated by the state names themselves.
+    assert.ok(s.states && Object.keys(s.states).length > 0,
+      `${s.id} must declare at least one observable state`);
   }
 });
 
