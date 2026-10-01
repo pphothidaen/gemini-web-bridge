@@ -28,12 +28,12 @@ jobs:
   # the cause. This job turns that into an ordinary red X.
   validate-workflows:
     name: Validate Workflow Files
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -43,12 +43,12 @@ jobs:
   # ─── Job 1: Lint & Syntax Check ────────────────────────────────
   lint:
     name: Lint & Syntax
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -70,10 +70,10 @@ jobs:
   # ─── Job 2: Unit Tests ──────────────────────────────────────────
   test:
     name: Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # KAN-224: tags are required input, not decoration. The default
           # fetch-depth is 1, which fetches no tags at all, so
@@ -88,7 +88,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -154,7 +154,7 @@ jobs:
   # ─── Job 3: Security Scan ──────────────────────────────────────
   security-scan:
     name: Security Scan (Secret Detection)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: test
     # `always()` so the secret scan still runs when the test job is red (it
     # currently is — see the known pre-existing failures), and no `main`-only
@@ -162,14 +162,14 @@ jobs:
     # reached the default branch because the only secret gate was main-only.
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # gitleaks-action needs full history to diff against its baseline;
           # shallow checkouts make the git wrapper fail with "stderr is not empty".
           fetch-depth: 0
 
       - name: Run Gitleaks secret detection
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         # NO `with:` block on purpose.
         #
         # This previously passed `config: .gitleaks.toml`. gitleaks-action@v2
@@ -194,13 +194,13 @@ jobs:
   # ─── Job 3b: Blueteam — Dependency Audit ────────────────────────
   blueteam-deps:
     name: Blueteam — Dependency Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -229,7 +229,7 @@ jobs:
   # Load unpacked from dist/extension/ OR download the CI artifact.
   package-extension:
     name: Build & Package Extension
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
     outputs:
       extension-version: ${{ steps.bump-version.outputs.version }}
@@ -240,12 +240,12 @@ jobs:
       # `git tag -l` would come back empty and every build would silently
       # fall back to the committed manifest — which is the collision this
       # whole scheme exists to fix.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -332,7 +332,7 @@ jobs:
           echo "prerelease=true" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -406,7 +406,7 @@ jobs:
           "
 
       - name: Upload extension artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Name carries the run number, so every build yields a distinct,
           # retrievable artifact. The previous name was version-only and the
@@ -462,7 +462,7 @@ jobs:
   # case, and the step skips instead of failing.
   jira-sync:
     name: Jira — Comment Build Result
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [package-extension]
     if: >-
       github.ref == 'refs/heads/main' &&
@@ -474,7 +474,7 @@ jobs:
       # with `git log`, and without a checkout the runner has no .git, so that
       # call fails with "fatal: not a git repository" and takes the whole job
       # down. Shallow is enough — only the subject of HEAD is read.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -617,7 +617,7 @@ jobs:
   #      extension (normal at any hour) reads as a credential failure.
   redteam-token-test:
     name: Redteam — Token Validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [security-scan]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     steps:
