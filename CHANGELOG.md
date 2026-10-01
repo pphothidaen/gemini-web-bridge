@@ -5,6 +5,41 @@ All notable changes to the Gemini Web-Bridge project.
 ## [Unreleased]
 
 ### Fixed
+- **Every extension build was labelled with a version a month stale.** Releases
+  4.7.0 through 4.7.21 all shipped without a git tag, and `ci.yml`'s
+  `Determine version` derives `MAJ.MIN.PAT` from the newest `v[0-9]*` tag. With
+  `v4.4.3` as the newest tag, CI published `4.4.3.<run>` on a `4.7.21` codebase.
+
+  It stayed invisible for three reasons worth recording. `4.4.3.116` reads like
+  a deliberate pre-release scheme rather than an error. The build stamp
+  (`dist/extension/BUILD.json`) agreed with the manifest and said `4.7.21`, while
+  CI named the artifact `4.4.3.x` — two authorities, each internally consistent,
+  disagreeing, so `build-extension.py --verify` passed and could not have caught
+  it. And nothing asserted that a release ever gets tagged.
+
+  Tagged `v4.7.21` on `666c577`, the commit declaring that version in both
+  `package.json` and `manifest.json`, which live `/health` confirms is what
+  production runs. **The eleven intermediate versions are deliberately left
+  untagged**: whether each reached production cannot be established from the
+  repo, and the field is not a 1:1 release counter (4.4.3 → 4.7.0 → 4.7.9 →
+  4.7.18 → 4.7.21), so a tag per version would encode a release history nobody
+  has evidence for.
+
+  The tag alone only fixes today. `Determine version` now **fails closed** when
+  the tag base is behind `package.json`, so the next forgotten release line goes
+  red in CI instead of shipping a misleading label — a warning would be
+  invisible in a green run, which is how this shipped in the first place.
+
+- **`cloudflare-worker/tests/extension-version-line.test.mjs`** (6 tests) pins it.
+  Two assert the repo state (newest tag matches the manifest; each tag sits on a
+  commit declaring its own version). Two read the workflow to require the guard
+  to exist and to `exit 1` rather than warn. Two **execute the real `LOWEST`
+  expression** lifted out of the workflow against version pairs — `sort -V`
+  ordering, the lexicographic trap where `4.9.0` would wrongly sort below
+  `4.10.0`, and a major bump — because reading the source proves the guard is
+  written down but not that its arithmetic is right. Verified in both
+  directions: deleting the tag turns the suite red.
+
 - **The retired production host was still copy-pasteable, and a wrong host
   fails silently.** A client pointed at
   `gemini-web-bridge.pansakorn-pho.workers.dev` reported a broken

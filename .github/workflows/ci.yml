@@ -284,6 +284,31 @@ jobs:
           MIN=$(echo "$BASE" | cut -d. -f2)
           PAT=$(echo "$BASE" | cut -d. -f3)
 
+          # KAN-224: fail closed when the tag base is behind the committed
+          # version. Without this the mislabel is invisible — for a month every
+          # build on a 4.7.21 codebase was published as "4.4.3.<run>", which
+          # reads like a deliberate pre-release scheme rather than an error, and
+          # nothing in CI said so. The build stamp agreed with the manifest
+          # (4.7.21) while the artifact CI named was 4.4.3.x, so neither one
+          # could catch it: two self-consistent authorities that disagreed.
+          #
+          # Compare on the first three components only, because BASE may carry a
+          # 4th build counter from a tag that does.
+          BASE3="$MAJ.$MIN.$PAT"
+          MANIFEST=$(read_manifest_version)
+          # sort -V gives the numerically lowest of the two, so if the tag base is
+          # the lower one it is the stale one.
+          LOWEST=$(printf '%s\n%s\n' "$BASE3" "$MANIFEST" | sort -V | head -1)
+
+          if [ "$LOWEST" != "$BASE3" ]; then
+            echo "::error title=Version base is stale::The newest tag is $LATEST (base $BASE3) but cloudflare-worker/package.json declares $MANIFEST. Every build would be published as $BASE3.<run>, mislabelling a $MANIFEST release. Tag the release commit: git tag -a v$MANIFEST <sha> -m 'Release $MANIFEST' && git push origin v$MANIFEST"
+            exit 1
+          fi
+
+          if [ "$BASE3" != "$MANIFEST" ]; then
+            echo "::warning title=Tag base is ahead of the manifest::Newest tag base is $BASE3 but package.json declares $MANIFEST. Building from the tag; check whether the manifest bump was reverted."
+          fi
+
           # 4th component = CI run number. Monotonic, unique per build, and
           # traceable back to the exact workflow run. Clamped to 65535 because
           # Chrome rejects any version component above that.
