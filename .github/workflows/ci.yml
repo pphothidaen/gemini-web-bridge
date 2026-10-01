@@ -74,6 +74,18 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v4
+        with:
+          # KAN-224: tags are required input, not decoration. The default
+          # fetch-depth is 1, which fetches no tags at all, so
+          # `git tag -l 'v[0-9]*'` came back empty on the runner and
+          # extension-version-line.test.mjs failed there while passing on any
+          # developer machine that had cloned with tags.
+          #
+          # The default is deliberate for most jobs — this one reads history to
+          # compare a release tag against the committed version, which is the
+          # entire assertion. Without the tags there is nothing to compare and
+          # the test can only be wrong.
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

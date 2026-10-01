@@ -36,16 +36,29 @@ const git = (...args) =>
 const manifestVersion = () =>
   JSON.parse(fs.readFileSync(`${REPO}/cloudflare-worker/package.json`, 'utf8')).version;
 
-const versionTags = () =>
-  git('tag', '-l', 'v[0-9]*', '--sort=-v:refname')
+/** Release tags visible to this checkout, newest first. */
+function versionTags() {
+  const tags = git('tag', '-l', 'v[0-9]*', '--sort=-v:refname')
     .split('\n')
     .filter(Boolean);
+  // Fail here, loudly and specifically, rather than letting an empty list turn
+  // into a TypeError three assertions later. An absent tag set is a real and
+  // diagnosable condition — a shallow checkout — and the message has to say so,
+  // because the symptom otherwise looks like a version mismatch.
+  assert.ok(
+    tags.length > 0,
+    'no v[0-9]* tags are visible to this checkout. ci.yml Scheme 2 derives the ' +
+      'build version from the newest tag, so a checkout without tags cannot ' +
+      'validate the version line — it can only produce a false result. ' +
+      'The Unit Tests job must check out with fetch-depth: 0.'
+  );
+  return tags;
+}
 
 const majorMinorPatch = (v) => v.split('.').slice(0, 3).join('.');
 
 test('the newest release tag matches the committed worker version', () => {
   const tags = versionTags();
-  assert.ok(tags.length > 0, 'the repo must carry at least one release tag');
 
   const newest = majorMinorPatch(tags[0].replace(/^v/, ''));
   const declared = manifestVersion();
