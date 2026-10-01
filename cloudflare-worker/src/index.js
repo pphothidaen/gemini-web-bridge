@@ -1838,6 +1838,10 @@ export class GeminiBridgeDO extends DurableObject {
         );
       }
       text = collected.text;
+      // KAN-233: no success writer here on purpose. The single exit below —
+      // after the verdict classification — records success for BOTH paths, so
+      // adding one here would double-record and, worse, would clear a refusal
+      // before the verdict check ever saw it.
     }
 
     // Stage 1 escalation: re-ask through Gemini's own retry control.
@@ -1867,6 +1871,39 @@ export class GeminiBridgeDO extends DurableObject {
     const finalVerdict = classifyGeminiReply(text);
     if (finalVerdict.kind !== REFUSAL_KIND.ANSWERED) {
       this.recordHealthError(`gemini_${finalVerdict.kind}: ${text.slice(0, 160)}`);
+      // The replay path already stamped a success at its STREAM_DONE, before
+      // the text was classified. That stamp is wrong whenever the verdict
+      // turns out to be a refusal or an empty answer, and leaving it in place
+      // would have /health reporting both a success and an error for the same
+      // generation. Clear it here — the classification is the authority on
+      // whether this generation was actually a success, not the transport.
+      this._lastSuccessfulGeneration = null;
+    } else if (!text || !text.trim()) {
+      // KAN-233: `classifyGeminiReply("")` returns ANSWERED — it is a text
+      // classifier and an empty string matches no refusal pattern. That made
+      // an empty generation fall into the success branch and stamp
+      // `last_successful_generation`, so a bridge returning nothing at all
+      // would have reported itself healthy. Caught by the empty-answer test in
+      // `health-counter-reset.test.mjs`.
+      //
+      // Empty is recorded as its own condition rather than folded into a
+      // refusal kind: the classifier is answering "is this text a refusal?",
+      // and this is "did we get an answer at all" — a different question with
+      // a different operator reading.
+      this.recordHealthError("empty_answer: generation produced no text");
+      this._lastSuccessfulGeneration = null;
+    } else {
+      // KAN-233: single exit for the success write.
+      //
+      // This is the one point both paths reach, so recording here means a
+      // future third path cannot forget to — the failure that let the typed
+      // path ship without a success writer at all. It is deliberately AFTER
+      // the verdict check: a refusal is an error and must stay one, so it
+      // must not have its error cleared by the success write below.
+      //
+      // Idempotent for the replay path, which already recorded success at its
+      // STREAM_DONE. Re-recording costs a timestamp and nothing else.
+      this.recordHealthSuccess();
     }
     return text;
   }

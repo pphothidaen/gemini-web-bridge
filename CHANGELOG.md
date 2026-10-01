@@ -49,8 +49,53 @@ All notable changes to the Gemini Web-Bridge project.
   generic 404, because `4.7.21` predates this change — the router is in the
   repo, not in the running worker. `/v1` behaves identically either way, which
   is the property that made this safe to ship un-deployed.
-- Policy written up in `docs/api-spec.md` §14, including the four mutations
-  that were run against the new test to prove it is not vacuous.
+### Fixed
+- **`/health` stayed `degraded` forever after a successful `horo_consult`.**
+  `recordHealthSuccess()` was called only from the replay stream's
+  `STREAM_DONE` branch. A grounding-required call throws
+  `replay_skipped_for_grounding` before the replay stream starts, so it
+  always takes the typed path — and the typed path had two
+  `recordHealthError` calls and no success writer at all.
+
+  Measured live on 2026-10-01: a fully successful grounded call
+  (`verified: true`, 5 citations, 7537 chars) left `/health` reporting
+  `degraded` with `consecutive_errors: 3` and
+  `last_successful_generation: null` — the exact values left by three
+  earlier failures. Three transient errors pinned the bridge to `degraded`
+  permanently, because the only caller that could reset the counter was the
+  one caller that path never reaches.
+
+  Fixed at the single exit both paths reach, after the verdict check, so a
+  future third path cannot forget to.
+
+- **An empty generation counted as a success.** `classifyGeminiReply("")`
+  returns `ANSWERED` — it is a text classifier matching refusal patterns, and
+  an empty string matches none. An empty answer therefore fell into the
+  success branch and stamped `last_successful_generation`, so a bridge
+  returning nothing would have reported itself healthy. Empty is now recorded
+  as `empty_answer`, and the stale success stamp from the replay path's
+  `STREAM_DONE` is cleared when the verdict is a refusal or an empty answer —
+  otherwise `/health` reported both a success and an error for one generation.
+
+- **`tests/health-counter-reset.test.mjs`** — 9 tests. Five drive real round
+  trips through `/health`; four force the typed path directly, which is the
+  branch the defect lived in.
+
+### Notes on the typed-path tests
+The first version of that file drove every assertion through
+`POST /v1/chat/completions`. All five tests passed — **and deleting the
+single-exit success write entirely also passed all five**, because the mock
+extension answers over the replay stream, whose `STREAM_DONE` carries a
+success writer of its own. A green suite that cannot fail is worse than no
+suite, because it reads as coverage. The typed-path tests exist because of
+that observation; the round trips are kept because they still pin the
+`/health` surface an operator reads.
+
+With them in place the same mutation reds exactly one test, and disabling the
+empty-answer branch reds two. Verified by mutation, reverted after each.
+
+- `npm test` → 613 tests / 608 pass / 0 fail / 5 skipped
+- Not deployed; `wrangler deploy` is left to the operator as always.
 
 ### Changed
 - **Every GitHub Actions pin was moved off the removed Node 20 runtime.**
