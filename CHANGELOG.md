@@ -60,6 +60,49 @@ All notable changes to the Gemini Web-Bridge project.
   init system rather than the toolchain.
 
 ### Added
+- **`.github/dependabot.yml`** — the thing that was listening while nobody was.
+
+  KAN-227 was found by reading a deploy log. The Node 20 deprecation warning
+  had been present in *every* run of *every* workflow since April 2026, and
+  nobody saw it for six months. The signal existed; nothing was watching. The
+  repo has never had a Dependabot config.
+
+  This closes a specific hole KAN-227's guards deliberately leave open.
+  `action-runtime-pins.test.mjs` pins a **floor**, so it catches a pin going
+  backwards — an edit re-introducing `@v4`. It cannot catch a pin going
+  **forwards**: when `actions/checkout@v8` ships, the floor test stays green,
+  the deprecation banner does not return, and the repo is again N majors behind
+  with nothing announcing it. Same failure, opposite sign — and the more likely
+  one, since upstream ships majors roughly quarterly.
+
+  The two mechanisms are complements, and both are load-bearing:
+
+  | | answers |
+  |---|---|
+  | `dependabot.yml` | does a new major **exist**? |
+  | KAN-227 floor guard | is this pin **too old**, once you decide to move? |
+
+  Config choices worth stating, because each is a decision rather than a default:
+
+  - **weekly, not daily.** Five workflows, one operator, and upstream releases
+    roughly quarterly — a daily stream would arrive empty almost every week,
+    and a stream that is usually empty is one whose signal gets dismissed.
+  - **no `ignore:` block.** Ignoring majors would guarantee the repo never
+    learns one exists — the KAN-227 failure, automated. `version-update:false`
+    is asserted against for the same reason.
+  - **grouped per action.** `actions/checkout` appears 12 times; ungrouped, one
+    major opens 12 PRs and 12 chances to merge eight of them.
+  - **`open-pull-requests-limit: 10`,** not the default 5, which would
+    auto-close the oldest PR during a burst of majors — possibly one mid-review.
+
+- **`cloudflare-worker/tests/dependabot-config.test.mjs`** (7 tests) pins the
+  config, because either mechanism can be deleted alone while the other still
+  looks complete — which is how a guard becomes decorative. Verified against 9
+  mutations: deleting the config, pointing it at `npm`, a wrong `directory`
+  that parses cleanly while watching nothing, removing the schedule, adding an
+  `ignore` block, dropping the groups, reverting the PR limit to 5, switching
+  to daily, and deleting the KAN-227 floor guard it complements.
+
 - **`cloudflare-worker/tests/action-runtime-pins.test.mjs`** and
   **`cloudflare-worker/tests/runner-image-pins.test.mjs`** (16 tests) pin both
   properties, so the next pin that re-introduces `@v4` — or the next

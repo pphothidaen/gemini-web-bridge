@@ -1,0 +1,108 @@
+version: 2
+
+# Dependabot for GitHub Actions (KAN-229).
+#
+# Why this file exists, stated as a failure rather than a feature.
+#
+# KAN-227 found 23 action pins on the removed Node 20 runtime by reading
+# the output of a deploy run. The warning had been present in EVERY run of
+# EVERY workflow since Node 20 reached end-of-life in April 2026 — six
+# months — and nobody saw it. The signal existed; nothing was listening.
+#
+# Dependabot is the thing that listens. It turns "upstream published a
+# major" into a pull request a human sees, instead of a deprecation line
+# in a log nobody opens.
+#
+# This closes a specific hole the KAN-227 guards deliberately leave open.
+# action-runtime-pins.test.mjs pins a FLOOR, so it catches a pin going
+# backwards — a future edit re-introducing @v4. It cannot catch a pin
+# going FORWARDS: when actions/checkout@v8 ships, the floor test stays
+# green, the Node 20 banner does not come back, and the repo is again N
+# majors behind with nothing announcing it. Same failure, opposite sign,
+# and the more likely one — upstream ships majors roughly quarterly.
+#
+# The two mechanisms are complements and both are load-bearing:
+#   this file  → tells you a new major EXISTS
+#   KAN-227    → tells you a pin is too OLD once you decide to move
+# Neither alone prevents the next deprecation from being invisible.
+
+updates:
+  - package-ecosystem: "github-actions"
+    # Workflows live at .github/workflows/*.yml, which Dependabot discovers
+    # from the repository root. There is no per-directory config for this
+    # ecosystem, so "/" is the only correct value.
+    directory: "/"
+
+    # Weekly, not daily.
+    #
+    # This repo has one operator and five workflows. A daily stream against
+    # actions that upstream releases roughly quarterly would arrive almost
+    # entirely empty, and a stream that is usually empty is a stream whose
+    # signal gets dismissed — which is the exact failure this file exists
+    # to fix, one level up. Weekly is frequent enough to catch a major
+    # within the month and quiet enough to stay worth reading.
+    schedule:
+      interval: "weekly"
+
+    # Grouped per action rather than per line.
+    #
+    # actions/checkout appears 12 times across the five workflows. Ungrouped,
+    # a single checkout major opens 12 pull requests that must each be
+    # reviewed and merged separately — and, worse, 12 opportunities to merge
+    # eight of them and leave the repo in a state no reviewer intended.
+    # One group per action means one PR per action, reviewed as a unit.
+    groups:
+      checkout:
+        patterns:
+          - "actions/checkout"
+      setup-node:
+        patterns:
+          - "actions/setup-node"
+      setup-python:
+        patterns:
+          - "actions/setup-python"
+      upload-artifact:
+        patterns:
+          - "actions/upload-artifact"
+      gitleaks:
+        patterns:
+          - "gitleaks/gitleaks-action"
+      other-actions:
+        patterns:
+          - "*"
+
+    # 10, not the default of 5.
+    #
+    # Five distinct actions, each able to produce a major PR independently,
+    # plus grouped minors. A default of 5 means a burst of majors starts
+    # auto-closing the oldest open PR — including one a human was halfway
+    # through reviewing. Ten keeps every action's PR simultaneously open.
+    open-pull-requests-limit: 10
+
+    # NO `ignore:` block, deliberately.
+    #
+    # Ignoring major updates for these actions would recreate precisely the
+    # blind spot being closed: the repo would sit on a deprecated runtime with
+    # an automated reason for never looking. action-runtime-pins.test.mjs
+    # already encodes which majors are too old, as a floor that fails the
+    # build. Expressing that again as a Dependabot ignore rule would be the
+    # same fact in a second place, able to disagree with the first.
+
+    # Labels so a Dependabot PR is distinguishable from a human one at a
+    # glance, and `assignees` so the reviewer is unambiguous.
+    labels:
+      - "dependencies"
+      - "github-actions"
+    assignees:
+      - "Pphothidaen"
+
+    # The commit-message prefix matches this repo's `KAN-<id>:` subject rule
+    # (enforced by .githooks/commit-msg). Dependabot cannot know the ticket
+    # number, so every PR it opens needs a KAN- key typed by a human before
+    # merge — the governance hook will refuse the commit otherwise, which is
+    # the correct outcome: an unattended dependency bump is a change nobody
+    # has accounted for.
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
