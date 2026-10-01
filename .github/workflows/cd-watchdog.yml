@@ -55,7 +55,7 @@ permissions:
 jobs:
   watchdog:
     name: Detect stalled CD runs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       # Event inputs arrive as '' when unset, so the || chain falls through to
       # the repo variable and then the built-in default.
@@ -63,7 +63,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       ISSUE_TITLE: 'CD STALLED: deploy waiting at the production gate past the alert threshold'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Scan for CD runs waiting past the threshold
         id: scan

@@ -39,7 +39,7 @@ permissions:
 jobs:
   probe:
     name: Probe production /health
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       # Required. The classifier is scripts/probe-production.py, and without
       # this the runner has an empty workdir: the step failed with
@@ -48,7 +48,7 @@ jobs:
       # "Production is not serving: " — a real outage and a broken probe
       # were indistinguishable.
       - name: Check out classifier
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Classify the response
         id: classify
