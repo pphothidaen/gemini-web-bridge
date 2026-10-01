@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.23";
+const WORKER_VERSION = "4.7.24";
 
 // ─── API version routing ─────────────────────────────────────────────────
 //
@@ -2153,13 +2153,31 @@ export class GeminiBridgeDO extends DurableObject {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.activeStreams.delete(requestId);
-        resolve({ ok: false, reason: "collect_answer_timeout", text: "" });
+        // KAN-236: carry the count on the TIMEOUT path too. The success path
+        // right below does, and the KAN-182 comment explains why the field
+        // exists at all: so the failure can say "still N" instead of leaving
+        // the operator to guess whether a reply was ever produced.
+        //
+        // It was missing here, so the one case where the number matters most —
+        // the failure — printed `responses on screen=undefined`. Measured
+        // 2026-10-01: the page held 4 responses and the message could not say
+        // so, which is most of why that failure took reading to diagnose.
+        resolve({
+          ok: false,
+          reason: "collect_answer_timeout",
+          text: "",
+          // Best effort from the last count the extension reported; 0 when
+          // none is available, which is honest rather than undefined.
+          responses: Number(this.lastCollectedResponseCount) || 0
+        });
       }, timeoutMs);
 
       this.activeStreams.set(requestId, (msg) => {
         if (msg.type !== "COLLECT_ANSWER_RESULT") return;
         clearTimeout(timer);
         this.activeStreams.delete(requestId);
+        // KAN-236: remember the count, so the timeout path can report it too.
+        this.lastCollectedResponseCount = Number(msg.responses) || 0;
         resolve({
           ok: Boolean(msg.ok),
           reason: msg.reason || "",

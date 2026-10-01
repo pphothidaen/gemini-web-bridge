@@ -149,9 +149,29 @@
       const startedAt = now();
       let lastSeen = null;
       let stableCount = 0;
+      // KAN-236: the deadline is IDLE-based, not wall-clock.
+      //
+      // While Gemini is thinking there is no new `model-response` yet, so the
+      // count stays flat and a wall-clock budget is spent entirely on a
+      // generation that is proceeding correctly. Measured 2026-10-01: a
+      // notebook-grounded horo_consult was still showing thinking-dots after
+      // 120s and the collection reported `collect_answer_timeout` with
+      // `responses on screen=undefined`.
+      //
+      // So the deadline is pushed forward whenever a generation is visibly in
+      // progress — including the thinking phase, which KAN-235 taught
+      // isGenerating() to see. `hardCap` bounds it, so a page stuck showing a
+      // spinner forever still fails instead of hanging.
+      //
+      // This is the same split runReplayAttempt already uses for chunks.
+      const hardCap = Math.max(timeoutMs * 3, timeoutMs + 60000);
+      let deadline = timeoutMs;
       const poll = () => {
         const count = countModelResponses(doc);
         const text = readLastResponseText(doc);
+        if (isGenerating(doc) && now() - startedAt < hardCap) {
+          deadline = timeoutMs + (now() - startedAt);
+        }
         // Newer than the snapshot, genuinely different, and not the label.
         const fresh = count > minResponses;
         const substantive = fresh && text && text !== previousText && !isPlaceholderOnly(text);
@@ -173,7 +193,7 @@
           stableCount = 0;
         }
 
-        if (now() - startedAt >= timeoutMs) {
+        if (now() - startedAt >= deadline) {
           // KAN-182: on a timeout there is no new answer. Returning whatever
           // the last `model-response` happens to hold means returning the
           // PREVIOUS turn's reply, which the caller then reports as the
