@@ -59,14 +59,14 @@ jobs:
   # ─── Doppler Secret Fetch (Primary) ───────────────────────────────
   fetch-secrets:
     name: Fetch Secrets from Doppler
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       source: ${{ steps.fetch.outputs.source }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -215,7 +215,7 @@ jobs:
   # happened while the staging job existed.
   deploy-production:
     name: Deploy to Production
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # `fetch-secrets` is listed so the `source` output referenced in the
     # summary below resolves — job outputs are not readable from a sibling
     # job unless it is a declared dependency.
@@ -223,10 +223,10 @@ jobs:
     environment:
       name: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
