@@ -8,6 +8,42 @@ All notable changes to the Gemini Web-Bridge project.
 > anywhere. Production is `prod.gemini-web-bridge.workers.dev` and has been
 > since commit `fa97a5d` (KAN-157).
 
+## [4.7.24] - 2026-10-01
+
+### Fixed
+- **`waitForResponseChange` no longer spends its whole budget on the thinking
+  phase.** During thinking there is no new `model-response` to count, so a flat
+  wall-clock deadline expires on a generation that is proceeding correctly.
+  The deadline is now idle-based — it slides while `isGenerating()` reports
+  progress — bounded by a hard cap so a dead page still fails instead of
+  hanging. Same split `runReplayAttempt` already uses for chunks. 3 tests,
+  both directions asserted: it must slide for a live generation and still
+  stop for a dead one.
+
+### Known incomplete — read before relying on this
+- **The worker-side timer was NOT hardened.** The timeout that actually fired
+  in the observed failure is the `setTimeout` in `collectTypedAnswer`
+  (`index.js`), still a flat 120s. The extension-side function was fixed; the
+  caller-side timer was not. Whether the two together suffice for a
+  notebook-grounded call that thinks for two minutes is **not established**.
+- **The timeout message prints a wrong count.** It reads
+  `lastCollectedResponseCount`, which is only set when a
+  `COLLECT_ANSWER_RESULT` arrives. On the timeout path none had, so it prints
+  `0` where the page held 5. Better than `undefined`, still not useful. The
+  real number lives in the extension; the worker never asks before giving up.
+
+Neither has been shown to fix the original symptom end to end. See KAN-236.
+
+### Observed but not a bridge defect
+The 120s+ failure reproduced on a conversation that had accumulated six turns.
+The same call on a fresh conversation completed the full lifecycle in 12
+seconds (`thinking-dots=1, aria-busy=0` → `aria-busy=1` → 515 → 1587 → 1873
+chars). The bridge was waiting on a page that had stopped producing answers.
+
+`horo_consult` also refused that fresh run with `no_citations_in_response` —
+the KAN-204 fail-closed path, working as intended. The prompt was verified
+intact at 749 chars, so the refusal was not truncation.
+
 ## [4.7.23] - 2026-10-01
 
 ### Fixed
