@@ -295,3 +295,74 @@ curl -s "$BASE/mcp" \
 3. **health/status integration** — preflight `check_bridge_health` + expose grounding provenance ใน response meta
 4. **202/job endpoint** — poll pattern สำหรับ interpret ที่ block นาน
 5. ก่อน release: รัน governance gate ของ HoroConsultant repo (`sync_ai_agent_ecosystem.py --check`)
+## 14. Versioning และ backward compatibility ของ REST surface
+
+กฎนี้บังคับด้วย `cloudflare-worker/tests/api_version_contract.test.mjs` — ถ้า
+โค้ดละเมิด ให้ถือว่า test ต้องแดง ไม่ใช่ "ปรับ test ให้ผ่าน"
+
+### 14.1 เส้นทางที่มีเวอร์ชัน
+
+| Path | สถานะ |
+| :--- | :--- |
+| `/v1/models` | **Frozen** — ห้ามเปลี่ยน response shape |
+| `/v1/chat/completions` | **Frozen** — ห้ามเปลี่ยน response shape |
+| `/v2/models` | เปิด ปัจจุบันคืน byte-identical กับ v1 |
+| `/v2/chat/completions` | เปิด ปัจจุบันคืน byte-identical กับ v1 |
+| `/models` | alias ไม่มีเวอร์ชัน → ทำงานเหมือน v1 |
+
+### 14.2 เส้นทางที่ไม่มีเวอร์ชัน (ตั้งใจไม่ version)
+
+`/` · `/health` · `/mcp` · `/bridge` · `/bridge/auth-check` · `/bridge/reset`
+· `/artifacts/{key}`
+
+เหตุผลที่ `/v1/mcp` **ไม่** ให้ใช้: MCP มี `Mcp-Session-Id` เป็น namespace ของตัวเอง
+แล้ว การเพิ่ม alias แบบ versioned จะสร้าง session namespace ที่ไม่มีใคร
+negotiate ร่วมกัน — เป็นการสร้างปัญหาใหม่โดยไม่ได้แก้ปัญหาเดิม
+
+เหตุผลที่ auth gate คูณกับ `url.pathname` ไม่ใช่ path ที่ตัด prefix แล้ว:
+`/health` อยู่ใน public allowlist ถ้า auth ตัดสินใจจาก path ที่ตัด prefix
+`/v1/health` จะกลายเป็น public โดยอัตโนมัติ และ leak health report ทั้งก้อน
+(model ids, scope, connection state) ให้ใครก็ได้ — จึงมี test จับไว้โดยเฉพาะ
+
+### 14.3 กฎ
+
+1. **v1 frozen** — ถ้าการเปลี่ยนแปลงทำให้ response shape ของ v1 เปลี่ยน
+   นั่นคือ breaking change และต้องไป `/v2` เท่านั้น ห้ามแก้ใน v1
+2. **เพิ่ม field ได้** — additive change ไม่ทำให้ client เดิมพัง จึงอนุญาต
+   โดยไม่ต้องขึ้น v2 แต่ต้องเพิ่มใน exact key set ของ test ด้วย
+3. **v1 และ v2 ต้องไม่ diverge จนกว่าจะมีเหตุผล** — ปัจจุบันทั้งคู่ต้องคืน
+   body เดียวกันทุก byte ถ้าจะให้ต่างกันต้องเขียนเหตุผลลง CHANGELOG
+4. **version ที่ไม่รู้จักต้องตอบ 404 พร้อมชื่อ** — `code: "unsupported_api_version"`
+   ไม่ใช่ generic `not_found` ที่อ่านเหมือนพิมพ์ผิด ทำให้ caller ไปหา
+   credential problem ที่ไม่มี
+5. **เพิ่ม version ใหม่ = แก้ 3 ที่** — `SUPPORTED_API_VERSIONS` ใน
+   `src/index.js`, `api_versions` ใน `/health`, และ test
+
+### 14.4 ทำไมต้องมี test guard
+
+ก่อนหน้านี้ไม่มีอะไรกันไม่ให้ breaking change ออกไป — version prefix ถูก
+hardcode ไว้ใน 4 จุดเปรียบเทียบ `url.pathname === "/v1/..."` ทำให้ไม่มีที่
+เดียวที่ต้องตัดสินใจอย่างตั้งใจ และไม่มี assertion ใดที่ยืนยันว่า shape ยังเป็น
+shape เดิม
+
+`api_version_contract.test.mjs` ปิดช่องนี้ และผ่าน mutation check ทั้ง 4 ตัว
+(ดู comment ท้ายไฟล์) — mutation ที่ไม่ทำให้ผลเปลี่ยน แปลว่า assertion
+ตกลวง ผลที่วัดได้เมื่อรันจริง:
+
+| Mutation | ทำให้ test แดง |
+| :--- | :--- |
+| A — ลบ `v2` ออกจาก `SUPPORTED_API_VERSIONS` | 6 |
+| B — `/models` ไม่คืน `catalog_revision` | 1 (เฉพาะ exact key set) |
+| C — auth gate ใช้ `apiPath` แทน `url.pathname` | 1 |
+| D — รวม `unsupported_api_version` เข้า `not_found` | 2 |
+
+Mutation B แดงแค่ 1 เป็นหลักฐานว่าสองชั้นของ test ตรวจคนละอย่างจริง —
+ชั้น "v1 เท่า v2" กันการ diverge ส่วนชั้น "exact key set" กันการสูญเสีย field
+ไม่มีชั้นใดกันซ้ำอีก
+
+### 14.5 Deprecation
+
+`/health` มี `api_versions.deprecated` (ปัจจุบัน `{}`) สำหรับประกาศว่า
+version ใดกำลังจะถูกถอด พร้อมเหตุผล กฎคือ **ยังไม่มีกำหนด sunset ใด ๆ
+จนกว่าจะมี ticket ที่ระบุวัน** — การประกาศ deprecation โดยไม่มีวันถอด
+ทำให้ client หยุดอัปเดตโดยไม่มีแรงกดดันที่จะบังคับให้รีบ

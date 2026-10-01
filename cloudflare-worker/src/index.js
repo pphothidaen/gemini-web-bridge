@@ -34,6 +34,39 @@ import {
 // tests/version-consistency.test.mjs fails the build if any of them drift.
 const WORKER_VERSION = "4.7.21";
 
+// ─── API version routing ─────────────────────────────────────────────────
+//
+// `/v1` is frozen. Clients depend on its response shapes, so a change that
+// alters them is a breaking change and belongs in `/v2`, never in `/v1`.
+// The prefix is stripped once here and the handler below never learns which
+// version it served — which is what makes "v1 and v2 behave identically"
+// checkable rather than a claim.
+//
+// `SUPPORTED_API_VERSIONS` is also what `/health` advertises and what
+// `tests/api_version_contract.test.mjs` pins, so adding a version is a
+// deliberate edit in three places rather than an invisible one in a routing
+// table.
+const SUPPORTED_API_VERSIONS = ["v1", "v2"];
+const DEFAULT_API_VERSION = "v1";
+
+// Strip a leading `/vN` and report which version was asked for.
+//
+// Returns `version: null` for an unversioned path, which is not an error:
+// `/health`, `/mcp`, `/bridge`, `/models` and `/artifacts/*` are all
+// unversioned and are matched on their own literal paths. An *unsupported*
+// version (`/v9/...`) is reported as such so the caller can 404 with a
+// message naming what exists, instead of falling through to a bare 404 that
+// reads like a typo.
+function resolveApiVersion(pathname) {
+  const m = /^\/(v\d+)(\/|$)/.exec(pathname);
+  if (!m) return { version: null, rest: pathname };
+  return {
+    version: m[1],
+    rest: pathname.slice(m[1].length + 1) || "/",
+    supported: SUPPORTED_API_VERSIONS.includes(m[1]),
+  };
+}
+
 // ─── Verbose logging gate ────────────────────────────────────────
 // console.log is not free in Workers: each call formats its arguments,
 // serialises them, and enqueues a log entry, all charged to the same CPU
@@ -2634,8 +2667,33 @@ export class GeminiBridgeDO extends DurableObject {
       });
     }
 
+    // ─── API version resolution ───
+    //
+    // Runs before routing so an unsupported prefix is named rather than falling
+    // through to the generic 404 at the bottom of this handler. Deliberately
+    // before the auth gate too: a version that does not exist is a client
+    // mistake, and answering it identically to an authenticated route would
+    // send the caller hunting for a credential problem they do not have.
+    const { version: apiVersion, rest: apiPath, supported: apiVersionSupported } =
+          resolveApiVersion(url.pathname);
+
+    if (apiVersion && !apiVersionSupported) {
+      return new Response(JSON.stringify({
+        error: {
+          message: `Unsupported API version '${apiVersion}'. Supported: ${SUPPORTED_API_VERSIONS.join(", ")}.`,
+          type: "invalid_request_error",
+          code: "unsupported_api_version"
+        }
+      }), { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     // ─── Public Paths vs Authenticated Paths ───
     // /artifacts/{key} is public: the 32-hex unguessable key IS the credential.
+    //
+    // Keyed on `url.pathname`, not `apiPath`, and that is deliberate. `/health`
+    // has never been public under a version prefix, so `/v1/health` must not
+    // become public by inheriting the prefix strip — the auth decision stays on
+    // the literal path a client actually requested.
     const isArtifactPath = url.pathname.startsWith("/artifacts/");
     const publicPaths = ["/", "/health"];
     if (!publicPaths.includes(url.pathname) && !isArtifactPath) {
@@ -2662,8 +2720,13 @@ export class GeminiBridgeDO extends DurableObject {
       return this.serveArtifact(url, corsHeaders);
     }
 
-    // ─── 2. OpenAI-Compatible API: /v1/models (and /models alias) ───
-    if ((url.pathname === "/v1/models" || url.pathname === "/models") && request.method === "GET") {
+    // ─── OpenAI-Compatible API: /vN/models (and the unversioned /models alias) ───
+    //
+    // `apiPath` is `url.pathname` with any `/vN` prefix already stripped, so
+    // `/v1/models`, `/v2/models` and `/models` all land here and all read the
+    // same handler. That is the whole of the backward-compatibility guarantee:
+    // there is no second copy of this logic to drift.
+    if (apiPath === "/models" && request.method === "GET") {
       const models = this.isExtensionReady() ? this.dynamicModels : [];
       const defaultModel = recommendedModel(models);
       return new Response(JSON.stringify({
@@ -2678,8 +2741,8 @@ export class GeminiBridgeDO extends DurableObject {
       }), { headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" } });
     }
 
-    // ─── 3. OpenAI-Compatible API: /v1/chat/completions ───
-    if (url.pathname === "/v1/chat/completions" && request.method === "POST") {
+    // ─── 3. OpenAI-Compatible API: /vN/chat/completions ───
+    if (apiPath === "/chat/completions" && request.method === "POST") {
       let body;
       try {
         body = await request.json();
@@ -4024,6 +4087,16 @@ export class GeminiBridgeDO extends DurableObject {
           openai: `https://${url.host}/v1/chat/completions`,
           models: `https://${url.host}/v1/models`,
           bridge: `wss://${url.host}/bridge`
+        },
+        // Advertised so a client can discover that /v2 exists without reading
+        // the source, and so a client pinned to a version it cannot see has
+        // something to compare against. `api_version_contract.test.mjs` pins
+        // this list, so dropping a version here fails the build rather than
+        // quietly stranding whoever was still calling it.
+        api_versions: {
+          supported: SUPPORTED_API_VERSIONS,
+          default: DEFAULT_API_VERSION,
+          deprecated: {}
         }
       }, null, 2), {
         status: 200,

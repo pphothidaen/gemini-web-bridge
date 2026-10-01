@@ -10,6 +10,48 @@ All notable changes to the Gemini Web-Bridge project.
 
 ## [Unreleased]
 
+### Added
+- **`/v2` exists as a place to make a breaking change without making one.**
+  `/v2/models` and `/v2/chat/completions` are open and currently return
+  byte-identical bodies to their `/v1` counterparts. The prefix is stripped
+  once, at the top of `fetch()`, so both versions read the same handler —
+  there is no second copy of the logic to drift.
+
+  The point is not the endpoint. It is that `/v1` is now *frozen by
+  construction*: there is a named place for a breaking change to go, so the
+  temptation to reshape `/v1` in place has somewhere better to go instead.
+
+- **`api_version_contract.test.mjs` (13 tests)** pins the `/v1` response shape
+  field by field, asserts `/v1` and `/v2` return identical bodies, and asserts
+  an unknown version is named (`unsupported_api_version`) rather than 404ing
+  the same way a typo does.
+
+- **`/health` advertises `api_versions`** — `supported`, `default`, and an
+  empty `deprecated` map, so a client can discover which versions exist
+  without reading the source.
+
+### Changed
+- **Version routing is resolved in one place.** The four literal
+  `url.pathname === "/v1/..."` comparisons became one `resolveApiVersion()`
+  call. Nothing about `/v1` behaviour changed; this only makes "v1 and v2 are
+  the same handler" a structural fact rather than a coincidence.
+
+### Security
+- **The auth gate stays keyed on the literal request path, not the
+  version-stripped one.** Keying it on the stripped path would have made
+  `/v1/health` inherit public access from the `/health` allowlist entry and
+  leak the whole health report — model ids, scope, connection state — to
+  anyone. Pinned by a dedicated test.
+
+### Notes
+- **Not deployed at the time of writing**; `wrangler deploy` is left to the
+  operator as always. In production today (4.7.21) `/v2/models` returns the
+  generic 404, because `4.7.21` predates this change — the router is in the
+  repo, not in the running worker. `/v1` behaves identically either way, which
+  is the property that made this safe to ship un-deployed.
+- Policy written up in `docs/api-spec.md` §14, including the four mutations
+  that were run against the new test to prove it is not vacuous.
+
 ### Changed
 - **Every GitHub Actions pin was moved off the removed Node 20 runtime.**
   23 pins across all five workflows targeted Node 20, which reached end-of-life
