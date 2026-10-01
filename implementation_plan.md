@@ -1,135 +1,242 @@
 # Implementation Plan
 
-**Goal:** Determine — by measurement, not by argument — whether the bridge can
-stop driving Gemini's DOM and call its notebook API directly, and document
-exactly what stands between the current state and that end goal.
+**Goal:** Close out the 2026-10-01 session in the order that removes risk first
+(leaked credential, unpushed work, a red suite), then fix the defect that will
+actually bite in daily use — the typed path failing on any conversation that
+has accumulated turns — and only then finish the payload measurement that was
+left half-done.
 
 ## Overview
 
-The 2026-10-01 smoke testing established three facts that make this question
-answerable now rather than someday.
+This plan supersedes the earlier `implementation_plan.md` committed at
+`1a872d6`. That document scoped the KAN-236 payload measurement alone, on the
+assumption that it was the next thing to do. It is still substantially correct
+about that work, and its reasoning about the two structural blockers is worth
+keeping. Two things have changed since, and both change the order of work:
 
-First, the typed path works. KAN-235 taught `isGenerating()` to see the
-thinking phase, and a grounded `horo_consult` completed end to end with
-`notebookGrounding.verified: true` and five citations. The bridge is not
-broken.
-
-Second, the DOM path is nevertheless the only path. Every grounded call pays
-for it: the tab must be focused or `send_button_not_found` is returned, the
-editor must accept the text or the wait times out, and the conversation
-accumulates turns until Gemini stops answering — which is exactly what
-happened on a conversation that had reached six.
-
-Third, and decisively, the request the browser actually sends was captured.
-A notebook question goes out as:
+**The suite is red at HEAD.** Measured just now on `11524c2`:
 
 ```
-POST https://gemini.google.com/_/BardChatUi/data/
-      assistant.lamda.BardFrontendService/StreamGenerate
-Content-Type: application/x-www-form-urlencoded;charset=UTF-8
-X-Same-Domain: 1
+tests 622 · pass 616 · fail 1 · skipped 5 · duration 46.2s
+✖ no committable file outside the allowlist names the retired production host
+      actual: [ 'SESSION_HANDOFF_2026-10-01.md' ]
 ```
 
-with a body of the form `f.req=[null,"<inner JSON>"]` and `at=<token>`. The
-inner array carries the prompt at index 0, the notebook id
-(`notebooks/b55f1ee0-…`) at roughly index 7, and a ~4 KB opaque string at
-index 3 that does not parse as JSON and is not a URL, UUID or build label.
+`SESSION_HANDOFF_2026-10-01.md` names
+The retired production host at what is now line 219, inside the block
+explaining the host is retired and must not be used. It is not on
+`HISTORICAL_ALLOWLIST` in `cloudflare-worker/tests/production-host.test.mjs`,
+so the KAN-223 sweep rejects it. The file was introduced by `11524c2` itself —
+the test passed at `1a872d6`. The handoff's own status line says "0 fail", which
+was true when written and is false now.
 
-That third fact is the reason this plan exists. The worker already builds an
-`f.req` envelope — `cloudflare-worker/src/index.js:150-159` — and it is
-**structurally different from the one Google accepts**. It emits ten fields
-where the browser emits roughly twenty, it puts `[conversationId, responseId,
-choiceId, …]` at index 2 where the browser puts `null`, and it has no notebook
-field at all. KAN-182 recorded the symptom ("our assembled StreamGenerate
-payload is rejected by a schema change on Google's side") and worked around
-it by typing into the DOM instead. Nobody has ever compared the two
-side by side.
+This matters beyond tidiness. `.clinerules/01-governance.md` requires
+`npm test` to pass with 0 fail before pushing, and `pre-push` asks Jira about
+cited tickets on the way out. Pushing three commits while the suite is red means
+the first thing CI says about this branch is a failure, which trains everyone to
+ignore red. The suite goes green **before** the push — the opposite of the
+order the handoff gives.
 
-So the gap is narrow and specific: **the real payload has never been written
-down**, and the workaround cannot be evaluated until it is.
+**KAN-242 is not a ticket yet.** It appears in exactly one place in the repo:
+`SESSION_HANDOFF_2026-10-01.md` §4.1. It is not in `PLANNING-HANDOFF.md`, not in
+`docs/COMMIT_TICKET_MAPPING.md`, and governance forbids citing a ticket number
+not confirmed to exist. The number may well be right — presumably taken from
+Jira at the time — but it must be verified with
+`twg jira workitem get KAN-242` before any commit cites it. If it does not
+exist, a real ticket is created and the work is committed under that key.
 
-### What this plan does and does not do
+### What is actually broken, as distinct from what is unwritten
 
-It measures. It captures the sanitized structure of real StreamGenerate
-payloads across the cases that matter, pins the worker's current builder
-against them, and produces a written assessment of what reaching a direct
-call would require — including the parts that may well be unreachable.
+The handoff groups several open items together, and they are not the same kind
+of thing. Separating them changes what each step costs:
 
-It does **not** attempt a direct call, does not touch production behaviour,
-and does not claim the end goal is achievable. Two of the blockers identified
-below look structural rather than merely unknown, and the assessment says so
-rather than engineering around it.
+| item | kind | cost | risk if skipped |
+| :--- | :--- | :--- | :--- |
+| leaked GitHub PAT | security, already happened | 5 min | credential is live |
+| red suite at HEAD | regression, already happened | 10 min | CI fails on push |
+| 3 unpushed commits | housekeeping | 2 min | work is one `git gc` from gone |
+| **KAN-242 typed path** | **product defect** | **hours + operator** | **every repeat call fails** |
+| KAN-236 second capture | measurement, incomplete | operator + ~2h | assessment stays unfounded |
+| KAN-231 fallback selector | dead code claim | 30 min | a "safety net" that is not one |
 
-### What already exists and must not be rebuilt
+KAN-242 is the only item that changes what users experience. The rest close
+bookkeeping or complete a study. That is why it gets the depth here and the
+others get a phase each.
 
-The measurement apparatus is largely in the tree, which is why this is a
-measurement plan and not an instrumentation project.
+### The KAN-242 finding, and why it is diagnosable rather than mysterious
 
-| existing | location | role here |
-| :--- | :--- | :--- |
-| `RECOGNIZED_PATHS` | `extension-cloudflare/injected.js:386` | StreamGenerate already intercepted |
-| `decodeAndSanitizePayload(rawBody)` | `extension-cloudflare/injected.js:413` | parses the `f.req` envelope |
-| `extractBoundedStructure(val, depth)` | `extension-cloudflare/injected.js:447` | builds the sanitized fingerprint |
-| `classifyString(str)` | `extension-cloudflare/injected.js:68` | 6-class closed set, incl. `notebook_ref` |
-| payload probe + `PAYLOAD_PROBE_SET` | `extension-cloudflare/injected.js:497-524` | runtime toggle, console-only sink |
-| `payload-classifier.test.mjs` | `cloudflare-worker/tests/` | 9 tests incl. the leak canary |
-| `ProtocolDecoder.decodeChunk` | `cloudflare-worker/src/index.js` | decodes the **response** side |
+The measured symptom, from the handoff: on a conversation with 2+ accumulated
+turns, `horo_consult` fails with `collect_answer_timeout` while
+`responses on screen=2`, and **no `StreamGenerate` request was emitted at all**.
+On a fresh conversation the same call completes in 12 seconds. On a one-turn
+conversation it completes with 14 citations.
 
-The one thing none of these produce is a **persisted artefact**. The probe
-writes to `console.log` and nowhere else — deliberately, per GUARDRAILS
-G1.2.1, because the console is the only sink that cannot persist anything.
-That was correct when the capture was one-off; it does not survive a session
-boundary, and it cannot be diffed. Turning a console line into a fixture is
-the entire deliverable.
+The discriminator the previous session already established is the important
+part: *if `StreamGenerate` fires, the prompt left; if it does not, the prompt
+never left.* That splits the fault cleanly, and it splits it **upstream of
+collection** — which means the 120 s timer and the wrong response count that
+`[4.7.24]` records as "known incomplete" are, on this evidence, not the cause.
+They are real defects and this plan fixes them too, but fixing them would not
+have prevented this failure.
 
-### The safety argument for sanitized capture
+That leaves the submit step, and there is a specific weakness in it.
+`typeAndSend` in `extension-cloudflare/prompt-typing.js` confirms submission
+like this:
 
-`classifyString` consults a fixed prefix allowlist — `notebook://`, `http(s)
-://`, a bare UUID, `boq_`, or a string that parses as JSON — and returns
-`OPAQUE` with nothing retained for everything else, prompts included. The
-canary test in `payload-classifier.test.mjs` fails the moment anyone adds a
-prefix, a substring, a hash or a first-N to the output, which is the only
-route by which this could begin leaking. Every fixture written under this plan
-goes through that function and inherits that guarantee; none of them may be
-transcribed by hand from a network capture, because a hand transcription is
-not covered by it.
+```js
+const before = countUserQueries(doc);
+send.click();
+const accepted = await waitFor((d) => countUserQueries(d) > before ? true : null, …);
+…
+return { ok: true, submitted: true, responsesBefore };
+```
 
-### The two blockers, stated before the work starts
+A `user-query` node appearing is treated as proof the request was issued. On
+this build the query bubble renders optimistically — the page commits the user's
+own turn to the transcript before the network call is made. So `submitted: true`
+means "the transcript grew", not "Gemini was asked". Nothing in the current
+signal chain distinguishes those two, which is exactly why the failure surfaced
+as a 120-second collection timeout rather than as a submit failure: the bridge
+believed it had submitted, then waited for an answer to a request that was
+never sent.
 
-These shape the assessment and should shape expectations of it.
+So the diagnosis is not a hunt. It is: determine which of four states the
+submit lands in on a 2+ turn conversation —
 
-**Session binding.** The captured request carries `f.sid=-8757537262754561099`,
-`bl=boq_assistant-bard-web-server_20260929.03_p0`, `_reqid=…` and
-`at=AIaPT3M-wqKY2uBmtmC2h-ZsXNUS:<timestamp>`. All are session-derived and
-change per page load. Combined with the `__Secure-*` cookies the browser holds
-for `gemini.google.com`, a request cannot be authored off-browser and
-replayed — it must be minted by a live session. This is the same class of
-constraint as the retired-host problem: a stale credential produces a
-plausible-looking failure rather than an error.
+1. the text never reached the editor (`fill` failed, or Angular reconciled it away)
+2. the send button was absent or disabled (step 2 never resolved)
+3. the click did nothing: `user-query` rose but no request went out
+4. the request went out and Gemini declined to answer it
 
-**The opaque context block.** Index 3 in the real payload is a ~4 KB string
-that `classifyString` classifies `OPAQUE`: not JSON, not a URL, not a UUID,
-not a build label. Whether it is conversation state that can be reconstructed
-from known inputs, a server-issued nonce, or something bound to in-page
-Angular state is **unknown and is the central open question of this plan**.
-Until it is characterised, the direct-call path is not scoped, only outlined.
+— using the payload probe and Kapture's network monitor, which between them can
+see both the DOM state and whether `StreamGenerate` fired. Each state implies a
+different fix, and two of them are one-line changes while one of them is not
 
-Everything else — field positions, the notebook reference, the response
-decoding, the model plumbing — is already understood.
+### What this plan deliberately does not do
+
+It does not attempt a direct `StreamGenerate` call from the worker. The
+measurement from `1a872d6` says that is not a matter of filling in missing
+fields: index 2 is a **type contradiction** (worker puts
+`[conversationId, responseId, choiceId, null, null, []]`, the browser puts
+`null`), and index 3 is a 2,187-byte opaque string never shown to be
+reconstructible. That is a separate decision needing the Phase D verdict first.
+
+It does not ship a workaround for KAN-242 before the cause is known. A
+"start a fresh conversation every call" guard would make the symptom disappear
+and teach nobody anything, which is the specific failure mode the last session
+recorded twice.
+
+### Baseline, measured rather than quoted
+
+Everything below was read or run on this machine on 2026-10-02, at `11524c2`:
+
+| | |
+| :--- | :--- |
+| HEAD | `11524c2` on `main`; unpushed: `20d2e01`, `1a872d6`, `11524c2` |
+| working tree | clean except untracked `prompts/` (7 files, deliberately uncommitted) |
+| worker version | 4.7.24 — `package.json`, `WORKER_VERSION`, extension manifest all agree |
+| `npm test` | **622 / 616 pass / 1 fail / 5 skipped** |
+| `build-extension.py --verify` | current (v4.7.24 from `99c94fa`); warns the tree is dirty |
+| DOM contract | 13 signals, all with `measured` blocks; `checkDomSignals()` passes |
+| payload captures | **1** (`app-ungrounded-01`, 19 fields); 2 further cases not captured |
+| node | v26.7.0 (package requires ≥22) |
+
+### The safety argument that constrains every capture here
+
+`classifyString` in `extension-cloudflare/injected.js` consults a fixed prefix
+allowlist — `notebook://`, `http(s)://`, a bare UUID, `boq_`, or a string that
+parses as JSON — and returns `OPAQUE` with nothing retained for everything else,
+prompts included. The canary in `payload-classifier.test.mjs` fails the moment
+anyone adds a prefix, substring, hash or first-N to the output, which is the
+only route by which this could begin leaking.
+
+Every fixture and every diagnostic record written under this plan inherits that
+guarantee **only if it goes through that function**. A record transcribed by
+hand from a Kapture network body is not covered by it — the raw body contains
+the prompt, the `at` CSRF token, and the session id. So the rule for Phases B
+and D alike: sanitized structures come from `PAYLOAD_PROBE` records read out of
+the console; raw network bodies are read, compared against the probe record, and
+**never written down**. `f.sid`, `_reqid`, `at` and cookies are session-derived
+and change per page load, so recording them would record noise that has expired
+by the time anyone reads it.
 
 ## Types
 
 No type declarations exist in this codebase: plain JavaScript (ESM in the
-worker, IIFE with `module.exports` in the extension) and Python 3 for the
-build script. The shapes below are the data contracts the measurement adds.
+worker, IIFE with `module.exports` in the extension) plus Python 3 for the build
+script. The shapes below are the data contracts this plan adds. All are plain
+JSON-serialisable objects carried in fixtures or message fields — no new runtime
+type machinery.
 
-**`PayloadCapture` — new, one sanitized observation**
+### `SubmitDiagnostic` — new, one observation from a failed submit
+
+The record that makes KAN-242 diagnosable. Emitted when `typeAndSend` reports
+success but no `StreamGenerate` is observed within a short window. Structural
+only, never prompt text.
+
+```js
+{
+  requestId: "req_<uuid>",
+  capturedAt: "2026-10-02T…Z",
+  case: "fresh-0-turn" | "short-1-turn" | "long-2plus-turn",
+  // What the page looked like at each step of typeAndSend.
+  step: {
+    fill:       { landed: true, attempts: 2, editorLength: 749, qlBlank: false },
+    sendButton: { found: true, disabled: false, matches: 1 },
+    confirm:    { userQueriesBefore: 3, userQueriesAfter: 4, rose: true }
+  },
+  // The discriminator. streamGenerateSeen is the whole point of the record:
+  // `rose: true, streamGenerateSeen: false` is the state that is currently
+  // invisible to the bridge and is the prime suspect.
+  streamGenerateSeen: false,
+  // Proportional counts only — never text, never tokens (GUARDRAILS G1.2.1).
+  dom: { modelResponses: 2, sourceChips: 0, pendingRequest: 1, thinkingDots: 1 },
+  attach: { attempted: true, ok: true, step: "select", attachedCount: 14 },
+  chipPresentBeforeSend: true
+}
+```
+
+`case` is a closed set, because the comparison is the entire point: a record
+whose `case` is a free string can be filed as "long" without saying how long, and
+the correlation with turn count is exactly what needs to be established.
+
+The two fields that carry the diagnosis are `step.confirm.rose` and
+`streamGenerateSeen`. Read together they separate state 3 (click did nothing)
+from states 1, 2 and 4 without needing any further capture.
+
+### `SubmitProbeRecord` — new, the in-page observation
+
+The extension-side shape written by `injected.js` when it sees a
+`StreamGenerate` or `batchexecute` request during a submit window.
+
+```js
+{
+  requestId: "req_<uuid>",
+  endpoint: "StreamGenerate" | "BatchExecute",
+  transport: "fetch" | "xhr",
+  buildLabel: "boq_assistant-bard-web-server_20260929.03_p0",
+  // Timestamps only. Never the URL query — it carries `at`, `f.sid` and
+  // `_reqid`, all session-derived and all expired by the time anyone reads
+  // this (G1.1.2: first-party tokens must not leave the browser).
+  observedAt: 1758000000000,
+  // The existing sanitized fingerprint, reused verbatim from
+  // decodeAndSanitizePayload → extractBoundedStructure. Not re-derived.
+  structure: [ /* extractBoundedStructure output */ ]
+}
+```
+
+This reuses `decodeAndSanitizePayload` rather than adding a second decoder. The
+project's own history is that a second source of truth about a payload is the
+defect class that keeps recurring — the DOM contract, the `/v1`–`/v2` handler,
+and the `f.req` builder itself are all instances of it.
+
+### `PayloadCapture` — carried over from the superseded plan, with one change
 
 ```json
 {
-  "captureId": "notebook-grounded-01",
-  "capturedAt": "2026-10-01T09:00:20Z",
-  "case": "grounded-notebook",
+  "captureId": "app-chip-present-01",
+  "capturedAt": "2026-10-02T09:00:20Z",
+  "case": "app-chip-present" | "app-chip-absent" | "app-chip-repeat",
   "endpoint": "StreamGenerate",
   "transport": "fetch",
   "buildLabel": "boq_assistant-bard-web-server_20260929.03_p0",
@@ -139,315 +246,528 @@ build script. The shapes below are the data contracts the measurement adds.
 }
 ```
 
-`case` is a closed set — `grounded-notebook`, `ungrounded-app`,
-`ungrounded-notebook`, `grounded-notebook-repeat` — because the whole point is
-comparing cases, and an open string would let a fifth shape appear without
-anyone noticing it was not one of the four the plan reasons about.
+**The case set is three, not four.** The superseded plan listed
+`ungrounded-notebook` as a fourth case. `1a872d6` measured that the notebook page
+does not host a conversation at all — asking there issues `GET /notebook/…` and
+then `GET /app`, spawning a new conversation under `/app/<new-id>`. Every
+conversation that has ever carried a notebook reference therefore lives under
+`/app`, and the notebook reference is a property of the **chip**, not of the
+page. So the comparison the measurement actually needs is chip-present versus
+chip-absent *within* `/app`, which is what the three cases above are.
 
-**`StructureField` — the unit of comparison**
+Keeping the obsolete fourth case in the closed set would be the same defect as
+planning a capture of a surface that cannot exist: it would let a fixture appear
+under a name that means nothing. The existing fixture's `case` value
+`ungrounded-app` is renamed to `app-chip-absent` when the second capture is
+added, and the rename is noted in the fixture's own `_note`.
 
-```js
-{
-  index: 3,
-  kind: "string" | "number" | "boolean" | "null" | "array" | "object" | "undefined",
-  length: 4096,          // strings only
-  cls: "opaque",         // strings only, from STRING_CLASS
-  nested: StructureField[]  // arrays/objects, bounded by extractBoundedStructure
-}
-```
-
-`kind` and `cls` are what make a delta attributable. KAN-195 already learned
-this the hard way: two grounded/ungrounded captures differed in a single
-top-level field, and only in its length — which is equally consistent with a
-notebook reference having appeared, having vanished, or never having been
-there and something else of similar length taking its place. Adding `cls` is
-what turned that ambiguity into one bit per field.
-
-**`FieldDelta` — what the assessment is written from**
+### `StructureField` and `FieldDelta` — carried over, unchanged
 
 ```js
-{
-  index: 7,
-  workerValue: "absent",
-  observedValue: { kind: "string", length: 45, cls: "opaque" },
+{ index: 3, kind: "string"|"number"|"null"|"array"|"object",
+  length: 2187, cls: "opaque", nested: StructureField[] }
+
+{ index: 2,
+  workerValue: "[conversationId, responseId, choiceId, null, null, []]",
+  observedValue: { kind: "null" },
   significance: "load_bearing" | "incidental" | "unknown",
-  note: "notebook id; StringClass does not classify this prefix today"
-}
+  note: "type contradiction, not a length difference" }
 ```
 
 `significance` is deliberately not derived from the delta. A field that differs
-between grounded and ungrounded is *interesting*, not *required*; only the
-capture can say which, and the plan records the judgement rather than
-inferring it mechanically.
+between chip-present and chip-absent is *interesting*, not *required*; only the
+capture can say which, and the judgement is recorded rather than inferred.
 
 ## Files
 
 ### New
 
-**`cloudflare-worker/tests/fixtures/streamgenerate-captures.json`**
+**`cloudflare-worker/tests/submit-diagnostic.test.mjs`**
 
-The persisted artefact, and the reason this plan exists. Holds the
-`PayloadCapture` records described above, in the sanitized form
-`extractBoundedStructure` produces — never a hand transcription, always the
-function's own output.
+Pins the KAN-242 diagnosis logic in isolation, against stub documents, before
+any live run. Asserts that `typeAndSend` distinguishes "the click did nothing"
+from "the click worked", because that distinction is currently absent and is
+the whole defect. Written **before** the fix, so it fails first.
 
-Four captures minimum:
+**`cloudflare-worker/tests/fixtures/submit-diagnostics.json`**
 
-| `case` | why it is needed |
-| :--- | :--- |
-| `grounded-notebook` | the shape that works |
-| `grounded-notebook-repeat` | proves the first was not a fluke |
-| `ungrounded-app` | the shape outside the notebook surface |
-| `ungrounded-notebook` | notebook page, no chip attached |
-
-The last two are what isolate the notebook's contribution from the page's. A
-comparison of only the first two cannot distinguish "the notebook field
-matters" from "any difference between those two conversations matters".
-
-**`scripts/analyze-payload-shape.mjs`**
-
-The diff. Reads the captures, reduces each to a flat list of
-`StructureField`, and prints where the worker's builder and the observed
-payload disagree — by index, by kind, and by class. Exits non-zero when the
-builder and the captures describe incompatible shapes, so it can be run in CI
-later if the team decides to hold the line.
-
-It reads `cloudflare-worker/src/index.js` for the builder rather than
-duplicating it. A script that carries its own copy of the layout it is
-checking is a second source of truth, which is the defect class this whole
-project keeps rediscovering.
+The measured records for KAN-242, one per `case` in the closed set. Sanitized:
+counts, lengths, booleans, step names. No prompt text, no answer text, no
+tokens.
 
 **`cloudflare-worker/tests/payload-shape-contract.test.mjs`**
 
-Pins the fixtures and asserts the worker builder still produces what the
-captures say the endpoint expects. Deliberately written so that **it fails
-today** — the whole finding is that they differ — with the divergence
-enumerated in the assertion message rather than merely flagged. A test that
-passes while documenting a known divergence teaches the next reader to skip
-it.
+Pins the payload fixtures and asserts the worker builder still produces what the
+captures say the endpoint expects. Deliberately written so that its divergence
+assertion **fails today** — the whole finding is that they differ — with the
+divergence enumerated in the message rather than merely flagged. A test that
+passes while documenting a known divergence teaches the next reader to skip it.
 
-Once the team decides whether direct-send is pursued, this test either gains
-a fixture for the corrected builder or is deleted. Either is fine; leaving it
-green while the shapes differ is not.
+Once the team decides whether a direct send is pursued, this test either gains a
+fixture for a corrected builder or is deleted. Either is fine; leaving it green
+while the shapes differ is not.
+
+**`scripts/analyze-payload-shape.mjs`**
+
+The diff. Reads the captures, reduces each to a flat `StructureField` list, and
+prints where the worker's builder and the observed payload disagree — by index,
+kind and class. Exits non-zero when they describe incompatible shapes, so it can
+be wired into CI later if the team decides to hold that line.
+
+It reads `cloudflare-worker/src/index.js` for the builder rather than
+duplicating it. A script carrying its own copy of the layout it is checking is a
+second source of truth, which is the defect class this project keeps
+rediscovering.
 
 **`docs/NOTEBOOK-API-FEASIBILITY.md`**
 
-The assessment. Not a design document — an honest accounting of what was
-measured, what it implies, and what remains unknown. Structure:
+The assessment. Not a design document — an accounting of what was measured, what
+it implies, and what remains unknown. Five sections: what was measured with
+capture ids; the field-by-field divergence; the context block (what is known,
+how its size moves, whether any structure was recoverable); session requirements
+and what they rule out; a verdict on reachability with the evidence for it.
 
-1. What was measured, with the capture ids.
-2. The field-by-field divergence between the worker builder and the observed
-   payload.
-3. The context block: what is known about it, how its size moves across
-   captures, and whether any structure was recoverable from it.
-4. Session requirements, and what they rule out.
-5. A verdict on reachability, with the evidence for it — not a hedge.
-
-The verdict is allowed to be "not reachable", and is likely to be. A document
-that concludes the direct path is closed is a successful outcome of this
-plan; one that concludes it is open on the strength of an unexamined
-4 KB string is not.
+The verdict is allowed to be "not reachable", and on current evidence likely is.
+A document concluding the direct path is closed is a **successful** outcome of
+this phase; one concluding it is open on the strength of an unexamined 2 KB
+string is not.
 
 ### Modified
 
-**`CHANGELOG.md`** — one `[Unreleased]` entry recording that the measurement
-was taken, what the fixtures are, and what the assessment concluded. Under
-`### Added`, since no shipped behaviour changes.
+**`cloudflare-worker/tests/production-host.test.mjs`** — add
+`SESSION_HANDOFF_2026-10-01.md` to `HISTORICAL_ALLOWLIST` with the reason "names
+the retired host explicitly as a trap to avoid, same as the 2026-09-30 handoff
+above it". The file already warns the reader at the top, which the neighbouring
+`every allowlisted file warns the reader` test verifies once it is listed.
 
-**`docs/api-spec.md`** — a short subsection under the grounding section
-pointing at the feasibility assessment, so a reader who hits the DOM
-requirement learns that the alternative was investigated rather than never
-considered.
+**`SESSION_HANDOFF_2026-10-01.md`** — two corrections, both factual:
+
+1. §1 says `tests 619 / 608 pass / 0 fail`; the true count at `11524c2` is
+   622 / 616 / **1 fail**. Correct it rather than leaving a number that will be
+   read as reassurance.
+2. §10 orders "push 2 commits" second and does not mention that the suite is
+   red, or that three commits are unpushed (`20d2e01` is also local). Correct
+   the ordering to match Phase A.
+
+**`CHANGELOG.md`** — one `[Unreleased]` entry under `### Fixed` for the KAN-242
+root cause and its fix, and one under `### Added` for the fixtures. Under
+`### Fixed` because a real production failure stops happening; the KAN-236
+assessment, if it lands, goes under `### Added` as documentation.
+
+**`PLANNING-HANDOFF.md`** — record whatever KAN-242 diagnosis finds, in the form
+GUARDRAILS G4.1.1 requires for unfinished work. No `TODO`/`FIXME` markers in
+`cloudflare-worker/src/` or `extension-cloudflare/` (G4.1.1) — if the diagnosis
+reveals something that cannot be finished now, it goes here.
+
+**`extension-cloudflare/prompt-typing.js`** — see Functions. The change is
+confined to `typeAndSend`'s confirmation step and depends on what the diagnosis
+finds.
+
+**`extension-cloudflare/injected.js`** — add the submit-window probe. Gated by
+the same runtime-flag pattern as `PAYLOAD_PROBE_SET`, console-only sink for the
+same GUARDRAILS G1.2.1 reason, defaulting to off. **No URL, no query string, no
+headers** — `matchRecognizedEndpoint` already returns only
+`{endpoint, canonicalPath, buildLabel}`, and that is all the new record carries.
+
+**`cloudflare-worker/src/index.js`** — `collectTypedAnswer` only, and only after
+the KAN-242 fix, because both changes concern the same failure and shipping them
+separately would make the changelog untellable.
 
 ### Not touched
 
-- **`cloudflare-worker/src/index.js`** — the `f.req` builder at line 150 is
-  the subject of the measurement, not its object. Changing it is the
-  end-goal work this plan deliberately does not attempt, and changing it
-  blind is what produced KAN-182's workaround in the first place.
-- **`extension-cloudflare/injected.js`** — `decodeAndSanitizePayload`,
-  `extractBoundedStructure` and `classifyString` already do the job. They are
-  read, not rewritten.
-- **`extension-cloudflare/content.js`** — the typed path works. Nothing here
-  justifies touching it.
-- **The payload probe's console-only sink** — correct under GUARDRAILS
-  G1.2.1 and explicitly load-bearing: the console is the only sink that
-  cannot persist anything. Fixtures are produced by the operator reading the
-  console and transcribing the sanitized output, not by giving the probe a
-  disk sink.
+**The `f.req` builder at `cloudflare-worker/src/index.js:150-159`** — it is the
+*subject* of the Phase D measurement, not its object. Changing it blind is what
+produced KAN-182's workaround in the first place.
+
+**`extension-cloudflare/content.js`** — `handleTypePrompt` and
+`handleCollectAnswer` are correct as written. The defect is in what
+`typeAndSend` asserts, not in how these read its result.
+
+**The payload probe's console-only sink** — correct under G1.2.1 and
+load-bearing: the console is the only sink that cannot persist anything.
+Fixtures are produced by an operator reading the console, not by giving the
+probe a disk sink.
+
+**`prompts/`** — seven untracked files with an uncommitted README whose central
+claim ("splitting does not weaken the analysis") is contradicted by the
+measurements above it. It stays untracked. Deciding its fate is a separate task
+that needs its own evidence, not a footnote to this one.
 
 ## Functions
 
-### New: `flattenStructure(structure)`
+### New: `describeSubmitState(doc, probeRecord)`
 
-`scripts/analyze-payload-shape.mjs`. Walks `extractBoundedStructure` output
-into a flat array of `StructureField` keyed by path, so two captures can be
-compared positionally. Returns `Map<string, StructureField>` keyed by
-`"[3]"`, `"[3].children[0]"`, and so on.
+`extension-cloudflare/prompt-typing.js`. Pure classification of the submit
+window from two inputs: the DOM after `typeAndSend` returns, and the probe
+record (or its absence). Returns one of:
 
-Paths rather than bare indices, because the divergence that matters is
-nested — a top-level index comparison would report "field 7 differs" and
-leave the reader unable to tell which of seven things at that index moved.
+`"request_issued"` · `"transcript_grew_without_request"` ·
+`"editor_did_not_hold"` · `"no_send_button"` · `"no_record_yet"`
 
-### New: `describeWorkerBuilder(source)`
+`"transcript_grew_without_request"` is the state that is currently
+indistinguishable from success, and naming it is the point of this function.
+`doc` and `probeRecord` are injected so the whole matrix is testable with stubs
+and no browser.
 
-Same file. Extracts the array literal that `index.js` passes to
-`JSON.stringify` at the `f.req` construction site and returns it in
-`StructureField` form, so worker and observed shapes go through one
-comparison path.
+### New: `waitForSubmitSignal(requestId, timeoutMs)`
 
-Parsing by regex is fragile enough to be a smell, and this is where it is
-still the right trade: the alternative is evaluating worker source, which is
-worse. The extractor matches on the comment that introduces it
-(`// โครงสร้าง f.req array ของ Google Web RPC`) plus the enclosing
+`extension-cloudflare/prompt-typing.js`. Waits for a `SUBMIT_PROBE` message from
+the MAIN world within a short window — 3 s is the working figure, since the
+network call is issued synchronously with the click. Resolves `null` on timeout
+rather than rejecting, because "nothing observed yet" is a legitimate answer and
+must not throw.
+
+If the diagnosis shows the click is reliable and only the *answer* is missing,
+this function is deleted instead of shipped. The plan does not assume it will
+survive.
+
+### New: `handleSubmitProbe(msg)`
+
+`extension-cloudflare/content.js`. Receives `SUBMIT_PROBE` from the MAIN world,
+tags it with `requestId` and `case`, appends it to the in-page diagnostic
+buffer, and — when `case` is set — sends the whole `SubmitDiagnostic` to the
+worker along with `TYPE_PROMPT_RESULT`. A pure pass-through otherwise.
+
+### New: `probeRecordForSubmit(matched, transport, requestStructure)`
+
+`extension-cloudflare/injected.js`. Wraps the existing
+`probeRecord(...)` / `logProbeRecord(...)` pair to also emit a `SUBMIT_PROBE`
+`postMessage` while a submit window is open. Reuses `decodeAndSanitizePayload`
+and `extractBoundedStructure` unchanged.
+
+### New: `recordSubmitDiagnostic(record)`
+
+`cloudflare-worker/src/index.js`. Appends the sanitized `SubmitDiagnostic` to a
+bounded ring buffer on the DO instance and makes it readable via
+`check_bridge_health`. Five entries is enough — one per turn — and storing the
+last few failures is what turns "it failed again" from an unreproducible report
+into a comparison.
+
+### New: `flattenStructure`, `describeWorkerBuilder`, `diffShapes`, `assessReachability`
+
+All four in `scripts/analyze-payload-shape.mjs`, carried over unchanged from the
+superseded plan. One refinement: `describeWorkerBuilder` matches on the
+`// โครงสร้าง f.req array ของ Google Web RPC` comment plus the enclosing
 `return JSON.stringify([null, …])`, and **fails loudly** when it cannot find
-it rather than returning an empty list that would compare as "no
-differences".
+them rather than returning an empty list — because "found nothing" and "found
+nothing to compare" would otherwise look identical, which is the exact failure
+mode of a measurement tool reporting no differences.
 
-### New: `diffShapes(worker, observed)`
+### Modified: `typeAndSend(opts)`
 
-Same file. Returns `FieldDelta[]`, sorted by index. Pure — no I/O — so it can
-be unit-tested against hand-built shapes without a capture.
+`extension-cloudflare/prompt-typing.js`. The change is confined to the
+confirmation step, and **what it becomes depends on the Phase B diagnosis**:
 
-### New: `assessReachability(deltas, contextBlockObservations)`
+- **State 3** (transcript grew, no request): replace the `countUserQueries`
+  check with `describeSubmitState(...)` and fail fast with
+  `prompt_not_submitted_reason=transcript_grew_without_request` instead of
+  reporting `ok: true` and waiting 120 s for an answer to a request never made.
+  This alone converts a 120-second timeout into an immediate, accurate error,
+  whatever the underlying cause turns out to be.
+- **States 1 and 2**: these already fail with `prompt_text_not_applied` /
+  `send_button_not_found`; the fix is upstream in the editor or button handling
+  and the diagnostic is what identifies which.
+- **State 4**: nothing changes here, and the fix belongs in Phase C's timer work
+  or is recorded as a Gemini-side behaviour.
 
-`scripts/analyze-payload-shape.mjs`, or a companion module if it grows.
-Turns the measurement into the verdict section of the assessment. Its input is
-explicit so the verdict can be re-derived when new captures land, rather than
-being prose that has to be rewritten by hand.
+In every case `responsesBefore` continues to be sampled **before** the click. It
+is the attribution baseline and KAN-182 depends on it.
 
-### Modified
+### Modified: `collectTypedAnswer({ requestId, timeoutMs, responsesBefore })`
 
-None. No function in `cloudflare-worker/src/` or `extension-cloudflare/`
-changes under this plan.
+`cloudflare-worker/src/index.js:2152`. Two known-incomplete items from
+`[4.7.24]`, both real and both fixed here — *after* the KAN-242 change and in
+the same commit, so the changelog describes one failure rather than two:
+
+1. The flat 120 s timer becomes idle-aware, mirroring the split
+   `waitForResponseChange` already uses on the extension side. The hard cap
+   stays, so a page stuck showing a spinner forever still fails rather than
+   hangs.
+2. `lastCollectedResponseCount` is read on the timeout path although it is only
+   written when a `COLLECT_ANSWER_RESULT` arrives — so it is always `0` there,
+   and the message reports `responses on screen=0` when the page held 5. The fix
+   is a periodic count message from the extension while collection is in flight,
+   so the number is live rather than remembered.
+
+Neither of these fixes KAN-242. They are in this plan because they are already
+diagnosed, already documented as incomplete, and sitting in the same code path a
+reader will be looking at. Doing them here rather than leaving them for a third
+session is the point.
+
+### Modified: `classifyString(str)`
+
+`extension-cloudflare/injected.js`. **Not yet** — one specific change, gated on
+the Phase D chip-absent capture confirming the hypothesis:
+
+`STRING_CLASS.NOTEBOOK_REF` matches `"notebook://"`, with a scheme separator. The
+payload carries `"notebooks/"`, without one, so a notebook reference classifies
+as `OPAQUE`. That is why KAN-195 could see only a *length* difference between
+grounded and ungrounded captures — the one bit that would have settled it was
+being thrown away by the classifier.
+
+The fix is to match the prefix actually on the wire. It is gated because it is
+currently a **hypothesis**, and widening an allowlist that is the last thing
+standing between a prompt and a persisted fixture is exactly the change that
+should not be made on a hunch. The canary in `payload-classifier.test.mjs` must
+be re-run and must still fail on any attempt to retain content.
 
 ### Removed
 
-None.
+None. `sendButtonFallback` is the one candidate — see Phase E — and even there
+the plan is to record the evidence and decide, not to delete on a hunch.
 
 ## Classes
 
-None. The codebase is procedural where this plan touches: the worker exposes
-a Durable Object class (`GeminiBridgeDO`) and the extension uses IIFEs with a
-registry `Map` (`model-adapter.js:17`). The analysis script is a module with
-functions and no state beyond its two inputs.
+None added. None removed.
+
+The worker exposes one Durable Object class (`GeminiBridgeDO`,
+`cloudflare-worker/src/index.js`) and the extension uses IIFEs with a registry
+`Map` (`extension-cloudflare/model-adapter.js:17`). Everything this plan adds is
+procedural: four functions in `scripts/analyze-payload-shape.mjs`, four in the
+extension files, one bounded ring buffer on the DO instance.
+
+`GeminiBridgeDO` gains **data**, not behaviour: `this.submitDiagnostics`, a
+5-entry ring of sanitized `SubmitDiagnostic` records, and one line in the health
+payload exposing it. Nothing about how it executes changes.
 
 ## Dependencies
 
-None added. No package changes, no version bumps of existing packages.
+**None added.** No package changes, no version bumps. This plan adds a JSON
+fixture, one analysis script, and four functions to files that already exist.
 
 The script uses `node:fs`, `node:path` and `node:url` — the same three
 `build-stamp.test.mjs` already uses, and the direct precedent for a script in
-this repo that reads source rather than importing it.
+this repo that reads source rather than importing it. The tests use `node:test`,
+`node:assert/strict` and `node:module`, matching every other file in
+`cloudflare-worker/tests/`.
 
-The tests use `node:test`, `node:assert/strict` and `node:module`, matching
-every other test file in `cloudflare-worker/tests/`.
+**Capture needs Kapture**, which is already installed and already has
+`network_monitor` and `console_logs`. No new integration is introduced — and that
+matters, because the capture is a browser-side act no test can perform.
 
-The capture itself needs Kapture, which is already installed and already has
-`network_monitor` and `console_logs`. **No new integration is introduced** —
-and that matters, because the capture is a browser-side act that no test can
-perform.
+**Two operational dependencies, not code ones:**
+
+- `twg` must be authenticated for `twg jira workitem get KAN-242`. Auth comes
+  from `~/.config/twg/auth.conf`; do **not** `source ~/.zshrc` to get it.
+- The extension build must be current before a live run means anything:
+  `python3 scripts/build-extension.py --verify`, then reload at
+  `chrome://extensions`. A worker deploy does not touch the extension.
 
 ## Testing
 
-**The contract test** — `payload-shape-contract.test.mjs` asserts four
-things, and the first is expected to fail today:
+**`submit-diagnostic.test.mjs`** — asserts the state matrix, all five branches,
+against stub documents:
 
-1. every capture in the fixture parses and names a `case` from the closed set
-2. `grounded-notebook` and `grounded-notebook-repeat` produce the same shape
-   at the indices that carry the prompt and the notebook reference — this is
-   what makes the first capture trustworthy rather than a one-off
+1. probe record present + `user-query` rose → `request_issued`
+2. `user-query` rose, no probe record → `transcript_grew_without_request`
+3. editor `ql-blank` after fill → `editor_did_not_hold`
+4. no enabled send button → `no_send_button`
+5. probe window not yet elapsed → `no_record_yet`
+
+Case 2 is the one that matters and the one with no coverage today. It is pinned
+from both directions: with the fix it must be reported as a failure, and a
+mutation that makes it report `ok: true` must be observed to fail the test.
+
+**`collect-typed-answer-deadline.test.mjs`** — extended for the idle-aware
+worker timer, in the same style as the existing extension-side tests: it must
+slide for a live generation and still stop for a dead one. The count-on-timeout
+fix gets its own assertion: a timeout with the extension reporting 5 must render
+`responses on screen=5`, not 0.
+
+**`payload-shape-contract.test.mjs`** — four assertions, the first expected to
+fail today:
+
+1. every capture parses and names a `case` from the **three**-element closed set
+2. `app-chip-present` and `app-chip-repeat` produce the same shape at the
+   indices carrying the prompt and the notebook reference — this is what makes
+   the first capture trustworthy rather than a one-off
 3. `flattenStructure` of the observed captures and of the worker builder
-   disagree at a non-empty set of indices, and the expected set is pinned so
-   the day someone fixes the builder, the test says so
-4. no string in any capture has `cls` other than a value from `STRING_CLASS`,
-   and none retains its content
+   disagree at a non-empty set of indices, and the expected set is pinned so the
+   day someone fixes the builder, the test says so
+4. no string in any capture has a `cls` outside `STRING_CLASS`, and none retains
+   its content
 
 Point 4 restates the canary at the fixture level. `payload-classifier.test.mjs`
 proves the function is safe; this proves the *output that ships* is safe, which
 is the thing that actually reaches the repo.
 
 **The analysis script's own tests** — `diffShapes` and `describeWorkerBuilder`
-pinned against hand-built shapes, so a bug in the comparison is not mistaken
-for a finding about the payload. This distinction is the whole point: the
-analysis tool is the only thing standing between a capture and a conclusion,
-and it gets tested like one.
+pinned against hand-built shapes, so a bug in the comparison is not mistaken for
+a finding about the payload. This distinction is the whole point: the analysis
+tool is the only thing standing between a capture and a conclusion, and it gets
+tested like one.
 
-**Mutation checks.** The project's standing practice, and it applies here for
-a specific reason — the failure mode of a measurement plan is a tool that
-reports no differences:
+**Mutation checks.** The project's standing practice, applied here for a
+specific reason — the failure mode of a measurement plan is a tool that reports
+no differences:
 
-- make `diffShapes` compare only the first five indices → must surface a
-  deliberate out-of-range delta in the fixture and go red
-- make `flattenStructure` key by bare index instead of path → the nested
-  divergence must stop being attributed correctly
-- delete the notebook-reference field from a `grounded-notebook` capture →
-  the grounded/ungrounded comparison test must fail, proving the fixtures are
+- make `describeSubmitState` return `request_issued` whenever `user-query` rose
+  → the state-2 test must go red
+- truncate `diffShapes` to the first five indices → a deliberate out-of-range
+  delta in the fixture must surface
+- key `flattenStructure` by bare index instead of path → nested divergence must
+  stop being attributed correctly
+- delete the notebook-reference field from an `app-chip-present` capture → the
+  chip-present/chip-absent comparison test must fail, proving the fixtures are
   what the conclusion rests on
-- replace the source-extraction failure with an empty shape → the extractor
-  test must fail, because "found nothing" and "found nothing to compare" look
+- replace the source-extraction failure with an empty shape → the extractor test
+  must fail, because "found nothing" and "found nothing to compare" look
   identical otherwise
+- add a substring to `classifyString` output → the existing canary must fail
 
 **Stated plainly.** Nothing here verifies that Gemini behaves correctly, and
-nothing here verifies that a direct call is possible. It verifies that the
-shape of the real request is recorded, that the worker's builder does not
-match it, and that the analysis tool reporting that is itself correct. The
-last of those three is the one a reader is most entitled to distrust, which is
-why its mutations are listed explicitly.
+nothing here verifies that a direct call is possible. It verifies that the shape
+of the real request is recorded, that the worker's builder does not match it,
+and that the analysis tool reporting that is itself correct. The last of those
+three is the one a reader is most entitled to distrust, which is why its
+mutations are listed explicitly.
 
-**Regression.** `cd cloudflare-worker && npm test` — currently 622 tests /
-617 pass / 0 fail / 5 skipped. This plan adds no production behaviour, so
-the count must not change; any movement is a mistake, not an improvement.
+**Regression.** `cd cloudflare-worker && npm test` must go from
+622/616/**1 fail** to 622/**617 pass**/0 fail. Phase A moves the pass count by
+exactly one and the fail count to zero; no other phase may move the total. Any
+movement beyond that is a mistake, not an improvement.
 
 ## Implementation Order
 
-1. **Capture, do not analyse.** Enable the payload probe through the page
-   (`PAYLOAD_PROBE_SET`), ask one question per case in the four cases above,
-   and read the sanitized records from the browser console. Transcribe the
-   `extractBoundedStructure` output **verbatim** into
-   `streamgenerate-captures.json`. Nothing is interpreted at this stage —
-   interpretation before the raw record exists is how the earlier sessions
-   produced three wrong conclusions in a row.
+### Phase A — Risk, before anything else (≈20 min, no code)
 
-2. **Write the fixture test first.** `payload-shape-contract.test.mjs` with
-   points 1, 2 and 4. It should pass; if it does not, the capture was
-   transcribed wrong and the answer is to re-read the console, not to relax
-   the assertion.
+Everything here is already-done harm being tidied, and none of it needs a
+browser.
 
-3. **Build the analysis script.** `flattenStructure`, then
-   `describeWorkerBuilder`, then `diffShapes`. Unit-test the first and third
-   before wiring the second to the real source.
+1. **Rotate the GitHub PAT.** It leaked into a transcript while inspecting a
+   config file. Revoke the old one and issue a new one; do not print the new one
+   either. Highest priority in this plan precisely because it is the only item
+   where the damage is already done and still growing.
+2. **Verify KAN-242 exists** — `twg jira workitem get KAN-242`. If it does not,
+   create it and use the returned key. Every later commit cites this.
+3. **Make the suite green.** Add `SESSION_HANDOFF_2026-10-01.md` to
+   `HISTORICAL_ALLOWLIST` in `production-host.test.mjs` with its reason. Re-run
+   `npm test`; expect 617 pass, 0 fail.
+4. **Correct the two factual errors** in `SESSION_HANDOFF_2026-10-01.md` §1 and
+   §10 (test counts; push ordering).
+5. **Push the three commits.** `cd cloudflare-worker && npm test` first — the
+   governance rule is 0 fail, so this is now satisfied. `pre-push` will ask Jira
+   about KAN-236 on all three, which is correct and should pass.
 
-4. **Run the diff and write down what it says** — before deciding what it
-   means. The delta table goes into the assessment as a table.
+Nothing else starts until this phase is done and the tree is clean.
 
-5. **Characterise the context block.** Across the four captures: does its
-   length move? Does it move with the number of prior turns, with the page,
-   or not at all? A block that is byte-identical across a one-turn and a
-   six-turn conversation is not conversation state. This step decides
-   whether step 7 has a subject.
+### Phase B — Diagnose KAN-242 (needs a focused Gemini tab)
 
-6. **Add the contract test's divergence assertion** and confirm it fails for
-   the reason stated in the assertion message. If it fails for another
-   reason, the tool is wrong and step 3 is not finished.
+**Measure first. This phase produces a record, not a fix.**
 
-7. **Run the four mutations.** Each observed to fail, then reverted.
+6. Build the extension if the source moved, `--verify`, reload at
+   `chrome://extensions`.
+7. Enable the submit probe. Run `horo_consult` against **three** conversations
+   in order: a fresh `/app`, a 1-turn conversation, and a 2+ turn conversation.
+   Read the `SubmitDiagnostic` from `check_bridge_health` after each.
+8. Clear the Kapture network buffer **before** each run and read it in
+   intervals, not once at the end — the previous session's missed capture came
+   from reading it once. The buffer rotates at 2000 entries.
+9. Fill `submit-diagnostics.json` with one record per `case`.
+10. **State the root cause in one sentence, and stop.** Four possibilities, four
+    different fixes, and two of them are not fixes at all. If the evidence points
+    at state 4 — the request went out and Gemini declined — then the typed path
+    is behaving correctly and the problem is upstream in Gemini, which is a
+    finding to record, not a defect to patch.
 
-8. **Write `docs/NOTEBOOK-API-FEASIBILITY.md`.** Steps 1–6 are its evidence.
-   The verdict comes last and may be negative.
+If the three conversations cannot be produced on demand, record that as the
+finding and stop. A fabricated `submit-diagnostics.json` is worse than an absent
+one, and the project's own history has three wrong conclusions in a row from
+incomplete data.
 
-9. **Full suite** with the count unchanged at 617 passing, `node --check` on
-   every new file, and the measured numbers stated rather than the expected
-   ones.
+### Phase C — Fix KAN-242 and the two known-incomplete timers (≈half a day)
 
-Step 1 needs the browser and a focused Gemini tab, and step 5's question —
-whether the context block tracks conversation length — needs a conversation
-that has already accumulated turns. Both need the operator. Everything from
-step 2 runs in `npm test` with no browser.
+11. Write `submit-diagnostic.test.mjs` **first**, against the state matrix. It
+    passes for states 1, 3, 4, 5 and fails for state 2 until the fix lands.
+12. Implement `describeSubmitState`, `waitForSubmitSignal`, `handleSubmitProbe`,
+    `probeRecordForSubmit`, `recordSubmitDiagnostic`.
+13. Apply the `typeAndSend` fix for whichever state Phase B identified.
+14. Make `collectTypedAnswer`'s timer idle-aware, with the hard cap retained;
+    add the live response count so the timeout message stops printing 0.
+15. Extend `collect-typed-answer-deadline.test.mjs` for both.
+16. Run the two Phase C mutations. Each observed to fail, then reverted.
+17. `CHANGELOG.md` under `[Unreleased]` → `### Fixed`. **One entry covering the
+    root cause** — not three entries describing three symptoms of it.
+18. **Live verification before deploying.** Reload the extension, run the 2+ turn
+    conversation that reproduces the failure, confirm it now either succeeds or
+    fails fast with an accurate reason. A worker deploy does not carry an
+    extension change, so the extension must be reloaded and the run repeated with
+    both sides current. Only then bump the version and deploy.
 
-The plan halts at step 8. It does not proceed to attempt a direct call,
-because reaching one is a separate decision that needs the verdict from step
-8 first, and possibly a different approach entirely — the measured fact that
-the request is session-bound points at keeping the browser in the loop and
-replacing only the DOM scraping, which is a smaller change than the one this
-plan is scoping.
+### Phase D — Finish the KAN-236 measurement (needs a focused Gemini tab)
+
+19. Capture the **chip-absent** half: an `/app` turn with no chip attached.
+    `horo_consult` can never produce this — attaching is its job — so it is a
+    manual ask with the probe enabled.
+20. Capture the **chip-repeat** half: a second turn in the same conversation, to
+    see whether the context block grows within one conversation rather than only
+    across conversations.
+21. Transcribe both **verbatim** from `extractBoundedStructure` output. Never
+    from a raw network body.
+22. Write `payload-shape-contract.test.mjs` assertions 1, 2 and 4. These should
+    pass. If they do not, the capture was transcribed wrong and the answer is to
+    re-read the console, not to relax the assertion.
+23. Build `scripts/analyze-payload-shape.mjs` — `flattenStructure`, then
+    `describeWorkerBuilder`, then `diffShapes`. Unit-test the first and third
+    before wiring the second to the real source.
+24. Run the diff and **write down what it says** before deciding what it means.
+25. Characterise the context block across the captures: does its length move
+    with turn count, with the page, or not at all? A block byte-identical across
+    a one-turn and a six-turn conversation is not conversation state.
+26. Add assertion 3 and confirm it fails **for the reason stated in the assertion
+    message**. A different failure means the tool is wrong and step 23 is not
+    finished.
+27. Only now: if step 25 shows the context block is reconstructible from known
+    inputs, change `classifyString` to match `"notebooks/"` and re-run the
+    canary. If it does not, leave the classifier alone and record why.
+28. Write `docs/NOTEBOOK-API-FEASIBILITY.md`. Steps 19–26 are its evidence; the
+    verdict comes last and may be negative.
+
+### Phase E — KAN-231 fixture gap (≈30 min, no browser)
+
+29. `sendButtonFallback` matched **zero** elements in every captured state,
+    including the one where the primary selector found an enabled button. The
+    DOM contract already records this honestly as `observed: false` with
+    `unobservedBecause`. The gap is that it stays in `prompt-typing.js` as a
+    fallback that provides none.
+30. Decide with evidence, and record the decision either way:
+    - capture a state on another Gemini build where it does match → it stays,
+      now honestly earned; or
+    - confirm it matches nothing anywhere reachable → remove it and drop
+      `prompt.send_button_fallback` from the contract, so the corpus stops
+      carrying a signal that is decoration.
+31. `prompts/` — leave untracked. Its README asserts "splitting does not weaken
+    the analysis" directly above the measurement that contradicts it. Deciding
+    its fate needs its own evidence, not a footnote here.
+
+### Phase F — Close out
+
+32. Full suite: **617 pass, 0 fail, 5 skipped**, total 622 unchanged.
+33. `node --check` on every touched JS file.
+34. `python3 scripts/build-extension.py --verify` current.
+35. `PLANNING-HANDOFF.md` updated with whatever remains open — the KAN-236
+    verdict if it is negative, the KAN-231 decision if unresolved, and anything
+    Phase B could not determine.
+36. Report the measured numbers, not the expected ones. If something did not
+    work, say so here rather than in a commit message nobody reads.
+
+### What each phase needs
+
+| phase | operator | browser | `npm test` |
+| :--- | :--- | :--- | :--- |
+| A risk | yes (Jira, PAT) | no | must go 617/0 |
+| B diagnose | yes | **yes** | no |
+| C fix | no | yes, for live verification | adds tests |
+| D measure | yes | **yes** | adds tests |
+| E fixtures | yes (one capture) | possibly | changes contract |
+| F close | no | no | 617/0 |
+
+Phases B and D need a focused Gemini tab and cannot run in parallel — both drive
+the same tab. Phase C's steps 11–16 need neither and can be done while waiting.
+
+The plan halts at Phase D step 28. It does not attempt a direct
+`StreamGenerate` call, because reaching one needs the verdict from step 28
+first, and the measured fact that the request is session-bound points at keeping
+the browser in the loop and replacing only the DOM scraping — a smaller change
+than the one this plan is scoping, and the one to evaluate next.
+fixable from the bridge at all.
