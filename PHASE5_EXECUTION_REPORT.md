@@ -1,5 +1,14 @@
 # Phase 5 Integration Test Report — Production Only
 
+> ## ⚠️ HISTORICAL — records the pre-migration host
+>
+> `Worker:` below is `gemini-web-bridge.pansakorn-pho.workers.dev` because that
+> is the host this run actually exercised on 2026-09-27, and the report is kept
+> verbatim as evidence. Production has since moved to
+> `https://prod.gemini-web-bridge.workers.dev` (`fa97a5d`); that old host is now
+> permanently `DISCONNECTED`. For current endpoints see
+> [`docs/client-configs.md`](../docs/client-configs.md).
+
 ## Overview
 Date: 2026-09-27
 Worker: `gemini-web-bridge.pansakorn-pho.workers.dev`

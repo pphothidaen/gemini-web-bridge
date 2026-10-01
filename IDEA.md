@@ -54,7 +54,7 @@ Gemini Web Bridge คือระบบเกตเวย์และสะพ�
 3.2 Transport Protocol Summary
 
 Extension ↔ Worker:
-  - WSS (WebSocket Secure) ผ่าน wss://gemini-web-bridge.pansakorn-pho.workers.dev/bridge
+  - WSS (WebSocket Secure) ผ่าน wss://prod.gemini-web-bridge.workers.dev/bridge
   - ใช้ content.js ใน Isolated World สร้าง WebSocket connection
   - ข้าม CSP ได้เนื่องจาก content script อยู่ใน Extension context ไม่อยู่ภายใต้ CSP ของหน้าเว็บ
   - Reconnect อัตโนมัติด้วย Exponential Backoff (1s → 30s cap)
@@ -93,7 +93,7 @@ ping: ตรวจสอบสถานะการเชื่อมต่อ�
 
 4.2 มาตรฐานโปรโตคอลที่รองรับ
 Model Context Protocol (MCP): รองรับ Streamable HTTP Transport (JSON-RPC 2.0 over HTTPS)
-OpenAI API Standard: รองรับโมเดล gemini-web และ gemini-web-thinking ทั้งแบบ JSON Response ปกติ และ Real-time SSE Streaming (data: [DONE])
+OpenAI API Standard: รองรับโมเดลทั้งหมดที่ค้นพบจาก browser tab ในขณะนั้น (ดู `GET /v1/models` — catalog เป็น dynamic ไม่มีค่าคงที่) ทั้งแบบ JSON Response ปกติ และ Real-time SSE Streaming (data: [DONE])
 
 4.3 Client Compatibility Matrix
 ┌──────────────────┬───────────────┬─────────────────┬────────────────────┐
@@ -115,34 +115,34 @@ OpenAI API Standard: รองรับโมเดล gemini-web และ gemi
 
 5.1 Gemini Spark
 ติดตั้งในฐานะ Custom App (@geminiwebbridge) ผ่าน Remote MCP URL:
-  URL: https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp
+  URL: https://prod.gemini-web-bridge.workers.dev/mcp
   Auth: Bearer Token (REPLACE_WITH_GITHUB_SECRET_CLIENT_API_KEY)
 
 5.2 Hermes Agent (Nous Research) — [✅ PRODUCTION READY]
 ตั้งค่าใน ~/.hermes/config.yaml และทดสอบรันสำเร็จ:
   model:
-    default: gemini-web-thinking
+    default: <model id from GET /v1/models>   # เปลี่ยนทุกครั้งที่ catalog เปลี่ยน
     provider: gemini-web-bridge
-    base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
+    base_url: https://prod.gemini-web-bridge.workers.dev/v1
     api_key: REPLACE_WITH_GITHUB_SECRET_CLIENT_API_KEY
   mcp_servers:
     gemini-web-bridge:
-      url: https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp
+      url: https://prod.gemini-web-bridge.workers.dev/mcp
       headers:
         Authorization: "Bearer REPLACE_WITH_GITHUB_SECRET_CLIENT_API_KEY"
 
 5.3 Cursor / Cline
 ตั้งค่าใน Settings → Models:
-  Base URL: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1
+  Base URL: https://prod.gemini-web-bridge.workers.dev/v1
   API Key: <CLIENT_API_KEY>
-  Model: gemini-web-thinking
+  Model: <model id from GET /v1/models>   # ดูค่า default_recommended ที่ /v1/models คืนมา
 
 5.4 Claude Code
 ตั้งค่าใน MCP config:
   {
     "mcpServers": {
       "gemini-web-bridge": {
-        "url": "https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp",
+        "url": "https://prod.gemini-web-bridge.workers.dev/mcp",
         "headers": { "Authorization": "Bearer <CLIENT_API_KEY>" }
       }
     }

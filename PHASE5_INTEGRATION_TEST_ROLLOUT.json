@@ -1,4 +1,5 @@
 {
+  "_note": "HISTORICAL / ASPIRATIONAL — none of the hosts below are live. 'gemini-web-bridge-staging.pansakorn-pho.workers.dev' was never deployed as a staging worker (KAN-130: production only). 'gemini-web-bridge.pansakorn-pho.workers.dev' was the pre-migration production host, retired by fa97a5d and now permanently DISCONNECTED. Current production is https://prod.gemini-web-bridge.workers.dev — see docs/client-configs.md. This file is kept as the Phase 5 test-plan record; do not copy endpoints out of it.",
   "test_scenarios": [
     {
       "id": "TS-001",

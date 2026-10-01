@@ -21,6 +21,22 @@
 **Canonical host:** `https://prod.gemini-web-bridge.workers.dev`
 **Stale host (do NOT use):** `gemini-web-bridge.pansakorn-pho.workers.dev` — v4.4.3, DISCONNECTED. Left as a rollback target by the account migration in `fa97a5d`. It still returns 200 and still lists 9 tools, so **a wrong host fails silently** — only the `version` in `/health` reveals it.
 
+> **Corrected 2026-10-01 (KAN-223).** The "Cline config → canonical host" row above
+> was **not true** when written: `~/.cline/data/settings/cline_mcp_settings.json`
+> was still pointing at `gemini-web-bridge.pansakorn-pho.workers.dev/mcp/`. It
+> surfaced as an apparently-broken `/v1/models` (`data: []`, `status:
+> "disconnected"`) — which is the *correct* answer from the retired host, not a
+> defect. Repointed to `https://prod.gemini-web-bridge.workers.dev/mcp` and
+> verified `tools/list` → 200 with all 9 tools.
+>
+> The lesson generalises past that one file, and is now enforced:
+> `cloudflare-worker/tests/production-host.test.mjs` fails if any committable
+> file names the retired host outside an explicit, reasoned allowlist. At the
+> time of the sweep 15 tracked files did — including copy-pasteable config in
+> `IDEA.md` and the runbook in `docs/SECURITY_TOKEN_ROTATION.md`. A client
+> pointed at any of them fails *silently*, which is why this went unnoticed
+> until someone read a response body.
+
 ---
 
 ## สิ่งที่ทำใน session นี้

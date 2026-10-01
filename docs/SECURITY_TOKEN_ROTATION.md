@@ -105,25 +105,25 @@ Then, in Chrome:
 # old client token must now be rejected
 curl -s -o /dev/null -w '%{http_code}\n' \
   -H "Authorization: Bearer <OLD_CLIENT_TOKEN>" \
-  https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/models      # expect 401
+  https://prod.gemini-web-bridge.workers.dev/v1/models                 # expect 401
 
 # new client token must work
 curl -s -o /dev/null -w '%{http_code}\n' \
   -H "Authorization: Bearer <NEW_CLIENT_TOKEN>" \
-  https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/models      # expect 200
+  https://prod.gemini-web-bridge.workers.dev/v1/models                 # expect 200
 
 # old bridge token must be rejected on the WS upgrade
 curl -s -o /dev/null -w '%{http_code}\n' \
   -H "Upgrade: websocket" -H "Connection: Upgrade" \
   -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-  "https://gemini-web-bridge.pansakorn-pho.workers.dev/bridge?token=<OLD_BRIDGE_TOKEN>&instanceId=<uuid-v4>"
+  "https://prod.gemini-web-bridge.workers.dev/bridge?token=<OLD_BRIDGE_TOKEN>&instanceId=<uuid-v4>"
 # expect 401 (NOT 101)
 ```
 
 Also confirm `/health` still reports the current release and a live extension:
 
 ```bash
-curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/health | head -20
+curl -s https://prod.gemini-web-bridge.workers.dev/health | head -20
 ```
 
 ## 5. Optional: history purge (only AFTER rotation)

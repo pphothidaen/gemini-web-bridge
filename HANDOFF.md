@@ -3,9 +3,16 @@
 > ## ⚠️ START HERE INSTEAD → [`docs/HANDOFF-NEXT-SESSION.md`](docs/HANDOFF-NEXT-SESSION.md)
 >
 > **This file is stale.** It describes `v4.4.3`, 95 tests, and a production host
-> (`gemini-web-bridge.pansakorn-pho.workers.dev`) that is **not** the current
-> one. As of 2026-09-29 the project is on `v4.7.9`, 409 tests, and
+> (`gemini-web-bridge.pansakorn-pho.workers.dev`) that is **no longer** the
+> current one. That host was retired by the Cloudflare account migration in
+> `fa97a5d`; it is kept only as a rollback target, its extension is permanently
+> `DISCONNECTED`, and its `/v1/models` always returns `data: []`. As of
+> 2026-09-29 the project is on `v4.7.9`, 409 tests, and
 > `https://prod.gemini-web-bridge.workers.dev`.
+>
+> The endpoints below have been swept to the canonical host so nothing here can
+> be copy-pasted into a broken config, but the surrounding text still describes
+> the v4.4.3 world.
 >
 > Treat the sections below as background on the architecture only. For the
 > current state, the commands, the operational gotchas and the open work, use
@@ -298,7 +305,7 @@ sequenceDiagram
 
 ## 4. คู่มือการใช้งาน Remote MCP Tools ทั้ง 8 รายการ
 
-Remote Model Context Protocol (MCP) ให้บริการที่ Endpoint `POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp` พร้อมรองรับทั้ง JSON-RPC 2.0 แบบ Single POST และ Streamed SSE Session
+Remote Model Context Protocol (MCP) ให้บริการที่ Endpoint `POST https://prod.gemini-web-bridge.workers.dev/mcp` พร้อมรองรับทั้ง JSON-RPC 2.0 แบบ Single POST และ Streamed SSE Session
 
 ### 4.1 รายการเครื่องมือและ Input Schemas
 
@@ -319,7 +326,7 @@ Remote Model Context Protocol (MCP) ให้บริการที่ Endpoin
 
 #### ตัวอย่าง 1: ตรวจสอบ Ping และ Scope ปัจจุบัน (`ping`)
 ```bash
-curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
+curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -359,7 +366,7 @@ HoroConsultant project (`.env`) กำหนดค่าให้ใช้งา
 | ตัวแปร | ค่า (redacted) | หน้าที่ |
 |---|---|---|
 | `GEMINI_WEB_BRIDGE_ENABLED` | `true` | เปิดใช้งาน bridge route |
-| `GEMINI_WEB_BRIDGE_URL` | `gemini-web-bridge.pansakorn-pho.workers.dev` | Cloudflare Worker endpoint |
+| `GEMINI_WEB_BRIDGE_URL` | `prod.gemini-web-bridge.workers.dev` | Cloudflare Worker endpoint |
 | `GEMINI_WEB_BRIDGE_TOKEN` | 46 chars | Bearer token (CLIENT_API_KEY) |
 | `GEMINI_WEB_BRIDGE_SCOPE` | `notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0` | เลือก NotebookLM channel |
 | `GEMINI_WEB_BRIDGE_TOOL` | `horo_consult` | MCP tool name |
@@ -371,7 +378,7 @@ HoroConsultant project (`.env`) กำหนดค่าให้ใช้งา
 
 #### ตัวอย่าง 2: กำหนด Scope ไปยัง NotebookLM (`set_bridge_scope`)
 ```bash
-curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
+curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -389,7 +396,7 @@ curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
 
 #### ตัวอย่าง 3: สั่งวิเคราะห์สถาปัตยกรรมภายใต้ Scope ของ NotebookLM (`sdlc_solution_architect`)
 ```bash
-curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
+curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -581,7 +588,7 @@ CREATE TABLE tool_executions (
 3. คลิกปุ่ม **Load unpacked (โหลดส่วนขยายที่คลายการบีบอัดแล้ว)**
 4. เลือกโฟลเดอร์โครงการ: `/Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare`
 5. คลิกที่ไอคอนส่วนขยายเพื่อเปิดหน้า **Options (ตั้งค่า)**:
-   * **Worker URL:** `https://gemini-web-bridge.pansakorn-pho.workers.dev`
+   * **Worker URL:** `https://prod.gemini-web-bridge.workers.dev`
    * **Bridge Token:** ใส่ Token ให้ตรงกับ Secret `BRIDGE_SECRET` (เช่น `REPLACE_WITH_GITHUB_SECRET_CLIENT_API_KEY`)
    * **Enforcement Mode:** เลือก `Strict Verified`
 6. เปิดแท็บ `https://gemini.google.com/app` ล็อกอินบัญชี Google ให้เรียบร้อย จะเห็นไฟแสดงสถานะที่มุมล่างขวาขึ้นเป็น **สีเขียว (Bridge: Connected)**
@@ -638,22 +645,22 @@ cd cloudflare-worker && node --test tests/integration.test.mjs
 
 ```bash
 # 1. ตรวจสอบสถานะ Dashboard
-curl -s https://gemini-web-bridge.pansakorn-pho.workers.dev/health | jq .
+curl -s https://prod.gemini-web-bridge.workers.dev/health | jq .
 
 # 2. ทดสอบ Ping ผ่าน MCP Tool
-curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
+curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{}}}' | jq .
 
 # 3. ตรวจสอบรายชื่อโมเดลจริงที่เบราว์เซอร์เปิดใช้งาน
-curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
+curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_bridge_models","arguments":{}}}' | jq .
 
 # 4. ทดสอบยิง OpenAI Chat Completion แบบ Real SSE Streaming
-curl -N -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions \
+curl -N -s -X POST https://prod.gemini-web-bridge.workers.dev/v1/chat/completions \
   -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -663,7 +670,7 @@ curl -N -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/c
   }'
 
 # 5. สลับ Scope ไปยัง NotebookLM
-curl -s -X POST https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp \
+curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   -H "Authorization: Bearer ${CLIENT_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -765,7 +772,7 @@ doppler secrets download --no-file --format env | xargs -I {} npx wrangler secre
 |---|---|---|
 | `dev` | Local development | `.env` fallback |
 | `stg` | Staging/Preview | Cloudflare Preview Workers |
-| `prd` | Production | `gemini-web-bridge.pansakorn-pho.workers.dev` |
+| `prd` | Production | `prod.gemini-web-bridge.workers.dev` |
 
 ### 11.4 ลำดับความสำคัญในการอ่าน Secrets
 

@@ -2,6 +2,61 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+## [Unreleased]
+
+### Fixed
+- **The retired production host was still copy-pasteable, and a wrong host
+  fails silently.** A client pointed at
+  `gemini-web-bridge.pansakorn-pho.workers.dev` reported a broken
+  `/v1/models` — `data: []`, `default_recommended: null`,
+  `status: "disconnected"`. That is not a defect: it is the *correct* answer
+  from the pre-migration account that `fa97a5d` left running as a rollback
+  target. The host is v4.4.3 with `epoch_counter: 0`; the extension left it
+  during the migration and only ever connects to
+  `prod.gemini-web-bridge.workers.dev` (v4.7.21,
+  `CONNECTED_AND_READY`), which serves 3 models and answers
+  `/v1/chat/completions` normally.
+
+  What made this worth fixing rather than repointing once is that the retired
+  host **still answers 200, still serves `/mcp`, and still lists all 9 MCP
+  tools** — so nothing errors. The only tell is `version` in `/health`, and
+  the first symptom is an empty catalogue arriving at the caller with no
+  explanation. 15 tracked files still named it, including copy-pasteable
+  client config in `IDEA.md`, the health-check step in `PLANNING-HANDOFF.md`,
+  and — worst — the verification curls in the rotation runbook
+  `docs/SECURITY_TOKEN_ROTATION.md`, which would have "confirmed" a rotation
+  against a worker that never sees production traffic.
+
+  Actionable references are repointed to the canonical host. Files that are
+  genuine historical evidence keep the old host and gain a banner saying so
+  rather than being silently rewritten: falsifying which host a dated
+  verification run exercised would destroy the evidence it exists to provide.
+
+- **`IDEA.md` documented a model id that no longer exists.** The client setup
+  blocks told people to set `default: gemini-web-thinking` /
+  `Model: gemini-web-thinking`, a hardcoded id the worker stopped serving once
+  the catalogue became dynamic (`cloudflare-worker/README.md` already said so).
+  They now point at `GET /v1/models` and `default_recommended`, so the next
+  catalogue change cannot leave the docs naming a retired id.
+
+### Added
+- **`cloudflare-worker/tests/production-host.test.mjs`** — the invariant, now
+  enforced. A one-time sweep decays: the next doc edit reintroduces the old
+  host and nothing notices, because no code path is involved for a human to
+  get wrong. The test fails if any *committable* file names the retired host
+  outside an explicit allowlist whose every entry carries both a reason and a
+  reader-visible warning, and it re-derives that file set from
+  `git ls-files --cached --others --exclude-standard` so ignored secrets and
+  build output cannot drift into scope. A final test asserts the scan is not
+  vacuous — a governance test that silently scans nothing is worse than none,
+  because it goes green forever. Verified in both directions: a planted
+  offending file turns it red.
+
+### Changed
+- Deleted `artifacts/production-live-mcp-verification.json` at the repo root —
+  byte-identical to the tracked `cloudflare-worker/artifacts/` copy and, sitting
+  under a gitignored path, unreachable from any commit anyway.
+
 ## [4.7.18] - 2026-09-29
 
 ### Fixed

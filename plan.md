@@ -6,7 +6,7 @@
 |> **Bridge Server Status:** 40 Rust gateway routes in sync with Python OpenAPI ✅ (PR #61) 
 |> **NotebookLM Channel:** `https://gemini.google.com/notebook/b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0` — HoroConsultant routing sync active
 |> **Bridge Integration:** `.env` has all 6 bridge vars set (GEMINI_WEB_BRIDGE_*)  ✅
-> **Production URL:** https://gemini-web-bridge.pansakorn-pho.workers.dev
+> **Production URL:** https://prod.gemini-web-bridge.workers.dev
 
 ---
 

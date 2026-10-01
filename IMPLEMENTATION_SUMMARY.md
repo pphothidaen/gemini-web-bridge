@@ -1,5 +1,21 @@
 # Gemini Web Bridge — Implementation Summary
 
+> ## ⚠️ HISTORICAL — describes the pre-migration account decision
+>
+> This file records the `pphothidaen` vs `pansakorn-pho` account decision as it
+> stood in September 2026. That question is **settled**: production now lives on
+> the `Gemini.web.bridge@gmail.com` account as
+> **`https://prod.gemini-web-bridge.workers.dev`** (migration `fa97a5d`).
+>
+> `gemini-web-bridge.pansakorn-pho.workers.dev` is the **retired** pre-migration
+> host. It still answers `200` and still lists all 9 MCP tools, so a wrong host
+> **fails silently** — only `version` in `/health` reveals it. Its extension is
+> permanently `DISCONNECTED`, so `/v1/models` there always returns `data: []`.
+>
+> The current endpoints are in [`docs/client-configs.md`](docs/client-configs.md)
+> and `docs/api-spec.md`. The bare `pansakorn-pho.workers.dev` mentions left
+> below are left as written because they record that decision, not a live target.
+
 ## ✅ Completed (automated by Hermes)
 
 | Task | Status | Detail |
@@ -72,7 +88,7 @@ If using this as Hermes primary model, verify `~/.hermes/config.yaml` has correc
 ```yaml
 model:
   provider: gemini-web-bridge
-  base_url: https://gemini-web-bridge.pansakorn-pho.workers.dev/v1  # ← verify
+  base_url: https://prod.gemini-web-bridge.workers.dev/v1  # ← verify
 ```
 
 ### 5. Check CI/CD Deploy to Correct Account
@@ -91,9 +107,9 @@ Check the actual deployed worker version matches expectations.
 
 | Item | Value |
 |------|-------|
-| **Production URL** | https://gemini-web-bridge.pansakorn-pho.workers.dev |
-| **MCP endpoint** | https://gemini-web-bridge.pansakorn-pho.workers.dev/mcp |
-| **OpenAI endpoint** | https://gemini-web-bridge.pansakorn-pho.workers.dev/v1/chat/completions |
+| **Production URL** | https://prod.gemini-web-bridge.workers.dev |
+| **MCP endpoint** | https://prod.gemini-web-bridge.workers.dev/mcp |
+| **OpenAI endpoint** | https://prod.gemini-web-bridge.workers.dev/v1/chat/completions |
 | **Worker name** | gemini-web-bridge |
 | **Cloudflare account** | f1409612b13704c5a4be27820c9a41ae (Pansakorn.pho@gmail.com) |
 | **GitHub repo** | github.com/pphothidaen/gemini-web-bridge |
