@@ -2,6 +2,12 @@
 
 All notable changes to the Gemini Web-Bridge project.
 
+> **Historical hosts.** This file names
+> `gemini-web-bridge.pansakorn-pho.workers.dev` as the RETIRED pre-migration
+> host. It is recorded as evidence only — do NOT use it to point a client
+> anywhere. Production is `prod.gemini-web-bridge.workers.dev` and has been
+> since commit `fa97a5d` (KAN-157).
+
 ## [Unreleased]
 
 ### Changed
