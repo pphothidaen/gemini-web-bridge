@@ -8,6 +8,14 @@ All notable changes to the Gemini Web-Bridge project.
 > anywhere. Production is `prod.gemini-web-bridge.workers.dev` and has been
 > since commit `fa97a5d` (KAN-157).
 
+## [4.7.22] - 2026-10-01
+
+Ships the two changes recorded under `[Unreleased]`:
+`/v2` routing with a frozen `/v1` (KAN-234) and the health-counter fix that
+`horo_consult` could never previously clear (KAN-233). Bumped separately from
+4.7.21 so a client that sees `/v2` answer can identify which build introduced
+it.
+
 ## [Unreleased]
 
 ### Added
