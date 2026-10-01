@@ -63,7 +63,22 @@ $key
   # actually carries the key back. A ticket's own description may legitimately
   # contain the phrase "does not exist" (KAN-163's closure comment did), so the
   # 404 wording inside a successful body must never be read as a failure.
-  if [[ "$rc" -eq 0 ]] && printf '%s' "$out" | grep -qE "\"key\"[[:space:]]*:[[:space:]]*\"$key\""; then
+  #
+  # KAN-226: `grep -q` here exits at the FIRST match while printf is still
+  # writing, so any payload larger than the pipe buffer killed printf with
+  # SIGPIPE (141). `pipefail` promotes that 141 to the pipeline status, the
+  # condition is false, and the guard fell into the fail-open branch below —
+  # silently skipping exactly the long, heavily-discussed tickets most worth
+  # checking. Measured with the real twg output (169 KB):
+  #
+  #   set -uo pipefail; printf %s "$out" | grep -qE ...   -> 141, NOMATCH
+  #   set -u;         printf %s "$out" | grep -qE ...   ->   0, MATCH
+  #
+  # -q is removed rather than the pipe: without it grep reads to EOF, so printf
+  # exits 0 and the pipeline reports grep's status — which is what the
+  # condition always meant. The regex is untouched, so match semantics are
+  # identical. This changes WHEN the verdict is computed, not WHAT counts.
+  if [[ "$rc" -eq 0 ]] && printf '%s' "$out" | grep -E "\"key\"[[:space:]]*:[[:space:]]*\"$key\"" >/dev/null; then
     CACHE="${CACHE}
 ${key}"
     if [[ -z "$VALIDATED" ]]; then VALIDATED="$key"; else VALIDATED="$VALIDATED, $key"; fi
@@ -73,7 +88,10 @@ ${key}"
   # Nonexistent: a failed lookup whose body says so. Both the JSON shape
   # (statusCode 404) and the plain-text banner shape are accepted, because the
   # two twg builds in the wild disagree on formatting but not on the verdict.
-  if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qE '"statusCode"[[:space:]]*:[[:space:]]*404|does not exist'; then
+  #
+  # No -q here either, same SIGPIPE reason. A 404 body is small today so it
+  # never fired, but the defect is in the pipeline shape, not in this payload.
+  if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -E '"statusCode"[[:space:]]*:[[:space:]]*404|does not exist' >/dev/null; then
     BLOCKED="${BLOCKED}${key}
 "
     CACHE="${CACHE}

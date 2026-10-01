@@ -322,3 +322,145 @@ test('branch deletion (zero local sha) is skipped without Jira calls', () => {
   assert.ok(!fs.existsSync(log) || fs.readFileSync(log, 'utf8').trim() === '', 'no Jira calls for a deletion');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// ────────────────────────────── KAN-226 ──────────────────────────────
+//
+// This predicate was fixed before (KAN-221) and shipped broken, because every
+// fixture above emits a payload of a few dozen bytes.
+//
+// Under `set -uo pipefail`, `printf … | grep -q` breaks as soon as the payload
+// exceeds the pipe buffer: grep -q exits at the first match, printf is still
+// writing, printf dies of SIGPIPE (141), and pipefail reports 141 as the
+// pipeline status. The guard read that as "key not found" and fell into its
+// fail-open branch.
+//
+// The consequence is not cosmetic: the guard skipped validation on precisely the
+// long tickets that carry a real discussion, while printing the same line it
+// prints for a genuinely clean push. A fixture that fits in the buffer cannot
+// detect this, which is the whole point of the fixtures below.
+
+/** Fake twg whose successful payload is padded well past the 64 KB pipe buffer. */
+function writeLargePayloadTwg(dir, { bytes = 200000 } = {}) {
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(
+    path.join(bin, 'twg'),
+    `#!/usr/bin/env bash
+if [[ "$4" == "KAN-404" ]]; then
+  echo "✗ Failed jira.workitem.get."
+  echo "Error: Issue does not exist or you do not have permission to see it."
+  exit 1
+fi
+# Shape matters as much as size. grep matches a COMPLETE line, so a single
+# 200 KB line makes grep read all of it before matching and the pipe never
+# breaks — the fixture passes against the buggy hook. Real twg output is
+# pretty-printed across many lines, so grep hits the match early and exits with
+# ~169 KB still queued; that is the case that yields SIGPIPE. Measured here:
+#
+#   one 200 KB line   -> MATCH   (bug hidden, fixture useless)
+#   multi-line JSON   -> NOMATCH (bug reproduced)
+#
+# The key field sits on line 5, as it does in the real payload.
+pad=$(head -c ${bytes} /dev/zero | tr '\\0' 'x' | fold -w 80)
+echo '['
+echo '  {'
+echo '    "expand": "renderedFields,names,schema",'
+echo '    "id": "10252",'
+echo '    "key": "'"$4"'",'
+echo '    "description": "'"$pad"'"'
+echo '  }'
+echo ']'
+exit 0
+`
+  );
+  fs.chmodSync(path.join(bin, 'twg'), 0o755);
+  return { bin };
+}
+
+test('KAN-226: a large real ticket still validates instead of failing open', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-guard-'));
+  const { bin } = writeLargePayloadTwg(dir);
+  const { repo, shas } = makeRepo(dir, ['KAN-170: cites a real ticket with a huge description']);
+  const r = runHook(repo, {
+    bin,
+    line: `refs/heads/main ${shas[0]} refs/heads/main 0000000000000000000000000000000000000000`,
+  });
+  assert.equal(r.status, 0, 'hook must allow: ' + r.stderr);
+  assert.match(
+    r.stdout,
+    /validated against Jira/,
+    'a 200 KB ticket must be recognised as real — before the fix the SIGPIPE made ' +
+      'every large ticket look unverifiable, so the guard was decorative for exactly ' +
+      'the tickets worth checking'
+  );
+  assert.doesNotMatch(
+    r.stderr,
+    /could not verify/,
+    'the large payload must not fall through to the fail-open branch'
+  );
+  assert.match(r.stdout, /KAN-170/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('KAN-226: the guard never writes grep -q into a pipefail pipeline', () => {
+  // A structural guard, so the regression cannot be reintroduced by editing the
+  // regex rather than the pipeline: -q in any piped grep inside this hook is the
+  // SIGPIPE shape regardless of which payload is being matched.
+  //
+  // Comments are stripped first. The hook documents this exact bug in prose that
+  // contains `| grep -qE`, and a scanner that cannot tell a comment from a
+  // command would flag its own explanation — which is how a guard like this
+  // gets disabled instead of honoured.
+  const hook = fs.readFileSync(HOOK, 'utf8');
+  const code = hook
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  const pipedGrepQ = code
+    .split('\n')
+    .filter((line) => /\|/.test(line) && /\bgrep\b[^|]*-q/.test(line));
+  assert.deepEqual(
+    pipedGrepQ,
+    [],
+    'grep -q inside a pipeline under `set -uo pipefail` reads as "not found" for any ' +
+      'payload larger than the pipe buffer, because grep exits early and printf dies ' +
+      'of SIGPIPE. Drop -q so grep reads to EOF: ' + pipedGrepQ.join(' | ')
+  );
+  // The scanner must not be vacuous: it has to still see the pipelines that ARE
+  // present, or it would pass on a hook containing no grep at all.
+  assert.match(
+    code,
+    /\| grep -E/,
+    'the hook must still contain piped greps for this check to mean anything'
+  );
+});
+
+test('KAN-226: the hook really does run under pipefail (the precondition)', () => {
+  // If `set -uo pipefail` were ever dropped, the structural test above would
+  // start passing for the wrong reason and the bug could return unnoticed.
+  const hook = fs.readFileSync(HOOK, 'utf8');
+  assert.match(
+    hook,
+    /^set -uo pipefail$/m,
+    'the hook must keep pipefail for the SIGPIPE analysis to hold'
+  );
+});
+
+
+test('KAN-226: a large nonexistent ticket is still BLOCKED, not failed open', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-guard-'));
+  const { bin } = writeLargePayloadTwg(dir);
+  const { repo, shas } = makeRepo(dir, ['KAN-170: cites KAN-404 with a huge payload']);
+  const r = runHook(repo, {
+    bin,
+    line: `refs/heads/main ${shas[0]} refs/heads/main 0000000000000000000000000000000000000000`,
+  });
+  assert.equal(
+    r.status,
+    1,
+    'the guard must block a predicted key even when the 404 body is large: ' + r.stdout + r.stderr
+  );
+  assert.match(r.stderr, /KAN-404/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
