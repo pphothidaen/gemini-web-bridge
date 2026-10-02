@@ -72,6 +72,19 @@ production และวัดว่า payload ของ Gemini หน้าต�
 > (`cd.yml` deploy ตอน push) และช่วงเปิดรั่วไม่มีใครบอกได้ว่าเกิดเมื่อไร
 > จึงต้องถือว่ายังใช้ได้อยู่จนพิสูจน์เป็นอย่างอื่น
 > ยังไม่ rotate ใน session นี้ — เป็นของผู้ใช้
+>
+> **Scope แล้ว 2026-10-02 (ไม่แตะ secret เลย):**
+> - credential ที่ใช้อยู่ = `pphothidaen` ใน `~/.config/gh/hosts.yml`
+>   scopes: `admin:public_key`, `gist`, `read:org`, **`repo`**
+> - **git push ใช้ SSH ไม่ใช่ PAT** — PAT เป็น credential ของ `gh` API เท่านั้น
+> - **ไม่มี token ใน working tree: 0** และ **ใน git history ทั้งหมด: 0**
+>   → ไม่ต้อง rewrite history, ไม่ต้อง purge อะไรใน repo นี้
+> - **CI ไม่ได้ใช้ PAT** — ใช้ `${{ github.token }}`,
+>   `secrets.DOPPLER_SERVICE_TOKEN`, `secrets.JIRA_CI_TOKEN`
+>   → **rotate แล้วไม่ต้องแก้ CI secret และไม่ต้อง redeploy**
+>
+> เหลือแค่ 5 ขั้นตอนสั้น ๆ ตาม comment ใน KAN-249 — ขั้นที่สำคัญคือ
+> **revoke ตัวเก่า** (เปลี่ยนเป็นตัวใหม่อย่างเดียวไม่ได้ปิดรั่ว)
 
 **push ก่อนเสมอ** — `cd.yml` deploy เมื่อ `cloudflare-worker/**` เปลี่ยน
 และต้องอนุมัติที่ environment `production` (required reviewer)
