@@ -1,6 +1,14 @@
 # Notebook API feasibility — KAN-236 direct path
 
-**Verdict: PARTIAL. One of three captures is real and re-confirmed in-session.
+**Verdict: MEASURED. Two of three captures taken, both provenance-confirmed.
+The notebook reference is NOT in the StreamGenerate payload — on an instrument
+that is provably able to see one if it were. The direct path is therefore
+*conditionally* viable: the conversation state it needs is there and stable, but
+the notebook binding is not carried in the request at all.**
+
+> Superseded below by "The measurement" — that section is the current state.
+
+**Prior verdict: PARTIAL. One of three captures is real and re-confirmed in-session.
 The direct path remains unbuilt and unproven — and the single most important
 question (does a notebook reference appear in the payload?) is still OPEN,
 because the instrument that would answer it has not been confirmed live.**
@@ -114,6 +122,55 @@ Object keeps running the code it was instantiated with until it is reset. The
 only worker-side change in 4.7.29 was the version string itself — the functional
 fix is in the extension — so the discrepancy is cosmetic, but it is real and
 worth knowing before someone reads it as a failed deploy.
+
+## The measurement (2026-10-02, final)
+
+Both captures self-report their producer: `extensionVersion: "4.7.32"`, read
+from `chrome.runtime.getManifest()` in the running extension. That matters more
+than it looks — 4.7.32 is the build whose classifier matches `notebook(s)://` as a
+**substring under both schemes**. So this is not the blind instrument from the
+previous round; the thing that would have produced a false negative is ruled out
+by the record itself rather than by my assurance.
+
+Two grounded turns (`verified: true`, citations on both), same conversation:
+
+| path | chip-present | chip-repeat | |
+|---|---:|---:|---|
+| `[0][0]` prompt | 489 | 487 | the question asked |
+| `[0][3][0][2]` | 88 | 88 | stable |
+| `[1][0]` locale | 2 | 2 | stable |
+| **`[3]` context block** | **1725** | **1853** | **grows every turn** |
+| **`[4]` conversationId** | **32** | **32** | **stable** |
+
+20 top-level fields in both, against the worker builder's 10.
+
+### The finding
+
+**Zero `notebook_ref` in either capture.** Seven strings, all `opaque`, lengths
+489/0/4/88/2/1725/32 and 487/0/4/88/2/1853/32. No `notebooks://` substring
+anywhere — and the classifier would have caught one embedded in the 1725-char
+context block, which is precisely where a reference would plausibly hide.
+
+### What it implies — and this is the useful part
+
+The absence is not evidence that grounding is impossible. Two readings remain,
+and they point opposite directions:
+
+1. **The notebook is bound server-side to `conversationId`.** The client sends
+   only `conversationId` (stable across both calls) and the server already
+   associates that conversation with the notebook. This fits the evidence well:
+   no reference to send, state stable, grounding verified. If true, a direct
+   worker call **would** work — it needs an `conversationId` the server has
+   already bound, and nothing else.
+2. **The binding rides on a channel not captured here** — a header, a cookie,
+   or an RPC outside the intercepted path.
+
+The measurement cannot separate these, and the difference matters: reading 1
+makes the direct path a small increment; reading 2 makes it a research project.
+Both need the same next step — a chip-absent turn in the same conversation, to
+see whether `[4]` or `[3]` changes when the notebook is detached. That is the
+one capture still outstanding, and it needs a human (see §1.3 in
+`docs/NEXT-STEPS.md`).
 
 ## The two known blockers
 

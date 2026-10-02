@@ -211,6 +211,132 @@
         "number",
         null
       ]
+    },
+    {
+      "captureId": "app-chip-present-2026-10-02b",
+      "case": "chip-present (grounded, notebook attached)",
+      "capturedAt": "2026-10-02T11:12:00Z",
+      "capturedBy": "PAYLOAD_CAPTURE relay via authenticated POST /debug/payload-capture; read with curl",
+      "producerExtensionVersion": "4.7.32",
+      "provenance": "extractBoundedStructure output verbatim from a live production capture. Producer build self-reported via chrome.runtime.getManifest(), so the classifier version behind it is known rather than assumed.",
+      "endpoint": "StreamGenerate",
+      "transport": "xhr",
+      "buildLabel": "boq_assistant-bard-web-server_20260929.03_p0",
+      "canonicalModelId": "gemini-3.8-flash",
+      "groundingNote": "horo_consult returned notebookGrounding.verified=true with citations, so this IS the chip-present case.",
+      "fieldCount": 20,
+      "structure": [
+        [
+          "string",
+          "number",
+          null,
+          [
+            [
+              [
+                null,
+                "number",
+                "number",
+                "string"
+              ],
+              "string",
+              "string"
+            ]
+          ],
+          null,
+          null,
+          "number"
+        ],
+        [
+          "string"
+        ],
+        null,
+        "string",
+        "string",
+        null,
+        [
+          "number"
+        ],
+        "number",
+        null,
+        null,
+        "number",
+        "number",
+        null,
+        null,
+        null,
+        null,
+        null,
+        [
+          [
+            "number"
+          ]
+        ],
+        "number",
+        null
+      ]
+    },
+    {
+      "captureId": "app-chip-repeat-2026-10-02",
+      "case": "chip-repeat (second grounded turn, same conversation)",
+      "capturedAt": "2026-10-02T11:12:00Z",
+      "capturedBy": "PAYLOAD_CAPTURE relay via authenticated POST /debug/payload-capture; read with curl",
+      "producerExtensionVersion": "4.7.32",
+      "provenance": "extractBoundedStructure output verbatim from a live production capture. Producer build self-reported via chrome.runtime.getManifest(), so the classifier version behind it is known rather than assumed.",
+      "endpoint": "StreamGenerate",
+      "transport": "xhr",
+      "buildLabel": "boq_assistant-bard-web-server_20260929.03_p0",
+      "canonicalModelId": "gemini-3.8-flash-lite",
+      "groundingNote": "horo_consult returned notebookGrounding.verified=true with citations, so this IS the chip-present case.",
+      "fieldCount": 20,
+      "structure": [
+        [
+          "string",
+          "number",
+          null,
+          [
+            [
+              [
+                null,
+                "number",
+                "number",
+                "string"
+              ],
+              "string",
+              "string"
+            ]
+          ],
+          null,
+          null,
+          "number"
+        ],
+        [
+          "string"
+        ],
+        null,
+        "string",
+        "string",
+        null,
+        [
+          "number"
+        ],
+        "number",
+        null,
+        null,
+        "number",
+        "number",
+        null,
+        null,
+        null,
+        null,
+        null,
+        [
+          [
+            "number"
+          ]
+        ],
+        "number",
+        null
+      ]
     }
   ],
   "divergence_from_worker_builder": [
