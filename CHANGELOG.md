@@ -113,6 +113,20 @@ it.
 
 ## [Unreleased]
 
+### Fixed
+- **`PAYLOAD_CAPTURE_ARM` never reached the page.** The payload-capture relay
+  shipped in 4.7.28 with only its upward half wired: the record could travel
+  page → content → background → worker, but the arm could not travel back down,
+  because `PAYLOAD_CAPTURE_ARM` was missing from `background.js`'s
+  forward-to-active-tab group. `POST /debug/payload-capture` returned
+  `{"armed":true}` and flipped the DO flag, and no capture ever arrived.
+
+  Caught by running it against production rather than by reading the chain. Half
+  a two-way relay looks exactly like a working one in a diff, and the endpoint
+  reporting success made it worse — the failure was a silence, not an error.
+  A regression test now asserts both directions separately, and its mutation
+  (unhooking the downward arm) is confirmed failing.
+
 ### Added
 - **`/health` now reports the extension's collection heartbeat.** A new
   `collection` block carries `last_progress_at`, `last_progress_responses` and

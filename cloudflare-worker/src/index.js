@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.28";
+const WORKER_VERSION = "4.7.29";
 
 // KAN-236 Phase D: how many sanitized payload records to keep. Phase D needs
 // three cases (chip present / absent / repeat), so three is the working figure

@@ -930,7 +930,14 @@ export class BridgeSocketManager {
       case "REFRESH_MODELS":
       case "AUTO_SELECT_MODEL":
       case "NATIVE_RETRY":
-      case "ENABLE_THINKING": {
+      case "ENABLE_THINKING":
+      // KAN-236 Phase D: the arm must reach the page or the relay never turns
+      // on. Found by testing against production rather than by reading the
+      // chain: POST /debug/payload-capture returned {"armed":true} and the DO
+      // flag flipped, but zero captures arrived, because the message stopped
+      // here. The upward path had a relay entry and the downward path did not,
+      // and only one of the two being wired is not something a glance catches.
+      case "PAYLOAD_CAPTURE_ARM": {
         const forwarded = this.forwardToActiveTab(msg);
         if (!forwarded && ["PREPARE_MODEL", "EXECUTE_REQUEST"].includes(msg.type)) {
           this.sendToWorker({

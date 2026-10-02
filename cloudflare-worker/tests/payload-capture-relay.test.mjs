@@ -180,6 +180,69 @@ test('arming clears previous captures so cases cannot bleed together', () => {
     'arming must clear the buffer, or a new case can read the previous one');
 });
 
+test('the arm travels BOTH ways, not just the record', () => {
+  // Shipped broken, and only production caught it. The relay is two hops in
+  // opposite directions:
+  //
+  //   down: worker -> background -> content.js -> page   (arm)
+  //   up:   page -> content.js -> background -> worker   (record)
+  //
+  // The upward relay was wired and the downward forward was not, so POST
+  // returned {"armed":true}, the DO flag flipped, and nothing was ever
+  // captured. Half a chain looks exactly like a working chain in a diff, and
+  // the endpoint reporting success made it worse — the failure was a lie of
+  // omission, not an error.
+  //
+  // Both directions are now asserted, so a future edit to one cannot silently
+  // leave the other behind.
+  const bg = fs.readFileSync(
+    new URL('../../extension-cloudflare/background.js', import.meta.url).pathname,
+    'utf8'
+  );
+  const content = fs.readFileSync(
+    new URL('../../extension-cloudflare/content.js', import.meta.url).pathname,
+    'utf8'
+  );
+  const injected = fs.readFileSync(
+    new URL('../../extension-cloudflare/injected.js', import.meta.url).pathname,
+    'utf8'
+  );
+
+  // Downward: the arm must be in the forward-to-active-tab group, not merely
+  // mentioned somewhere in the file.
+  const downGroup = bg.slice(
+    bg.indexOf('case "PREPARE_MODEL":'),
+    bg.indexOf('break;', bg.indexOf('case "PREPARE_MODEL":'))
+  );
+  assert.match(downGroup, /case "PAYLOAD_CAPTURE_ARM"/,
+    'the arm must be in the forwardToActiveTab group or it stops at the background');
+  assert.match(downGroup, /forwardToActiveTab\(msg\)/);
+
+  // Downward, rest of the hop.
+  assert.match(content, /case "PAYLOAD_CAPTURE_ARM":\s*handlePayloadCaptureArm\(msg\);/,
+    'content.js must dispatch the arm');
+  assert.match(content, /type: "PAYLOAD_CAPTURE_ARM"/,
+    'content.js must post the arm into the page');
+  assert.match(injected, /type === "PAYLOAD_CAPTURE_ARM"/,
+    'injected.js must accept the arm');
+  assert.match(injected, /armPayloadCapture\(event\.data\.armed === true\)/,
+    'injected.js must apply it, and only for an explicit boolean');
+
+  assert.match(content, /case "PAYLOAD_CAPTURE":\s*sendToWorker\(\{ type: "PAYLOAD_CAPTURE"/,
+    'content.js must relay the record to the background');
+  // Upward, rest of the hop. Slice the whole array literal rather than guessing
+  // at offsets: PAYLOAD_CAPTURE is appended AFTER "GROUNDING_RESULT", so a
+  // slice ending at that name cuts the very entry off.
+  // ending at that name cuts the very entry off.
+  const upStart = bg.indexOf('["STREAM_CHUNK"');
+  const upGroup = bg.slice(upStart, bg.indexOf('.includes(', upStart));
+  assert.ok(upStart > 0, 'the upward relay list must exist');
+  assert.match(upGroup, /"PAYLOAD_CAPTURE"/,
+    'background.js must forward the record to the worker');
+  assert.match(injected, /source: "GEMINI_INJECTED",\s*type: "PAYLOAD_CAPTURE"/,
+    'the page must tag the record with the source content.js trusts');
+});
+
 function withFakeWindow(fn) {
   const posted = [];
   const had = Object.getOwnPropertyDescriptor(globalThis, 'window');
