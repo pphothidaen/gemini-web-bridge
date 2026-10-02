@@ -37,9 +37,12 @@ id = "400bc54565de455689ece92f8351bcb9"
 tag = "v1"
 new_sqlite_classes = ["GeminiBridgeDO"]
 
-# See wrangler.jsonc for why this is off: Workers Logs is charged against the
-# same CPU budget as the DO, and nothing in this repo reads it.
+# TEMPORARILY ON while collecting latency-vs-context-length telemetry for
+# KAN-236. `wrangler tail` is backed by the Workers Logs pipeline, so tail
+# shows nothing when this is off. Flip back to false once the data is in:
+# Workers Logs is charged against the same CPU budget as the DO, and
+# nothing in this repo reads it.
 [observability]
-enabled = false
+enabled = true
 [vars]
-BRIDGE_VERBOSE = 1
+BRIDGE_VERBOSE = "1"

@@ -95,15 +95,14 @@ function resolveApiVersion(pathname) {
 // Set BRIDGE_VERBOSE=1 to restore full logging when debugging:
 //   wrangler deploy --var BRIDGE_VERBOSE:1
 //   (or add "vars": { "BRIDGE_VERBOSE": "1" } to wrangler.toml locally)
-const VERBOSE = (typeof BRIDGE_VERBOSE !== "undefined" && BRIDGE_VERBOSE === "1")
-  || (typeof process !== "undefined" && process.env && process.env.BRIDGE_VERBOSE === "1");
+let VERBOSE_FLAG = false;
 
 /**
  * Log only when verbose mode is on. No-op otherwise, and the arguments
  * are not evaluated when it returns early.
  */
 function vlog(...args) {
-  if (VERBOSE) console.log(...args);
+  if (VERBOSE_FLAG) console.log(...args);
 }
 
 // Characters encodable with WinAnsi (CP1252) standard PDF fonts.
@@ -298,6 +297,7 @@ export class GeminiBridgeDO extends DurableObject {
     super(ctx, env);
     this.ctx = ctx;   // DO alarm API requires this reference
     this.env = env;
+    VERBOSE_FLAG = (this.env.BRIDGE_VERBOSE === "1");
     this.activeSocket = null;
     this.currentTokens = null;
     this.activeBrowserModel = null;
