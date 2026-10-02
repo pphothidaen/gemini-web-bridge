@@ -225,6 +225,55 @@ test('every capture records the build that produced it', () => {
     'the stamp must travel with the record');
 });
 
+test('the descriptor identifies a field without revealing it', () => {
+  // The chip-present vs chip-absent comparison located the notebook binding: a
+  // branch at [0][3] carrying a 0, a 4 and an 88-character string, present only
+  // when a notebook is attached. "length 88, cls opaque" cannot answer whether
+  // that string is reproducible by a builder, which is the whole question.
+  const { describeString, setNotebookIdHint } = Injected;
+  const ID = 'b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0';
+  setNotebookIdHint(ID);
+
+  // Contains the id -> true. Does NOT contain -> false. Both are booleans, so
+  // neither reveals the field: this is a question we could answer if we held
+  // the value, and we do not need to hold it to answer.
+  assert.equal(describeString(`xx ${ID} yy`).contains.notebook_id, true,
+    'a field carrying the notebook id must be recognisable without reading it');
+  assert.equal(describeString('no notebook id in this value at all').contains.notebook_id, false);
+  assert.match(describeString('xx').fingerprint, /^[0-9a-f]{8}$/,
+    'the fingerprint must be a fixed-width hex digest');
+  assert.ok(Array.isArray(describeString('a-b_c.d/e:f 1').charset),
+    'charset must report character CLASSES, not characters');
+});
+
+test('an unknown notebook id yields null, never a guess', () => {
+  // With no id to compare against, `contains.notebook_id` must be null. `false`
+  // would be a confident wrong answer: it would read as "this field does not
+  // contain the notebook" when in fact nobody checked.
+  const { describeString, setNotebookIdHint } = Injected;
+  setNotebookIdHint('');
+  assert.equal(describeString('anything at all').contains.notebook_id, null,
+    'no id means unanswered, not absent');
+});
+
+test('the same string fingerprints the same, different ones do not', () => {
+  const { describeString, setNotebookIdHint } = Injected;
+  setNotebookIdHint('');
+  const a = 'stable-value-abcdefghijklmnopqrstuvwxyz0123456789-padding-x';
+  const b = 'stable-value-abcdefghijklmnopqrstuvwxyz0123456789-padding-y';
+  assert.equal(describeString(a).fingerprint, describeString(a).fingerprint,
+    'stability across captures is the whole point');
+  assert.notEqual(describeString(a).fingerprint, describeString(b).fingerprint);
+});
+
+test('the worker derives the notebook id from the live scope', () => {
+  // Derived, not hardcoded: a hardcoded id would drift the moment a different
+  // notebook is attached, and the answer would be confidently wrong.
+  assert.match(WORKER_SOURCE, /notebookId: this\.resolveNotebookIdFromScope\(this\.currentScope\)/);
+  assert.match(WORKER_SOURCE, /\^notebook:\(\[0-9a-fA-F-\]\{8,\}\)\$/,
+    'only a well-formed notebook scope yields an id; an app scope must not');
+});
+
 test('the arm travels BOTH ways, not just the record', () => {
   // Shipped broken, and only production caught it. The relay is two hops in
   // opposite directions:

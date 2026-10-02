@@ -97,6 +97,76 @@
     return STRING_CLASS.OPAQUE;
   }
 
+  /**
+   * Coarse facts about a string: enough to IDENTIFY a field, not to read it.
+   *
+   * KAN-236 Phase D, 2026-10-02. The chip-present vs chip-absent comparison
+   * located the notebook binding — a branch at [0][3] that exists only when a
+   * notebook is attached, carrying a 0, a 4 and an 88-character string. Every
+   * capture so far says only `length: 88, cls: opaque`, which cannot answer the
+   * question that matters: is it stable enough for a builder to reproduce, or
+   * does it change per session?
+   *
+   * All three facts below are safe by construction:
+   *
+   *   fingerprint - FNV-1a, 32-bit, rendered as 8 hex. Non-cryptographic, which
+   *     is correct here: the purpose is "are these two the same string", and a
+   *     cryptographic digest of the same input would be strictly worse for the
+   *     threat model while implying a guarantee it does not provide. For an
+   *     88-character high-entropy value a 32-bit FNV is not invertible.
+   *   charset - which character CLASSES appear, e.g. lower/digit/dash. Says
+   *     "looks like a hex id or a path" without saying which.
+   *   contains - booleans against values we ALREADY KNOW (the configured
+   *     notebook id), not an echo of the field. A boolean answer to a question
+   *     we could answer if we held the value leaks only the answer, and the
+   *     question is one we need answered.
+   *
+   * This is the same discipline as classifyString: classify, never extract.
+   */
+  // The id of the notebook the bridge is currently attached to, when known.
+  // Set from the page (content.js holds the bridge scope) and used ONLY to
+  // answer "does this field contain the id we already have" as a boolean.
+  // Never emitted, never logged, never stored.
+  let NOTEBOOK_ID_HINT = "";
+
+  function setNotebookIdHint(id) {
+    NOTEBOOK_ID_HINT = typeof id === "string" ? id : "";
+    return NOTEBOOK_ID_HINT.length > 0;
+  }
+
+  function describeString(str) {
+    const cls = classifyString(str);
+    if (typeof str !== "string") return { cls };
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    const chars = {
+      lower: /[a-z]/.test(str),
+      upper: /[A-Z]/.test(str),
+      digit: /[0-9]/.test(str),
+      dash: /-/.test(str),
+      underscore: /_/.test(str),
+      dot: /\./.test(str),
+      slash: /\//.test(str),
+      colon: /:/.test(str),
+      space: /\s/.test(str)
+    };
+    const present = Object.keys(chars).filter((k) => chars[k]);
+    return {
+      cls,
+      fingerprint: h.toString(16).padStart(8, "0"),
+      charset: present,
+      contains: {
+        // Only ever compared against ids the bridge already holds.
+        notebook_id: typeof NOTEBOOK_ID_HINT === "string" && NOTEBOOK_ID_HINT.length > 0
+          ? str.includes(NOTEBOOK_ID_HINT)
+          : null
+      }
+    };
+  }
+
   // ─── 0. Prompt typing in the MAIN world (KAN-182) ───
   //
   // Kept here rather than in prompt-typing.js because of where the Quill
@@ -424,7 +494,7 @@
    * Parses outer f.req parameter and nested JSON string inside it,
    * completely replacing prompt strings with structural placeholders.
    */
-  function decodeAndSanitizePayload(rawBody) {
+  function decodeAndSanitizePayload(rawBody, describe = false) {
     if (!rawBody) return null;
     try {
       let bodyStr = "";
@@ -451,14 +521,14 @@
       return {
         outerLength: outerArray.length,
         hasEnvelope: Array.isArray(innerArray),
-        structure: extractBoundedStructure(innerArray)
+        structure: extractBoundedStructure(innerArray, 0, describe)
       };
     } catch (e) {
       return null;
     }
   }
 
-  function extractBoundedStructure(val, depth = 0) {
+  function extractBoundedStructure(val, depth = 0, describe = false) {
     if (depth > 6) return "max_depth";
     if (val === null) return null;
     if (val === undefined) return undefined;
@@ -471,17 +541,24 @@
     // field that changed size could have gained a notebook reference, lost
     // one, or held something unrelated all along.
     if (typeof val === "string") {
-      return { type: "string", length: val.length, cls: classifyString(val) };
+      // The coarse descriptor (fingerprint/charset/contains) is added ONLY
+      // while a capture is armed. payload-classifier.test.mjs pins the normal
+      // shape to exactly {type, length, cls} and is right to: a capture is a
+      // deliberate act, and it should not change the shape of every request the
+      // extension sees during normal operation.
+      return describe
+        ? { type: "string", length: val.length, ...describeString(val) }
+        : { type: "string", length: val.length, cls: classifyString(val) };
     }
 
     if (Array.isArray(val)) {
-      return val.slice(0, 20).map(item => extractBoundedStructure(item, depth + 1));
+      return val.slice(0, 20).map(item => extractBoundedStructure(item, depth + 1, describe));
     }
 
     if (typeof val === "object") {
       const out = {};
       for (const [k, v] of Object.entries(val).slice(0, 20)) {
-        out[k] = extractBoundedStructure(v, depth + 1);
+        out[k] = extractBoundedStructure(v, depth + 1, describe);
       }
       return out;
     }
@@ -623,7 +700,7 @@
 
       // Capture model ID at request initiation time
       const modelIdAtRequestTime = currentCanonicalModelId;
-      const requestStructure = decodeAndSanitizePayload(requestInit.body);
+      const requestStructure = decodeAndSanitizePayload(requestInit.body, payloadCaptureArmed);
 
       // Logged before the response is awaited, so a slow or hanging endpoint
       // cannot delay or reorder the record relative to the request itself.
@@ -686,7 +763,7 @@
       }
 
       const modelIdAtRequestTime = currentCanonicalModelId;
-      const requestStructure = decodeAndSanitizePayload(body);
+      const requestStructure = decodeAndSanitizePayload(body, payloadCaptureArmed);
 
       // The prompt travels over XHR, so the fetch-side probe alone never sees
       // it — a fetch-only capture produces structures with no prompt field and
@@ -742,6 +819,14 @@
     // one without the other.
     if (type === "PAYLOAD_CAPTURE_ARM") {
       armPayloadCapture(event.data.armed === true);
+      return;
+    }
+
+    // KAN-236 Phase D: the bridge tells the page which notebook it is attached
+    // to, so describeString can answer "does this field contain that id" as a
+    // boolean without the field ever being read.
+    if (type === "SET_NOTEBOOK_ID_HINT") {
+      setNotebookIdHint(event.data.notebookId);
       return;
     }
 
@@ -898,6 +983,8 @@
     classifyString,
     extractBoundedStructure,
     handleProbeSet,
+    describeString,
+    setNotebookIdHint,
     armPayloadCapture,
     isPayloadCaptureArmed,
     emitProbeRecord

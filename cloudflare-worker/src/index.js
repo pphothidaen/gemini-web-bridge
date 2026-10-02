@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.32";
+const WORKER_VERSION = "4.7.33";
 
 // KAN-236 Phase D: how many sanitized payload records to keep.
 //
@@ -317,6 +317,9 @@ export class GeminiBridgeDO extends DurableObject {
     // world-readable endpoint just because it is the convenient one.
     this.payloadCaptureArmed = false;
     this.payloadCaptures = [];
+    // The attached notebook's id, learned when a scope switch succeeds. Held
+    // only to hand the page-side descriptor something to compare against.
+    this.currentNotebookId = null;
     // KAN-236: requestId -> re-arm callback for an in-flight collectTypedAnswer.
     //
     // The extension sends COLLECT_ANSWER_PROGRESS while Gemini is visibly
@@ -2187,6 +2190,21 @@ export class GeminiBridgeDO extends DurableObject {
    * Resolves {ok:false} rather than throwing, so the caller keeps whatever
    * text it already has instead of losing everything to a collection error.
    */
+  /**
+   * The notebook id inside a scope string, or null.
+   *
+   * Scope strings are `notebook:<uuid>` or `app:<id>`. Only the notebook form
+   * yields an id, and a malformed or app scope yields null rather than a
+   * partial match — the page-side descriptor compares the WHOLE id, so a
+   * truncated one would answer "does this contain half our id", which is not a
+   * question worth asking.
+   */
+  resolveNotebookIdFromScope(scope) {
+    if (typeof scope !== "string") return null;
+    const m = scope.match(/^notebook:([0-9a-fA-F-]{8,})$/);
+    return m ? m[1] : null;
+  }
+
   collectTypedAnswer({
     requestId,
     timeoutMs = 120000,
@@ -4259,7 +4277,13 @@ export class GeminiBridgeDO extends DurableObject {
         if (this.activeSocket && this.activeSocket.readyState === 1) {
           this.activeSocket.send(JSON.stringify({
             type: "PAYLOAD_CAPTURE_ARM",
-            armed
+            armed,
+            // Derived from the live scope rather than hardcoded, so it cannot
+            // drift from the notebook actually attached. Scope strings look
+            // like `notebook:<uuid>`; anything else (an /app scope) yields null
+            // and the descriptor's `contains.notebook_id` comes back null —
+            // unanswered rather than guessed.
+            notebookId: this.resolveNotebookIdFromScope(this.currentScope)
           }));
         }
         return new Response(JSON.stringify({

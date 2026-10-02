@@ -29,6 +29,12 @@ test('injected.js exports all essential MAIN-world helpers', () => {
     classifyString: 'function',
     extractBoundedStructure: 'function',
     handleProbeSet: 'function',
+    // KAN-236 Phase D: coarse descriptor + the notebook-id hint it compares
+    // against. In the contract rather than test-only because the hint is
+    // injected by the content script at runtime - it is part of the page-side
+    // API, not a testing convenience.
+    describeString: 'function',
+    setNotebookIdHint: 'function',
     // KAN-236 Phase D: the sanitized-record relay. `isPayloadCaptureArmed` is
     // in the contract rather than being test-only because the default-off
     // property is the whole safety argument, and a property that cannot be read

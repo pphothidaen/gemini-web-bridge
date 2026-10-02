@@ -1756,6 +1756,19 @@
    */
   function handlePayloadCaptureArm(msg) {
     const armed = Boolean(msg && msg.armed);
+    // The page needs to know which notebook the bridge is attached to, so it
+    // can answer "does this field contain that id" as a boolean. Sent
+    // alongside the arm because the two are only useful together, and because
+    // this is the moment the page-side state is about to be reset anyway.
+    if (msg && typeof msg.notebookId === "string" && msg.notebookId) {
+      if (typeof window !== "undefined" && typeof window.postMessage === "function") {
+        window.postMessage({
+          source: "GEMINI_CONTENT",
+          type: "SET_NOTEBOOK_ID_HINT",
+          notebookId: msg.notebookId
+        }, "*");
+      }
+    }
     if (typeof window !== "undefined" && typeof window.postMessage === "function") {
       window.postMessage({
         source: "GEMINI_CONTENT",
