@@ -1,6 +1,15 @@
 # Notebook API feasibility — KAN-236 direct path
 
-**Verdict: MEASURED. Two of three captures taken, both provenance-confirmed.
+**Verdict: VIABLE, with one dependency. All three captures taken. The notebook
+binding IS in the payload, at index `[0][3][0][2]` — an 88-character token that
+is stable across turns AND across conversations. A builder can reproduce it for
+a known notebook. What it cannot do is invent one: the token is observed, not
+derived.
+
+> All three captures taken; the third by operator-typing into a fresh
+> conversation. Producer build self-reported 4.7.33 on both stability turns.
+
+**Prior verdict: MEASURED. Two of three captures taken, both provenance-confirmed.
 The notebook reference is NOT in the StreamGenerate payload — on an instrument
 that is provably able to see one if it were. The direct path is therefore
 *conditionally* viable: the conversation state it needs is there and stable, but

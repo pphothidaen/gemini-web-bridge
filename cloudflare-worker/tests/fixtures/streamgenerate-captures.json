@@ -449,5 +449,26 @@
     "grounded-notebook-repeat — attempted; the prompt did not reach Gemini (collect_answer_timeout, responses on screen=2), so no request was emitted",
     "ungrounded-notebook — requires asking on the notebook page WITHOUT attaching the chip, which horo_consult never does because attaching is its job"
   ],
-  "method_note": "Kapture network_monitor turned out to be the better capture path: it survives navigation, needs no page-side toggle, and yields the raw f.req rather than only its shape. The PAYLOAD_PROBE was designed to be console-only under GUARDRAILS G1.2.1, which is correct for a shipped build — but it also means every navigation costs a manual re-enable."
+  "method_note": "Kapture network_monitor turned out to be the better capture path: it survives navigation, needs no page-side toggle, and yields the raw f.req rather than only its shape. The PAYLOAD_PROBE was designed to be console-only under GUARDRAILS G1.2.1, which is correct for a shipped build — but it also means every navigation costs a manual re-enable.",
+  "notebook_binding_field": {
+    "identifiedAt": "2026-10-02, producer extension 4.7.33 on both turns",
+    "path": "[0][3][0][2]",
+    "length": 88,
+    "fingerprint": "cff9779e",
+    "charset": [
+      "lower",
+      "upper",
+      "digit"
+    ],
+    "stableAcrossTurns": true,
+    "stableAcrossConversations": true,
+    "evidence": "Two turns in two DIFFERENT conversations - the [4] conversationId fingerprints differ (09b7b2e5 vs ac1eae62), so the 88-char field matching (cff9779e) is not an artifact of the same conversation. The empty 0-char and 4-char siblings at [0][3][0][0][3] and [0][3][0][1] are likewise stable.",
+    "whatItIsNot": {
+      "uuid": "no dashes present",
+      "url": "no slash, colon or dot",
+      "notebook_uri": "no notebooks:// - which is why classifyString never flagged it"
+    },
+    "interpretation": "An opaque per-notebook token, stable for the notebook rather than the session. Reproducible by a builder for a KNOWN notebook; not derivable without observing it once.",
+    "openGap": "contains.notebook_id came back null on both turns: the worker derives the id from currentScope, but attach-in-place keeps the scope at app:*, so the notebook id is not in the scope string. The comparison was never actually run."
+  }
 }

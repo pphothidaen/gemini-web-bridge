@@ -41,3 +41,5 @@ new_sqlite_classes = ["GeminiBridgeDO"]
 # same CPU budget as the DO, and nothing in this repo reads it.
 [observability]
 enabled = false
+[vars]
+BRIDGE_VERBOSE = 1
