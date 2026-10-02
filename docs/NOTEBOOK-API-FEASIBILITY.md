@@ -48,10 +48,40 @@ Three things are unknown, and all three are load-bearing:
 
 ### 2. The measurement could not be taken
 
-Enabling `PAYLOAD_PROBE` requires posting a message into the page. In this
-session that path was unavailable: `kapture__evaluate` returned `{}` for even
-`() => 1+1`, and by the time Phase D began it was no longer in the toolset at
-all. There is no other route from here into the page's JS context.
+There are **two independent blockers**, either of which alone is sufficient. That
+matters, because clearing one would not have produced the capture.
+
+**Blocker 1 — the probe cannot be switched on.** Enabling `PAYLOAD_PROBE`
+requires posting a message into the page. In this session that path was
+unavailable: `kapture__evaluate` returned `{}` for even `() => 1+1`, and by the
+time Phase D began it was no longer in the toolset at all. The alternatives are
+closed for concrete, recorded reasons:
+
+- Browser MCP is a **different Chrome instance** — its `chrome://extensions`
+  lists zero extensions and searching `bridge` returns `0 results`, so the
+  Gemini bridge is not installed in that profile at all.
+- Kapture is attached to the **correct** Chrome but refuses browser-internal
+  pages: `navigate` to `chrome://extensions/` returns `NAVIGATION_BLOCKED`.
+  (`new_tab` on the same URL is worse — it does not error, it silently redirects
+  to Kapture's own docs page.)
+
+**Blocker 2 — the output could not be read.** The probe's only sink is
+`console.log`, and the Kapture console reader is **detached**: it returns
+`totalCount: 0` straight after a page reload, and has done so across many
+successful `horo_consult` calls that certainly logged. It returned 58 entries at
+the start of the same session, so this is a regression in the instrument, not an
+absence of output.
+
+Blocker 2 is the one worth dwelling on. Had the reader merely looked empty
+without that 58-entry baseline, "the probe never fired" would have been a
+reasonable reading. With the baseline it is not — and an instrument reporting
+"nothing happened" when it has stopped working cannot support a conclusion in
+either direction.
+
+This is the same lesson that produced the 4.7.27 `/health` `collection` block:
+the heartbeat was moved off the console onto an endpoint that cannot detach. The
+payload probe cannot use that route, because its records are per-request and
+arbitrarily large.
 
 Consequence, stated plainly:
 
@@ -67,6 +97,23 @@ The one capture on file also has a **classifier gap** recorded against it — th
 notebook reference was looked for under `notebook://` and not found, while the
 live scope string uses `notebooks://` — so even that capture cannot yet be used
 to claim the reference is absent. It is unresolved, not negative.
+
+### 3. Why no remote probe toggle was built
+
+A worker → extension → page relay would clear blocker 1. It was deliberately not
+built, for three reasons.
+
+- `handleProbeSet` is page-scoped **by design**. The probe writes only
+  `{type, length, cls}`, and only to `console.log`, precisely because the console
+  is the one sink that cannot persist anything — and it is off by default
+  precisely because a shipped build should not be logging request structures at
+  all. A remotely-armed switch inverts that decision.
+- Even sanitized, a switch any bridge caller can trigger to make the extension
+  log request structures is an information-disclosure surface. That is a worse
+  trade than this measurement is worth.
+- **It would not have unblocked Phase D anyway** — blocker 2 stands regardless.
+  Adding a production debug backdoor to clear half a problem, and then still not
+  obtaining the capture, is a bad trade twice over.
 
 ## What was deliberately not done
 
@@ -87,10 +134,14 @@ a false certainty.
 
 ## To actually resolve this
 
-1. Reload the extension at `chrome://extensions` so `content.js` is the 4.7.25
-   build. This is required regardless — until then the 4.7.25 worker runs with
-   no heartbeat and behaves exactly as 4.7.24 did.
-2. Enable the probe from that extension's devtools console:
+1. ~~Reload the extension~~ — **done**, and confirmed live via
+   `/health` → `collection.last_progress_at` (see
+   `cloudflare-worker/tests/fixtures/submit-diagnostics.json` →
+   `extension_reload_status`). Both blockers below still need a human, so this
+   is recorded as a prerequisite already met rather than a remaining step.
+2. Enable the probe from that extension's devtools console, **with the page's
+   own DevTools open** — Kapture's console reader is detached, so a capture read
+   through it comes back empty:
    `window.postMessage({source:"GEMINI_CONTENT", type:"PAYLOAD_PROBE_SET", enabled:true}, "*")`
 3. Take the three cases: chip present, chip absent, chip repeat. The repeat case
    is the one that decides whether a notebook id is stable across calls, which

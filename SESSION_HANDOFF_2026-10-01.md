@@ -66,8 +66,12 @@ production และวัดว่า payload ของ Gemini หน้าต�
 > (บรรทัดนี้เพิ่มใน 4.7.26 เพราะ heartbeat เดิมไม่ log อะไรเลย
 > ทำให้ยืนยันไม่ได้ว่าโหลดตัวใหม่แล้วจริง)
 >
-> **PAT ที่ leak:** จะ rotate หลังทุก phase เสร็จ — ตอนนี้ phase ครบแล้ว
-> (ผู้ใช้แจ้งว่าจะทำต่อ) ยังไม่ rotate ใน session นี้
+> **PAT ที่ leak:** เปิด ticket แล้ว → **KAN-249** (High / Backlog)
+> "Rotate the leaked GitHub PAT — still unrotated, and it has push + production
+> deploy reach" เหตุผลที่ตั้ง High: token นี้ push ได้ + deploy production ได้
+> (`cd.yml` deploy ตอน push) และช่วงเปิดรั่วไม่มีใครบอกได้ว่าเกิดเมื่อไร
+> จึงต้องถือว่ายังใช้ได้อยู่จนพิสูจน์เป็นอย่างอื่น
+> ยังไม่ rotate ใน session นี้ — เป็นของผู้ใช้
 
 **push ก่อนเสมอ** — `cd.yml` deploy เมื่อ `cloudflare-worker/**` เปลี่ยน
 และต้องอนุมัติที่ environment `production` (required reviewer)
