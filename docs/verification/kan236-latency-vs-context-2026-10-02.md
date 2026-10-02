@@ -103,3 +103,37 @@ latency = (3) − `captures[].at`.
 
 Note `date +%s%3N` does not work on macOS — it is GNU-only and silently emits
 `N`. Use python for millisecond timestamps.
+
+### Third attempt — the bottleneck is structural, not tooling
+
+Tried using `/health` `collection.last_progress_at` as the completion signal,
+which would have made the whole measurement two tool calls per turn and needed
+no network buffer at all. It does not work, and the reason closes the door on
+this approach.
+
+**`COLLECT_ANSWER_PROGRESS` is only emitted from `content.js` `handleCollectAnswer`**
+— the handler the WORKER invokes when it orchestrates a turn. A message typed and
+sent through Kapture never enters that path, so it produces no heartbeat at all.
+`last_progress_at` therefore stays frozen at whatever the last *bridge-driven*
+turn left behind, which is why the estimator produced negative latencies
+(`(stale - fire)`), not merely noisy ones.
+
+Two further traps found on the way:
+
+- **Hidden tabs get timer-throttled by Chrome.** With the tab in the background
+  the 3 s heartbeat interval is suppressed, so even for a bridge-driven turn the
+  signal dries up. `kapture__show` before sending, or the instrument lies.
+- **Fixed waits produce a floor, not a measurement.** A 22 s wait against a ~5 s
+  response reports 22 s, and every turn reads the same, so r comes out at zero
+  from a run that looks perfectly orderly.
+
+**Net: for out-of-band sends there is no cheap completion signal.** The capture
+gives request fire time and context length exactly; the only remaining signal is
+polling `model-response`, at roughly one tool call per 3 s. That is the only
+method that yields trustworthy per-turn latency here, and it is expensive.
+
+Recommendation: do not attempt this again through Kapture. If per-turn latency
+matters, measure it in the bridge itself — `executeThroughExtension` already has
+the duration wrapper that was added for exactly this, and now that `vlog` reads
+`env` it will actually emit. Driving turns through `horo_consult` makes the
+measurement a by-product of normal traffic instead of a separate experiment.
