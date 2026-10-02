@@ -23,8 +23,8 @@ production และวัดว่า payload ของ Gemini หน้าต�
 | :--- | :--- |
 | HEAD | ดู `git log --oneline -1` (main, synced with origin) |
 | untracked | `prompts/` 7 ไฟล์ — **ยังไม่ commit ตั้งใจ** |
-| production | **4.7.26**, `CONNECTED_AND_READY`, `consecutive_errors: 0` |
-| tests | **632 / 627 pass / 0 fail** / 5 skipped |
+| production | **4.7.27**, `CONNECTED_AND_READY`, `consecutive_errors: 0` |
+| tests | **634 / 629 pass / 0 fail** / 5 skipped |
 
 > **อัปเดต 2026-10-02 (Phase A–F จบ):** ตัวเลขในตารางเดิม (`11524c2`, 3 commits
 > ที่ยังไม่ push, 4.7.24, 622/616/**1 fail**) เป็นของ snapshot ก่อน Phase A
@@ -40,7 +40,20 @@ production และวัดว่า payload ของ Gemini หน้าต�
 > ได้จริง (วัดใหม่ 2026-10-02)
 > **Phase F** — แก้ `cd-watchdog.yml` ที่สั่ง approve แล้วได้ 422
 >
-> **⚠️ ค้าง 1 อย่างเดียว: reload extension** ที่ `chrome://extensions` ใน
+> **✅ reload extension = สำเร็จแล้ว (2026-10-02 05:34)** ไม่ต้องทำอะไรอีก
+> ยืนยันด้วย `curl …/health | jq .collection` — `last_progress_at` มีค่าแล้ว
+> ข้ามไปสองครั้งติด (`172765` → `246074`) และ `responses` ไป `8 → 9`
+> ข้อความ `COLLECT_ANSWER_PROGRESS` มีอยู่ใน content.js ตั้งแต่ 4.7.25
+> ดังนั้นการมาของมันคือ **หลักฐาน** ว่า extension ฝั่งขวาโหลดแล้ว ไม่ใช่การ
+> อนุมาน — **Phase C ครบทั้งสองฝั่งและวัดจริงบน production**
+>
+> **ประวัติ (เผื่อมีคนเจอซ้ำ):** reload ทำโดย operator เอง เพราะ session นี้
+> เข้า `chrome://extensions` ไม่ได้ทั้งสองทาง —
+> Browser MCP เป็นคนละ Chrome instance (`chrome://extensions` มี 0 extensions,
+> ค้น "bridge" ได้ 0 results) ส่วน Kapture ต่อ Chrome ถูกตัวแต่
+> `navigate` ไป `chrome://extensions/` โดน `NAVIGATION_BLOCKED` ชัดเจน
+> (ดีกว่าที่ `new_tab` ซึ่ง redirect เงียบ ๆ ไปหน้า doc ของ Kapture)
+>
 > **Chrome ตัวเดิม** (ตัวที่เปิด gemini.google.com) ให้เป็น build 4.7.26
 > MCP ทั้งสองตัวเข้าไปไม่ได้: Browser MCP เป็นคนละ Chrome instance
 > (`chrome://extensions` มี 0 extensions, ค้น "bridge" ได้ 0 results) ส่วน

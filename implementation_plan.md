@@ -705,14 +705,19 @@ the case until the extension is reloaded — the timer fires at
 `startedAt + timeoutMs`, identical to 4.7.24. The new behaviour is additive, not
 a replacement.
 
-**Not yet verified end to end:** the extension half. `content.js` now sends
-`COLLECT_ANSWER_PROGRESS` every 3 s, but the browser profile available to this
-session is not the one running the Gemini tab, so the extension could not be
-reloaded at `chrome://extensions`. Until it is reloaded, the deployed worker
-runs with no heartbeat and behaves exactly as 4.7.24 did. A live grounded call
-on 4.7.25 succeeded (verified, 2 citations, 3 accumulated turns), which
-confirms no regression — but the slide itself stays unexercised in production
-until that reload happens.
+**VERIFIED END TO END 2026-10-02 05:34 — both halves live.** `COLLECT_ANSWER_PROGRESS`
+now arrives at the worker on two consecutive grounded calls (`last_progress_at`
+`172765` → `246074`, `responses` `8` → `9`, `generating: true`). That message type
+exists only in `content.js` from 4.7.25 onward, so its arrival is proof the
+extension half is loaded rather than an inference from a healthy run. The slide
+is therefore live in production, not merely implemented.
+
+The reload itself was done by the operator — both MCP routes were closed from this
+session (Browser MCP is a different Chrome instance with zero extensions;
+`kapture__navigate` to `chrome://extensions/` returns `NAVIGATION_BLOCKED`). What
+*was* automated here is the verification, via the `/health` `collection` block
+added in 4.7.27, which is why the check survived a console reader that had
+silently detached.
 
 ### Phase D — Finish the KAN-236 measurement (browser required)
 
