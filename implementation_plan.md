@@ -284,17 +284,13 @@ capture can say which.
 
 ### New
 
-**`cloudflare-worker/tests/submit-diagnostic.test.mjs`**
+**`cloudflare-worker/tests/fixtures/submit-diagnostics.json` — created, Phase B**
 
-Pins the KAN-242 diagnosis logic in isolation, against stub documents, before any
-live run. Asserts that `typeAndSend` distinguishes "the click did nothing" from
-"the click worked", because that distinction is currently absent and is the whole
-defect. Written **before** the fix, so it fails first.
+The three measured records. Committed as `9f7405c`. Verdict `NOT_REPRODUCED`.
 
-**`cloudflare-worker/tests/fixtures/submit-diagnostics.json`**
-
-The measured records for KAN-242, one per `case` in the closed set. Sanitized:
-counts, lengths, booleans, step names. No prompt text, no answer text, no tokens.
+**`cloudflare-worker/tests/submit-diagnostic.test.mjs`** — **not created.**
+Planned against a state Phase B did not observe; see the Functions section for
+why it was abandoned rather than written.
 
 **`cloudflare-worker/tests/payload-shape-contract.test.mjs`**
 
@@ -327,32 +323,24 @@ concluding it is open on the strength of an unexamined 2 KB string is not.
 
 ### Modified
 
-**`extension-cloudflare/prompt-typing.js`** — `typeAndSend`'s confirmation step,
-plus the new `describeSubmitState` and `waitForSubmitSignal`. The fix itself
-depends on what Phase B finds.
+**`extension-cloudflare/prompt-typing.js`, `extension-cloudflare/injected.js`,
+`extension-cloudflare/content.js`** — **unchanged.** All three were specified for
+the submit-window probe and its classifier. Phase B found no failing state, so
+there is nothing for them to do. Recording them as untouched is the honest
+outcome, not an omission.
 
-**`extension-cloudflare/injected.js`** — the submit-window probe. Gated by the
-same runtime-flag pattern as `PAYLOAD_PROBE_SET`, console-only sink for the same
-GUARDRAILS G1.2.1 reason, defaulting to off. **No URL, no query string, no
-headers** — `matchRecognizedEndpoint` already returns only
-`{endpoint, canonicalPath, buildLabel}`, and that is all the new record carries.
+**`cloudflare-worker/src/index.js`** — `collectTypedAnswer` only: the idle-aware
+timer and the live response count. **Not** the `f.req` builder, and **not**
+`recordSubmitDiagnostic`.
 
-**`extension-cloudflare/content.js`** — `handleSubmitProbe` only. This file was
-previously listed as "not touched"; that was wrong. A MAIN-world message needs a
-receiver in the content script, exactly as `TYPE_PROMPT_INTO_EDITOR` has one in
-`injected.js`.
+**`cloudflare-worker/package.json`, `cloudflare-worker/package-lock.json`,
+`const WORKER_VERSION`** — bumped together in Phase C.
+`version-consistency.test.mjs` makes the unified release line a hard failure, so
+they must move as one. The extension manifest moves only if the extension source
+changes, which Phase C no longer does.
 
-**`cloudflare-worker/src/index.js`** — `collectTypedAnswer` (timer and count),
-plus `recordSubmitDiagnostic` and one health-payload line. Not the `f.req`
-builder.
-
-**`extension-cloudflare/manifest.json`, `cloudflare-worker/package.json`,
-`cloudflare-worker/package-lock.json`, `const WORKER_VERSION`** — all four bumped
-together in Phase C. `version-consistency.test.mjs` makes the unified release
-line a hard failure, so they must move as one.
-
-**`CHANGELOG.md`** — one `[Unreleased]` → `### Fixed` entry for the KAN-242 root
-cause and its fix; the Phase D artefacts go under `### Added`.
+**`CHANGELOG.md`** — one `[Unreleased]` → `### Fixed` entry for the two timer
+defects; the Phase D artefacts go under `### Added`.
 
 **`PLANNING-HANDOFF.md`** — whatever remains open, in the form GUARDRAILS G4.1.1
 requires. No `TODO`/`FIXME` markers in `cloudflare-worker/src/` or
@@ -381,49 +369,20 @@ between a prompt and a persisted fixture is not a change to make on a hunch.
 
 ## Functions
 
-### New: `describeSubmitState(doc, probeRecord)`
+### Dropped after Phase B — never implemented, deliberately
 
-`extension-cloudflare/prompt-typing.js`. Pure classification of the submit window
-from the DOM after `typeAndSend` returns, plus the probe record or its absence.
-Returns one of:
+`describeSubmitState`, `waitForSubmitSignal`, `handleSubmitProbe`,
+`probeRecordForSubmit`, `recordSubmitDiagnostic`, and the `submit-diagnostic`
+test file were all specified against a state 3 that Phase B did not observe.
+Writing a five-way classifier to distinguish a failure that did not occur would
+be inventing a defect and then shipping a fix for it. They are recorded here as
+abandoned rather than deleted silently, so a future session does not re-derive
+the same plan from the symptom alone.
 
-`"request_issued"` · `"transcript_grew_without_request"` ·
-`"editor_did_not_hold"` · `"no_send_button"` · `"no_record_yet"`
-
-`"transcript_grew_without_request"` is the state currently indistinguishable from
-success, and naming it is the point. `doc` and `probeRecord` are injected so the
-whole matrix is testable with stubs and no browser.
-
-### New: `waitForSubmitSignal(requestId, timeoutMs)`
-
-`extension-cloudflare/prompt-typing.js`. Waits for a `SUBMIT_PROBE` message from
-the MAIN world within a short window — 3 s is the working figure, since the
-network call is issued synchronously with the click. Resolves `null` on timeout
-rather than rejecting, because "nothing observed yet" is a legitimate answer.
-
-If Phase B shows the click is reliable and only the *answer* is missing, this
-function is deleted rather than shipped. The plan does not assume it survives.
-
-### New: `handleSubmitProbe(msg)`
-
-`extension-cloudflare/content.js`. Receives `SUBMIT_PROBE` from the MAIN world,
-tags it with `requestId` and `case`, appends it to the in-page diagnostic buffer,
-and — when `case` is set — sends the whole `SubmitDiagnostic` to the worker along
-with `TYPE_PROMPT_RESULT`. A pure pass-through otherwise.
-
-### New: `probeRecordForSubmit(matched, transport, requestStructure)`
-
-`extension-cloudflare/injected.js`. Wraps the existing `probeRecord(...)` /
-`logProbeRecord(...)` pair to also emit a `SUBMIT_PROBE` `postMessage` while a
-submit window is open. Reuses `decodeAndSanitizePayload` and
-`extractBoundedStructure` unchanged.
-
-### New: `recordSubmitDiagnostic(record)`
-
-`cloudflare-worker/src/index.js`. Appends the sanitized `SubmitDiagnostic` to a
-bounded ring buffer on the DO instance and exposes it via `check_bridge_health`.
-Five entries is enough — one per turn — and storing the last few failures is what
-turns "it failed again" from an unreproducible report into a comparison.
+If KAN-242 is ever reproduced, `SubmitDiagnostic` in
+`cloudflare-worker/tests/fixtures/submit-diagnostics.json` is the shape these
+would return, and the three cases already recorded there are the baseline a new
+run would be compared against.
 
 ### New: `flattenStructure`, `describeWorkerBuilder`, `diffShapes`, `assessReachability`
 
@@ -434,10 +393,11 @@ loudly** when it cannot find them rather than returning an empty list — becaus
 "found nothing" and "found nothing to compare" would otherwise look identical,
 which is the exact failure mode of a measurement tool reporting no differences.
 
-### Modified: `typeAndSend(opts)`
+### Not modified: `typeAndSend(opts)` — Phase B found nothing to fix
 
-`extension-cloudflare/prompt-typing.js`. Confined to the confirmation step, and
-**what it becomes depends on Phase B**:
+Recorded because the analysis was done and the answer was negative.
+`extension-cloudflare/prompt-typing.js` is **unchanged**, and the KAN-231
+capture that describes its selectors still holds. The original plan read:
 
 - **State 3** (transcript grew, no request): replace the `countUserQueries` check
   with `describeSubmitState(...)` and fail fast with
@@ -634,35 +594,90 @@ absent one.
 
 **Gate:** I report the root cause before writing any fix code.
 
-### Phase C — Fix KAN-242 and the two known-incomplete timers
+#### RESULT — Phase B executed 2026-10-02: NOT REPRODUCED
 
-7. Write `submit-diagnostic.test.mjs` **first**, against the state matrix. It
-   passes for states 1, 3, 4, 5 and fails for state 2 until the fix lands.
-8. Implement `describeSubmitState`, `waitForSubmitSignal`, `handleSubmitProbe`,
-   `probeRecordForSubmit`, `recordSubmitDiagnostic`.
-9. Apply the `typeAndSend` fix for whichever state Phase B identified.
-10. Make `collectTypedAnswer`'s timer idle-aware, hard cap retained; add the live
-    response count so the timeout message stops printing 0.
-11. Extend `collect-typed-answer-deadline.test.mjs` for both.
-12. Run the Phase C mutation. Observed to fail, then reverted.
-13. `CHANGELOG.md` under `[Unreleased]` → `### Fixed`. **One entry covering the
-    root cause** — not three entries describing three symptoms of it.
-14. Bump all four version files together to 4.7.25 (`manifest.json`,
-    `package.json`, `package-lock.json`, `WORKER_VERSION`).
-15. Rebuild the extension and reload it at `chrome://extensions`. **A worker
-    deploy does not carry an extension change** — they are separate deliveries,
-    so this must happen before the live check or the check proves nothing.
-16. **Live verification before deploying.** Run the 2+ turn conversation that
-    reproduces the failure; confirm it now either succeeds or fails fast with an
-    accurate reason. Verify via `check_bridge_health` and the `SubmitDiagnostic`
-    ring buffer.
-17. `npm test` must be 0 fail.
-18. Commit `KAN-242:`, push, approve the `production` environment, wait for the
+Three consecutive grounded `horo_consult` calls on `/app/101e3a288e0253c3`, at
+0, 1 and 2 accumulated turns. All three verified; `/health` ended healthy with
+`consecutive_errors: 0` and `attach_failures: 0`.
+
+| turns | citations | StreamGenerate fired | duration |
+| :--- | :--- | :--- | :--- |
+| 0 | 7 | yes (seq 11) | 38292 ms |
+| 1 | 5 | yes (seq 14) | 38353 ms |
+| 2 | 3 | yes (seq 10) | 36151 ms |
+
+The plan predicted state 3 — transcript grew, no request issued. That did **not**
+happen. StreamGenerate fired on every run. Recorded in
+`cloudflare-worker/tests/fixtures/submit-diagnostics.json`, committed as
+`9f7405c`.
+
+Three hypotheses were **eliminated with evidence**, not assumed away:
+
+- The Gemini input-area reskin (`ui-improvements-phase-1`, `gem-icon-button`,
+  `leading-actions-wrapper`) does **not** break the send selector. Tested
+  directly: zero matches while the editor is empty, an enabled
+  `ส่งข้อความ` button after typing, zero again after clearing. Exactly what
+  KAN-231 records.
+- The extension build is **not** stale. `verify_build()` compares a source
+  digest rather than a commit; digest `8a38ec927bc9` matches, and the built
+  extension already carries the KAN-236 fix.
+- `kapture__evaluate` is **not** usable — returns an empty object for
+  `() => 1+1` while reporting `evalAllowed: true`.
+
+**A near-miss that is itself a finding.** The first full-buffer read of
+`network_requests` appeared to show zero StreamGenerate requests, which would
+have read as a clean reproduction. It was wrong: the tool truncates its output
+in the middle when the buffer holds long URLs, and the request sat at seq 11 of
+65 inside that region. A request's absence may now only be concluded after every
+sequence number has been individually observed. This is the same failure the
+2026-10-01 handoff recorded, and it nearly produced a fabricated root cause.
+
+**What remains open.** KAN-242 was reproduced on `/app/72d00678d54a08dd`,
+recorded as having 2+ accumulated turns. This run reached 2 accumulated turns
+and succeeded. Either the failure needs more turns than were reached, or
+something about that specific conversation matters rather than turn count.
+
+**Consequence for Phase C.** There is no failing state to fix, so steps 7–13 as
+written have no subject. What remains justified is narrower, and it is stated in
+the Phase C section below rather than assumed here.
+
+### Phase C — Narrowed after Phase B: the two timers, not the submit path
+
+Phase B found no failure, so steps 7–13 as originally written have no subject.
+Writing a `describeSubmitState` classifier to distinguish a state that was never
+observed to occur would be inventing a defect, which is the one thing this
+phase exists to avoid. They are dropped.
+
+What survives is narrower and independently justified, because both items were
+already diagnosed and already recorded as incomplete in `[4.7.24]`:
+
+7. Make `collectTypedAnswer`'s flat 120 s timer idle-aware, retaining the hard
+   cap so a dead page still fails rather than hangs. Phase B measured real
+   StreamGenerate durations of 36151–38353 ms, so the margin on a flat 120 s is
+   about 3.2x rather than comfortable — and a notebook-grounded answer that
+   thinks for two minutes was the case that actually timed out.
+8. Add a live response count from the extension during collection, so the
+   timeout message stops printing `responses on screen=0` when the page held 5.
+   `lastCollectedResponseCount` is only written when a `COLLECT_ANSWER_RESULT`
+   arrives, which by definition has not happened on the timeout path.
+9. Extend `collect-typed-answer-deadline.test.mjs` for both: the idle deadline
+   must slide for a live generation and still stop for a dead one, and a
+   timeout with the extension reporting 5 must render 5.
+10. Run the Phase C mutations. Observed to fail, then reverted.
+11. `CHANGELOG.md` under `[Unreleased]` → `### Fixed`, **one entry for the root
+    cause** — not two entries describing two symptoms of it.
+12. Bump the worker version to 4.7.25 (`package.json`, `package-lock.json`,
+    `WORKER_VERSION` — `version-consistency.test.mjs` makes the unified release
+    line a hard failure, so they move together). The extension manifest moves
+    only if the extension source changes, which Phase C no longer does.
+13. `npm test` must be 0 fail.
+14. Commit `KAN-236:`, push, approve the `production` environment, wait for the
     run to finish, then confirm live `/health` shows 4.7.25 and
     `consecutive_errors: 0`.
 
-**Gate:** the failing conversation behaves differently than it did before the
-change, and the deployed version reports 4.7.25.
+**Gate:** the deployed version reports 4.7.25 and health is clean. There is no
+"failing conversation behaves differently" check, because Phase B established
+that no failing conversation was reproduced.
 
 ### Phase D — Finish the KAN-236 measurement (browser required)
 
