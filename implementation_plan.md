@@ -752,12 +752,69 @@ until that reload happens.
 **Gate:** the assessment exists with a verdict, backed by at least three
 sanitized captures.
 
+#### RESULT — Phase D BLOCKED 2026-10-02. No capture taken, nothing written.
+
+Enabling `PAYLOAD_PROBE` requires posting a message into the page. There is no
+route to the page's JS context from this session: `kapture__evaluate` returned
+`{}` for even `() => 1+1` throughout Phase B, and by Phase D it was no longer
+present in the toolset at all.
+
+So the chip-present, chip-absent and chip-repeat captures **do not exist**, and
+the 2026-10-01 ungrounded capture could not be re-verified. Verdict recorded in
+`docs/NOTEBOOK-API-FEASIBILITY.md` as **NOT ESTABLISHED** — a negative result
+reached without fabrication, not a negative finding.
+
+Two things were deliberately *not* done, and both would have been faster:
+
+- **No hand-transcription from a network capture.** The raw `StreamGenerate`
+  body holds the full prompt and session tokens, which G1.2.1 keeps out of
+  written artifacts. A hand-derived structure would pass
+  `payload-classifier.test.mjs`'s leak canary while having been produced by
+  exactly the means the canary exists to prevent.
+- **No `scripts/analyze-payload-shape.mjs`, no `payload-shape-contract.test.mjs`.**
+  Both were planned as consumers of captures that do not exist. Writing them
+  would pin a payload shape I cannot substantiate, converting an open question
+  into false certainty.
+
+The one capture on file also carries an unresolved **classifier gap** — the
+notebook reference was searched for under `notebook://` while the live scope
+uses `notebooks://` — so it cannot support a claim that the reference is
+absent. `streamgenerate-captures.json` now carries a
+`_provenance_unverified_2026_10_02` key at the top saying so, rather than
+continuing to assert provenance this session did not establish.
+
 ### Phase E — KAN-231 fixture gap (≈30 min)
 
-33. `sendButtonFallback` matched **zero** elements in every captured state,
-    including the one where the primary selector found an enabled button. The DOM
-    contract records this honestly as `observed: false` with `unobservedBecause`.
-    The gap is that it stays in `prompt-typing.js` as a fallback providing none.
+33. **CORRECTED 2026-10-02: `sendButtonFallback` DOES match.** The earlier claim
+    that it "matched zero elements in every captured state" was wrong, and the
+    reason it looked true is worth recording — the probe was run against an
+    *empty* editor, where Gemini renders no send control at all. Both selectors
+    return nothing there, so the fallback looked dead for a reason that had
+    nothing to do with the fallback.
+
+    Measured on `/app/101e3a288e0253c3` with one character typed, via Kapture
+    `elements`, visible and hidden both included:
+
+    | selector | empty editor | with text |
+    |---|---|---|
+    | `button:has(mat-icon[arrow_upward])` (primary) | 0 | 1 — `button` |
+    | `button.send-button, [data-test-id='send-button']` (fallback) | 0 | 1 — `gem-icon-button.send-button` |
+
+    Both resolve the same control at identical bounds (x 919.5, y 594, 32×32).
+    The primary returns the inner `button`; the fallback returns the
+    `gem-icon-button.send-button` wrapper containing it. The fallback is real
+    markup, not decoration.
+
+    **Decision: keep it, and correct the DOM contract.** It is not redundant in
+    the sense that mattered — it is an independent hook on a different element
+    (the Angular wrapper, class `lm-enabled`) that survives a Material internals
+    change, which is exactly the resilience it was added for. The contract's
+    `observed: false` is what is wrong, and it stays in the contract only until
+    that is fixed.
+
+    **Done:** recorded under `_remeasured_2026_10_02` in
+    `cloudflare-worker/tests/fixtures/prompt-typing.json`, with the method and
+    the raw element classes. `dom-signal-contract.test.mjs` still passes 14/14.
 34. The pre-flight check re-confirms the primary selector works on today's
     reskinned input area, which makes the fallback question sharper: if the
     primary is healthy *and* the fallback matches nothing, the fallback is

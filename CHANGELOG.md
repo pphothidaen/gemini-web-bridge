@@ -114,6 +114,30 @@ it.
 ## [Unreleased]
 
 ### Fixed
+- **The CD watchdog issue body no longer tells operators to make an approval
+  call that returns 422.** `cd-watchdog.yml` printed the `pending_deployments`
+  POST without the `comment` field, which the API requires — a reader copying
+  that block got `"comment" wasn't supplied` and the run stayed stalled, with
+  nothing in the error naming the field. `docs/CD-STALL-RUNBOOK.md` already
+  documented it correctly, but the watchdog's own issue is what a stalled-run
+  responder reads first. The env-id lookup also now uses `--jq` so it prints the
+  id rather than a dump to copy from.
+- **`prompt-typing.json` now records that `sendButtonFallback` does match.** The
+  handoff claimed it "matched zero elements in every captured state". That was
+  measured against an *empty* editor, where Gemini renders no send control at
+  all — so both the primary and the fallback returned nothing, and the fallback
+  looked dead for a reason unrelated to it. Re-measured with text present via
+  Kapture `elements`: the fallback matches one `gem-icon-button.send-button`
+  (classes include `lm-enabled`, `has-input`, `submit`) at the same 919.5/594
+  32×32 bounds the primary's inner `button` resolves to.
+
+  The recorded cause is that `states.filled` captured the `arrow_upward`
+  `mat-icon` but omitted both its parent `button` and the
+  `gem-icon-button.send-button` wrapper — a tree from which the fallback's match
+  could not have been derived, which is exactly why the zero-match claim looked
+  credible. The fallback is kept: it is an independent hook on a different
+  element that survives a Material internals change, which is what it was added
+  for.
 - **`collectTypedAnswer`'s deadline is now idle-based, and its timeout reports
   the page's real response count.** Two defects the 4.7.24 entry recorded as
   "known incomplete", both in the caller-side half that the KAN-236 extension

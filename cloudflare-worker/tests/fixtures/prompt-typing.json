@@ -415,5 +415,33 @@
     "wrong": "document.querySelectorAll('lottie-player, lottie-airo') -> 0",
     "right": "document.querySelectorAll('[lottie-animation]') -> 1, and its element is <div lottie-animation class=\"thinking-dots-animation\">",
     "lesson": "An element with a dash in the name is not always a custom element tag. thinking-dots-animation IS a tag, but the lottie inside it is a plain div carrying an attribute. Searching for a tag name that does not exist yields a confident zero."
+  },
+  "_remeasured_2026_10_02": {
+    "why": "The handoff claimed sendButtonFallback 'matched zero elements in every captured state'. That was measured against an EMPTY editor, where Gemini renders no send control at all - so both selectors returned nothing and the fallback looked dead for an unrelated reason. Re-measured with text present.",
+    "how": "Kapture `elements` on /app/101e3a288e0253c3, visible=all, one character typed into #ql-editor, then cleared. No script injection used.",
+    "empty_editor": {
+      "primary_arrow_upward": 0,
+      "fallback_send_button": 0,
+      "note": "Neither exists. Any conclusion about the fallback drawn here is unsound."
+    },
+    "with_text": {
+      "primary": "input-area-v2 button:has(mat-icon[data-mat-icon-name='arrow_upward'])",
+      "primary_matched": 1,
+      "primary_element": "button.mdc-icon-button.mat-mdc-icon-button",
+      "fallback": "input-area-v2 button.send-button, input-area-v2 [data-test-id='send-button']",
+      "fallback_matched": 1,
+      "fallback_element": "gem-icon-button.send-button",
+      "fallback_classes": "send-button ng-tns-c2197198206-4 has-input submit gem-button gem-button-badge-size-small gem-button-size-small gem-button-type-on-surface lm-enabled",
+      "same_bounds": true,
+      "bounds": {
+        "x": 919.5,
+        "y": 594,
+        "width": 32,
+        "height": 32
+      },
+      "relationship": "The fallback resolves the Angular gem-icon-button wrapper; the primary resolves the inner button. Same control, two independent hooks."
+    },
+    "decision": "KEEP the fallback and correct the contract. It is not providing nothing - it is a hook on a different element that survives a Material internals change, which is what it was added for. The contract's observed:false is the thing that was wrong.",
+    "still_wrong_in_this_file": "states.filled records the arrow_upward mat-icon but omits BOTH its parent button and the gem-icon-button.send-button wrapper, so the recorded tree could not have produced the fallback's match. That omission is what let the zero-match claim look credible."
   }
 }

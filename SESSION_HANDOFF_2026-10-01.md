@@ -21,16 +21,24 @@ production และวัดว่า payload ของ Gemini หน้าต�
 
 | | |
 | :--- | :--- |
-| HEAD | `11524c2` (main) |
-| **ยังไม่ push** | **3 commits** — `20d2e01`(docs), `1a872d6`(fixture), `11524c2`(handoff) |
+| HEAD | ดู `git log --oneline -1` (main, synced with origin) |
 | untracked | `prompts/` 7 ไฟล์ — **ยังไม่ commit ตั้งใจ** |
-| production | **4.7.24**, `CONNECTED_AND_READY`, `consecutive_errors: 2` |
-| tests @`11524c2` | 622 / 616 pass / **1 fail** / 5 skipped |
+| production | **4.7.25**, `CONNECTED_AND_READY`, `consecutive_errors: 0` |
+| tests | **631 / 626 pass / 0 fail** / 5 skipped |
 
-> **แก้แล้ว (2026-10-02):** ตัวเลข `0 fail` ข้างบนเป็นค่าที่ถูกต้อง ณตอนเขียน
-> แต่ไม่ใช่ค่าที่ `11524c2` ทิ้งไว้ — commit นี้เองทำให้ `production-host.test.mjs`
-> แดง เพราะไฟล์นี้พูดถึง retired host โดยไม่ได้อยู่ใน allowlist
-> (ดู §10 ข้อ 0)
+> **อัปเดต 2026-10-02 (Phase A–F จบ):** ตัวเลขในตารางเดิม (`11524c2`, 3 commits
+> ที่ยังไม่ push, 4.7.24, 622/616/**1 fail**) เป็นของ snapshot ก่อน Phase A
+> เสร็จหมดแล้ว ตอนนี้ 4.7.25 ขึ้น production แล้ว (run `36966455556`)
+>
+> **Phase A** — แก้ `production-host.test.mjs` / คืน suite เป็น 0 fail
+> **Phase B** — วัด KAN-242 ที่ `/app/101e3a288e0253c3`: StreamGenerate ยิงทุกครั้ง
+> 0/1/2 turns → `NOT_REPRODUCED` (conversation เดิม `/app/72d00678d54a08dd` ยังไม่ได้ลองซ้ำ)
+> **Phase C** — แก้ timer ฝั่ง worker (`COLLECT_ANSWER_PROGRESS` + idle-aware
+> deadline + hardCap enforcement) → **4.7.25**
+> **Phase D** — **BLOCKED** ดู `docs/NOTEBOOK-API-FEASIBILITY.md`
+> **Phase E** — `sendButtonFallback` **ไม่ได้** match 0 อย่างที่เคยเขียนไว้ มัน match
+> ได้จริง (วัดใหม่ 2026-10-02)
+> **Phase F** — แก้ `cd-watchdog.yml` ที่สั่ง approve แล้วได้ 422
 
 **push ก่อนเสมอ** — `cd.yml` deploy เมื่อ `cloudflare-worker/**` เปลี่ยน
 และต้องอนุมัติที่ environment `production` (required reviewer)

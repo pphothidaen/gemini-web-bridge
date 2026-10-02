@@ -1,5 +1,6 @@
 {
   "_note": "KAN-236 measurement, step 1 of implementation_plan.md. Raw sanitized structures transcribed from PAYLOAD_PROBE records the operator enabled at chrome://extensions -> devtools console. NOT hand-transcribed from a network capture — every structure below is extractBoundedStructure output verbatim, which is what keeps it inside GUARDRAILS G1.2.1. The leak canary in payload-classifier.test.mjs is what makes that guarantee checkable rather than asserted.",
+  "_provenance_unverified_2026_10_02": "PROVENANCE NOT RE-CONFIRMED for the capture below. It was recorded 2026-10-01 and this session could not re-enable the probe: kapture__evaluate was already returning {} and is now GONE from the toolset, so there is no way to postMessage PAYLOAD_PROBE_SET from this session. The structure below is left EXACTLY as recorded rather than re-derived, because the alternative — reconstructing it by hand from a network body, which is a raw surface holding prompts and tokens — is what the GUARDRAILS prohibit. Read this fixture as inherited, not as reproduced.",
   "capturedAt": "2026-10-01T09:00:20Z",
   "capturedBy": "operator-enabled PAYLOAD_PROBE, read via Kapture console_logs",
   "buildLabel": "boq_assistant-bard-web-server_20260929.03_p0",

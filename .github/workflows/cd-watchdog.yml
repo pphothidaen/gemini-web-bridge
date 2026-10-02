@@ -121,8 +121,12 @@ jobs:
             echo
             echo "Remediation (see docs/CD-STALL-RUNBOOK.md): review the run, then approve or reject the gate:"
             echo '```'
-            echo "gh api repos/$GITHUB_REPOSITORY/actions/runs/<RUN_ID>/pending_deployments   # get environment id"
-            echo "printf '{\"environment_ids\":[<ENV_ID>],\"state\":\"approved\"}' | gh api -X POST repos/$GITHUB_REPOSITORY/actions/runs/<RUN_ID>/pending_deployments --input -"
+            echo "gh api repos/$GITHUB_REPOSITORY/actions/runs/<RUN_ID>/pending_deployments --jq '.[0].environment.id'   # get environment id"
+            # The `comment` field is REQUIRED. Omitting it returns
+            # 422 "\"comment\" wasn't supplied" and the run stays stalled, so a
+            # reader who copies this block without opening CD-STALL-RUNBOOK.md
+            # hits a wall and has no way to guess which field is missing.
+            echo "printf '{\"environment_ids\":[<ENV_ID>],\"state\":\"approved\",\"comment\":\"reviewed: <why>\"}' | gh api -X POST repos/$GITHUB_REPOSITORY/actions/runs/<RUN_ID>/pending_deployments --input -"
             echo '```'
             echo "Do NOT approve blindly: confirm the head commit is what production should run."
             echo
