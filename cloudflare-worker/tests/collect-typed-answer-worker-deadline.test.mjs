@@ -230,3 +230,21 @@ test('MUTATION: the heartbeat must update the count the timeout path reads', () 
 test('MUTATION: the slide must be bounded or a stuck page waits forever', () => {
   assert.match(SOURCE, /hardCap = Math\.max\(timeoutMs \* 3, timeoutMs \+ 60000\)/);
 });
+
+test('the heartbeat announces itself exactly once per collection', () => {
+  // Without this the heartbeat is unobservable: after an extension reload there
+  // is no way to tell the new build from the old one, because the worker's
+  // slide stays invisible whenever a generation finishes inside the flat budget
+  // — which is every healthy run. One console line per collection is what makes
+  // "is the 4.7.25 half actually loaded?" answerable.
+  const CONTENT = fs.readFileSync(
+    path.resolve(new URL('../../extension-cloudflare/content.js', import.meta.url).pathname),
+    'utf8'
+  );
+  assert.match(CONTENT, /COLLECT_ANSWER_PROGRESS active/,
+    'the first heartbeat must log, or the extension half cannot be verified live');
+  // Once, not per beat: a 3s interval that logged every tick would flood the
+  // console during a long generation.
+  assert.match(CONTENT, /if \(!announced\) \{\s*announced = true;/,
+    'the announcement must be latched so it fires exactly once');
+});

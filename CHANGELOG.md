@@ -114,6 +114,14 @@ it.
 ## [Unreleased]
 
 ### Fixed
+- **The 4.7.25 heartbeat is now observable.** The extension's
+  `COLLECT_ANSWER_PROGRESS` sent every 3 s and logged nothing, which left the
+  extension half unverifiable in practice: after a reload there was no way to
+  tell the new build from the old one, because the worker's deadline slide stays
+  invisible whenever a generation finishes inside the flat 120 s budget — which
+  is every healthy run. One `[Bridge] 💓 COLLECT_ANSWER_PROGRESS active` line per
+  collection, latched so a long generation does not flood the console. Pinned by
+  a test, because the honest reason it was added is that it was missing.
 - **The CD watchdog issue body no longer tells operators to make an approval
   call that returns 422.** `cd-watchdog.yml` printed the `pending_deployments`
   POST without the `comment` field, which the API requires — a reader copying

@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.25";
+const WORKER_VERSION = "4.7.26";
 
 // ─── API version routing ─────────────────────────────────────────────────
 //

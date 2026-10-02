@@ -1781,6 +1781,13 @@
       // RESULT arrives, which by definition has not happened on that path.
       const startedAt = Date.now();
       const hardCap = Math.max(timeoutMs * 2, timeoutMs + 60000);
+      // Log ONCE per collection, not per beat. Every 3s forever would be noise,
+      // but zero logs made the heartbeat unobservable — and after an extension
+      // reload there is no other way to tell the new build from the old one,
+      // because the worker's slide is invisible when a generation finishes
+      // inside the flat budget anyway. One line per collection is the cheapest
+      // thing that makes "is the heartbeat live?" answerable from the console.
+      let announced = false;
       const beat = setInterval(() => {
         const generating = Recovery.isGenerating
           ? Recovery.isGenerating(document)
@@ -1788,6 +1795,10 @@
         if (Date.now() - startedAt >= hardCap) {
           clearInterval(beat);
           return;
+        }
+        if (!announced) {
+          announced = true;
+          console.log(`[Bridge] 💓 COLLECT_ANSWER_PROGRESS active (${requestId})`);
         }
         sendToWorker({
           type: "COLLECT_ANSWER_PROGRESS",
