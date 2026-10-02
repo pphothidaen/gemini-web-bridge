@@ -1,13 +1,11 @@
 {
   "_note": "KAN-236 measurement, step 1 of implementation_plan.md. Raw sanitized structures transcribed from PAYLOAD_PROBE records the operator enabled at chrome://extensions -> devtools console. NOT hand-transcribed from a network capture — every structure below is extractBoundedStructure output verbatim, which is what keeps it inside GUARDRAILS G1.2.1. The leak canary in payload-classifier.test.mjs is what makes that guarantee checkable rather than asserted.",
-  "_provenance_unverified_2026_10_02": "PROVENANCE NOT RE-CONFIRMED for the capture below. It was recorded 2026-10-01 and this session could not re-enable the probe: kapture__evaluate was already returning {} and is now GONE from the toolset, so there is no way to postMessage PAYLOAD_PROBE_SET from this session. The structure below is left EXACTLY as recorded rather than re-derived, because the alternative — reconstructing it by hand from a network body, which is a raw surface holding prompts and tokens — is what the GUARDRAILS prohibit. Read this fixture as inherited, not as reproduced.",
   "capturedAt": "2026-10-01T09:00:20Z",
   "capturedBy": "operator-enabled PAYLOAD_PROBE, read via Kapture console_logs",
   "buildLabel": "boq_assistant-bard-web-server_20260929.03_p0",
   "endpoint": "StreamGenerate",
   "outerLength": 2,
   "hasEnvelope": true,
-
   "worker_builder_for_comparison": {
     "_where": "cloudflare-worker/src/index.js:150-159",
     "_shape": "10 fields",
@@ -15,10 +13,17 @@
       "[prompt, 0, null, null, null, null, 0]",
       "['th']",
       "[conversationId, responseId, choiceId, null, null, []]",
-      "null", "null", "null", "[1]", "0", "[]", "[]", "1", "0"
+      "null",
+      "null",
+      "null",
+      "[1]",
+      "0",
+      "[]",
+      "[]",
+      "1",
+      "0"
     ]
   },
-
   "captures": [
     {
       "captureId": "app-ungrounded-01",
@@ -27,30 +32,187 @@
       "note": "/app chat surface, no notebook chip. Prompt was 2 characters.",
       "fieldCount": 19,
       "structure": [
-        { "index": 0,  "kind": "array",  "items": [{ "kind": "string", "length": 2, "cls": "opaque" }, "number", null, null, null, null, "number"] },
-        { "index": 1,  "kind": "array",  "items": [{ "kind": "string", "length": 2, "cls": "opaque" }] },
-        { "index": 2,  "kind": "null" },
-        { "index": 3,  "kind": "string", "length": 2187, "cls": "opaque", "_label": "context block" },
-        { "index": 4,  "kind": "string", "length": 32,   "cls": "opaque", "_label": "conversationId (32 hex)" },
-        { "index": 5,  "kind": "null" },
-        { "index": 6,  "kind": "array",  "items": ["number"] },
-        { "index": 7,  "kind": "number" },
-        { "index": 8,  "kind": "null" },
-        { "index": 9,  "kind": "null" },
-        { "index": 10, "kind": "number" },
-        { "index": 11, "kind": "number" },
-        { "index": 12, "kind": "null" },
-        { "index": 13, "kind": "null" },
-        { "index": 14, "kind": "null" },
-        { "index": 15, "kind": "null" },
-        { "index": 16, "kind": "null" },
-        { "index": 17, "kind": "array", "items": [["number"]] },
-        { "index": 18, "kind": "number" },
-        { "index": 19, "kind": "string", "length": 46, "cls": "opaque" }
+        {
+          "index": 0,
+          "kind": "array",
+          "items": [
+            {
+              "kind": "string",
+              "length": 2,
+              "cls": "opaque"
+            },
+            "number",
+            null,
+            null,
+            null,
+            null,
+            "number"
+          ]
+        },
+        {
+          "index": 1,
+          "kind": "array",
+          "items": [
+            {
+              "kind": "string",
+              "length": 2,
+              "cls": "opaque"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "kind": "null"
+        },
+        {
+          "index": 3,
+          "kind": "string",
+          "length": 2187,
+          "cls": "opaque",
+          "_label": "context block"
+        },
+        {
+          "index": 4,
+          "kind": "string",
+          "length": 32,
+          "cls": "opaque",
+          "_label": "conversationId (32 hex)"
+        },
+        {
+          "index": 5,
+          "kind": "null"
+        },
+        {
+          "index": 6,
+          "kind": "array",
+          "items": [
+            "number"
+          ]
+        },
+        {
+          "index": 7,
+          "kind": "number"
+        },
+        {
+          "index": 8,
+          "kind": "null"
+        },
+        {
+          "index": 9,
+          "kind": "null"
+        },
+        {
+          "index": 10,
+          "kind": "number"
+        },
+        {
+          "index": 11,
+          "kind": "number"
+        },
+        {
+          "index": 12,
+          "kind": "null"
+        },
+        {
+          "index": 13,
+          "kind": "null"
+        },
+        {
+          "index": 14,
+          "kind": "null"
+        },
+        {
+          "index": 15,
+          "kind": "null"
+        },
+        {
+          "index": 16,
+          "kind": "null"
+        },
+        {
+          "index": 17,
+          "kind": "array",
+          "items": [
+            [
+              "number"
+            ]
+          ]
+        },
+        {
+          "index": 18,
+          "kind": "number"
+        },
+        {
+          "index": 19,
+          "kind": "string",
+          "length": 46,
+          "cls": "opaque"
+        }
+      ]
+    },
+    {
+      "captureId": "app-chip-present-2026-10-02",
+      "case": "chip-present (grounded, notebook attached)",
+      "capturedAt": "2026-10-02T08:57:00Z",
+      "capturedBy": "PAYLOAD_CAPTURE relay, armed via authenticated POST /debug/payload-capture, read with curl",
+      "provenance": "extractBoundedStructure output verbatim from a live production capture. NOT hand-transcribed. Provenance RE-CONFIRMED in-session.",
+      "endpoint": "StreamGenerate",
+      "transport": "xhr",
+      "buildLabel": "boq_gemini-web-uiserver_20261001.01_p0",
+      "canonicalModelId": "gemini-3.8-flash",
+      "groundingNote": "horo_consult returned notebookGrounding.verified=true with 2 citations, so this IS the chip-present case.",
+      "fieldCount": 20,
+      "structure": [
+        [
+          "string",
+          "number",
+          null,
+          [
+            [
+              [
+                null,
+                "number",
+                "number",
+                "string"
+              ],
+              "string",
+              "string"
+            ]
+          ],
+          null,
+          null,
+          "number"
+        ],
+        [
+          "string"
+        ],
+        null,
+        "string",
+        "string",
+        null,
+        [
+          "number"
+        ],
+        "number",
+        null,
+        null,
+        "number",
+        "number",
+        null,
+        null,
+        null,
+        null,
+        null,
+        [
+          [
+            "number"
+          ]
+        ],
+        "number",
+        null
       ]
     }
   ],
-
   "divergence_from_worker_builder": [
     {
       "index": 2,
@@ -81,31 +243,34 @@
       "note": "'notebooks/' (9) + uuid (36) = 45. One character away. Candidate for the notebook reference, but NOT confirmed by a grounded/ungrounded pair yet."
     }
   ],
-
   "classifier_gap": {
     "finding": "STRING_CLASS.NOTEBOOK_REF matches the prefix 'notebook://' — with a scheme separator. The payload carries 'notebooks/' without one, so a notebook reference would classify as 'opaque'.",
     "consequence": "KAN-195's grounded-vs-ungrounded comparison could see only a LENGTH difference, because the classifier could not report the one bit that distinguishes them. That is precisely the ambiguity that test file was written to fix, and the fix does not cover the real prefix.",
     "status": "hypothesis — needs the ungrounded-notebook capture to confirm"
   },
-
   "context_block_observations": [
-    { "conversation": "1 short turn",  "bytes": 2187, "source": "app-ungrounded-01" },
-    { "conversation": "several turns", "bytes": 4096, "source": "raw network capture 2026-10-01T09:00:20Z, note approximate" }
+    {
+      "conversation": "1 short turn",
+      "bytes": 2187,
+      "source": "app-ungrounded-01"
+    },
+    {
+      "conversation": "several turns",
+      "bytes": 4096,
+      "source": "raw network capture 2026-10-01T09:00:20Z, note approximate"
+    }
   ],
   "context_block_reading": "Length varies with conversation length, which argues against a fixed server-issued nonce. Whether it can be reconstructed from known inputs is UNKNOWN and is the thing step 5 of the plan was written to settle.",
-
   "structural_finding": {
     "observed": "2026-10-01T17:02:48Z",
     "finding": "The notebook page does not host a conversation. Asking a question there GETs /notebook/b55f1ee0-... and the browser then issues GET https://gemini.google.com/app, spawning a NEW conversation under /app/<new-id>. Every conversation that has ever carried a notebook reference therefore lives under /app.",
     "consequence": "There is no distinct 'ungrounded-notebook' surface to capture. The notebook reference is not a property of the PAGE, it is a property of the CHIP attached inside an /app conversation. The comparison the plan needs is therefore chip-present vs chip-absent WITHIN /app, not notebook-page vs app-page.",
     "implication_for_capture_plan": "The four planned cases collapse to three: an /app turn with a fresh chip, an /app turn with no chip, and a repeat to see the context block grow. This also explains why set_bridge_scope('notebook:...') navigates away from the chat surface entirely."
   },
-
   "still_missing": [
     "grounded-notebook — captured indirectly: horo_consult returned verified:true with citationCount 14, but the payload probe was off by then because set_bridge_scope reloads the page and resets payloadProbeEnabled",
     "grounded-notebook-repeat — attempted; the prompt did not reach Gemini (collect_answer_timeout, responses on screen=2), so no request was emitted",
     "ungrounded-notebook — requires asking on the notebook page WITHOUT attaching the chip, which horo_consult never does because attaching is its job"
   ],
-
   "method_note": "Kapture network_monitor turned out to be the better capture path: it survives navigation, needs no page-side toggle, and yields the raw f.req rather than only its shape. The PAYLOAD_PROBE was designed to be console-only under GUARDRAILS G1.2.1, which is correct for a shipped build — but it also means every navigation costs a manual re-enable."
 }

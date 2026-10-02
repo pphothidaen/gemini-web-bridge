@@ -67,7 +67,21 @@
    */
   function classifyString(str) {
     if (typeof str !== "string" || str.length === 0) return STRING_CLASS.OPAQUE;
-    if (str.startsWith("notebook://")) return STRING_CLASS.NOTEBOOK_REF;
+    // KAN-236 Phase D, live capture 2026-10-02: this used to be
+    // `startsWith("notebook://")` and matched nothing at all.
+    //
+    // The live bridge scope is `notebooks://...` - plural - so every notebook
+    // reference the browser sends classified as OPAQUE. The first real capture
+    // of a GROUNDED, chip-attached turn (verified:true, 2 citations) returned
+    // seven strings and zero notebook_ref, which reads as "the notebook is not
+    // in the payload". It is not that; it is this pattern.
+    //
+    // Matched as a substring rather than a prefix, because a reference can be
+    // embedded inside a larger context blob rather than standing alone at the
+    // head of a field - and the capture below shows exactly that risk: the
+    // 1855-char context field is a plausible carrier and a prefix test would
+    // have missed it even with the correct scheme.
+    if (/notebook(s)?:\/\//.test(str)) return STRING_CLASS.NOTEBOOK_REF;
     if (str.startsWith("https://") || str.startsWith("http://")) return STRING_CLASS.URL;
     if (UUID_RE.test(str)) return STRING_CLASS.UUID;
     if (str.startsWith("boq_")) return STRING_CLASS.BUILD_LABEL;

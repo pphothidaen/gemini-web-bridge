@@ -27,6 +27,8 @@ const {
   decodeAndSanitizePayload,
   armPayloadCapture,
   isPayloadCaptureArmed,
+  classifyString,
+  STRING_CLASS,
   emitProbeRecord
 } = Injected;
 
@@ -178,6 +180,28 @@ test('arming clears previous captures so cases cannot bleed together', () => {
   // comparison Phase D exists to make.
   assert.match(WORKER_SOURCE, /if \(armed\) this\.payloadCaptures = \[\];/,
     'arming must clear the buffer, or a new case can read the previous one');
+});
+
+test('a notebook reference is recognised under BOTH schemes, anywhere in the string', () => {
+  // The live bridge scope is `notebooks://` (plural). The classifier matched
+  // only `notebook://` as a PREFIX, so every real notebook reference came back
+  // OPAQUE — and the first live capture of a grounded, chip-attached turn
+  // reported "seven strings, zero notebook_ref", which reads as a finding
+  // about the payload and was actually a bug in the instrument measuring it.
+  assert.equal(classifyString('notebooks://abc-123'), STRING_CLASS.NOTEBOOK_REF,
+    'the plural scheme is what the bridge actually sends');
+  assert.equal(classifyString('notebook://abc-123'), STRING_CLASS.NOTEBOOK_REF,
+    'the singular scheme must keep working');
+  assert.equal(
+    classifyString('leading context text then notebooks://xyz embedded'),
+    STRING_CLASS.NOTEBOOK_REF,
+    'a reference embedded in a larger blob must still be found; a prefix test ' +
+    'would miss it, and the 1855-char context field is exactly such a carrier'
+  );
+  // Must not become trigger-happy.
+  assert.equal(classifyString('https://example.com/x'), STRING_CLASS.URL);
+  assert.equal(classifyString('this mentions notebooks in prose'), STRING_CLASS.OPAQUE,
+    'the word "notebook" without the scheme is not a reference');
 });
 
 test('the arm travels BOTH ways, not just the record', () => {
