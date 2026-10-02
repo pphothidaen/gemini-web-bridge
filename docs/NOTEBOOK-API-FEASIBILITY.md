@@ -1,7 +1,50 @@
 # Notebook API feasibility — KAN-236 direct path
 
-**Verdict: NOT ESTABLISHED. The direct worker → `StreamGenerate` path remains
-unbuilt and unproven. This document records why, and what it would take.**
+**Verdict: PARTIAL. One of three captures is real and re-confirmed in-session.
+The direct path remains unbuilt and unproven — and the single most important
+question (does a notebook reference appear in the payload?) is still OPEN,
+because the instrument that would answer it has not been confirmed live.**
+
+> **Update 2026-10-02 (late).** Blocker 2 is gone and blocker 1 is a single
+> Reload button. `app-chip-present-2026-10-02` is captured, saved verbatim, and
+> provenance-reconfirmed. See "The relay" below.
+
+### What the chip-present capture shows (2026-10-02)
+
+`StreamGenerate`, xhr, `gemini-3.8-flash`, build
+`boq_gemini-web-uiserver_20261001.01_p0`, **20 top-level fields** — against a
+worker builder that emits **10**, and a 2026-10-01 capture that recorded 19.
+
+| index | observed |
+|---:|---|
+| 0 | array — prompt (484), then nested config incl. an 88-char string |
+| 1 | array — `["th"]` (locale) |
+| 2 | null |
+| 3 | **string, 1855 → 2305 chars across turns** — the context block, growing |
+| 4 | string, 32 — conversationId |
+| 5–19 | null / numbers / `[[number]]` |
+
+The 20-vs-10 gap is now measured rather than assumed, and it is larger than the
+earlier 19-field note suggested.
+
+### The answer we nearly had, and should not trust yet
+
+Seven strings, **zero `notebook_ref`** — in a turn that was demonstrably
+grounded (`verified: true`, 2 citations). That reads like a clean negative: the
+notebook is not in the payload, and the direct path is correspondingly harder.
+
+It is not evidence of that. `classifyString` matched `notebook://` as a prefix
+while the bridge's own scope is `notebooks://`, so every reference classified
+OPAQUE. Fixed in 4.7.31 and pinned by a test. **But the fix lives in the
+extension, so until the extension is confirmed reloaded on 4.7.31 the current
+result is produced by the old, blind classifier.**
+
+This is the third time in this work that a clean-looking negative has turned out
+to be a broken instrument: the detached console reader, the half-wired relay,
+and now the classifier. Each produced an *absence*, and absence is exactly what
+a measurement that cannot see the thing reports. Do not record "no notebook
+reference" as a finding until the classifier is confirmed live and the result
+survives that.
 
 > **Update 2026-10-02 (later the same day).** Blocker 2 is gone and blocker 1 is
 > now a single Reload button. The capture path is built, deployed and
