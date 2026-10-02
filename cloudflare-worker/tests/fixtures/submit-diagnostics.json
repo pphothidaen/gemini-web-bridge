@@ -1,0 +1,173 @@
+{
+  "_note": "KAN-242 Phase B, measured 2026-10-02. Sanitized: counts, lengths, booleans, step names only. No prompt text, no answer text, no tokens (GUARDRAILS G1.2.1). StreamGenerate observations come from Kapture network_requests, read in narrow `since` windows because a full-buffer read truncates its middle and hid the request on the first pass.",
+  "capturedAt": "2026-10-02T04:17:41Z",
+  "capturedBy": "operator-driven via Kapture against tab 133992564, extension ONLINE, worker 4.7.24",
+  "buildLabel": "boq_assistant-bard-web-server_20260929.03_p0",
+  "verdict": "NOT_REPRODUCED",
+  "headline": "Three consecutive grounded horo_consult calls succeeded, including at 2 accumulated turns. KAN-242 did not reproduce. The plan's predicted state 3 (transcript grew, no request issued) was NOT observed: StreamGenerate fired on every run.",
+  "runs": [
+    {
+      "case": "fresh-0-turn",
+      "conversationId": "101e3a288e0253c3",
+      "turnsBefore": 0,
+      "ok": true,
+      "verified": true,
+      "citationCount": 7,
+      "step": {
+        "fill": {
+          "landed": true,
+          "attempts": null,
+          "editorLength": 524,
+          "qlBlank": false
+        },
+        "sendButton": {
+          "found": true,
+          "disabled": false,
+          "matches": 1
+        },
+        "confirm": {
+          "userQueriesBefore": 0,
+          "userQueriesAfter": 1,
+          "rose": true
+        }
+      },
+      "streamGenerateSeen": true,
+      "streamGenerate": {
+        "seq": 11,
+        "startedAt": "2026-10-02T04:12:59.456Z",
+        "durationMs": 38292,
+        "responseBytes": 91916,
+        "status": 200,
+        "transport": "xhr"
+      },
+      "dom": {
+        "userQueries": 1,
+        "modelResponses": 1
+      },
+      "attach": {
+        "attempted": true,
+        "ok": true,
+        "step": "verify",
+        "attachedCount": 7
+      },
+      "chipPresentBeforeSend": true
+    },
+    {
+      "case": "short-1-turn",
+      "conversationId": "101e3a288e0253c3",
+      "turnsBefore": 1,
+      "ok": true,
+      "verified": true,
+      "citationCount": 5,
+      "step": {
+        "fill": {
+          "landed": true,
+          "attempts": null,
+          "editorLength": null,
+          "qlBlank": false
+        },
+        "sendButton": {
+          "found": true,
+          "disabled": false,
+          "matches": 1
+        },
+        "confirm": {
+          "userQueriesBefore": 1,
+          "userQueriesAfter": 2,
+          "rose": true
+        }
+      },
+      "streamGenerateSeen": true,
+      "streamGenerate": {
+        "seq": 14,
+        "startedAt": "2026-10-02T04:15:46.885Z",
+        "durationMs": 38353,
+        "responseBytes": 20658,
+        "status": 200,
+        "transport": "xhr"
+      },
+      "dom": {
+        "userQueries": 2,
+        "modelResponses": 2
+      },
+      "attach": {
+        "attempted": true,
+        "ok": true,
+        "step": null,
+        "attachedCount": 5
+      },
+      "chipPresentBeforeSend": true
+    },
+    {
+      "case": "long-2plus-turn",
+      "conversationId": "101e3a288e0253c3",
+      "turnsBefore": 2,
+      "ok": true,
+      "verified": true,
+      "citationCount": 3,
+      "step": {
+        "fill": {
+          "landed": true,
+          "attempts": null,
+          "editorLength": null,
+          "qlBlank": false
+        },
+        "sendButton": {
+          "found": true,
+          "disabled": false,
+          "matches": 1
+        },
+        "confirm": {
+          "userQueriesBefore": 2,
+          "userQueriesAfter": 3,
+          "rose": true
+        }
+      },
+      "streamGenerateSeen": true,
+      "streamGenerate": {
+        "seq": 10,
+        "startedAt": "2026-10-02T04:17:03.490Z",
+        "durationMs": 36151,
+        "responseBytes": 23136,
+        "status": 200,
+        "transport": "xhr"
+      },
+      "dom": {
+        "userQueries": 3,
+        "modelResponses": 3
+      },
+      "attach": {
+        "attempted": true,
+        "ok": true,
+        "step": null,
+        "attachedCount": 3
+      },
+      "chipPresentBeforeSend": true
+    }
+  ],
+  "observation_that_matters": "Every generation took 36-38s end to end, and StreamGenerate duration alone was 36151-38353ms. The worker-side collectTypedAnswer timer is a flat 120000ms and the extension-side hardCap is max(timeoutMs*3, timeoutMs+60000). Both were adequate here, but the worker timer's margin is roughly 3.2x rather than comfortable. None of the three runs came close to needing the KAN-236 idle-based extension fix, so this measurement does NOT establish that the timer work is unnecessary - only that it was not the binding constraint in these three runs.",
+  "method_correction": {
+    "what_happened": "The first full-buffer read of network_requests appeared to show zero StreamGenerate requests, which would have been a clean positive for KAN-242. That was WRONG.",
+    "cause": "network_requests output is truncated in the middle when the buffer holds long URLs. The StreamGenerate request sat at seq 11 of 65, inside the truncated region, so it never appeared in any single read.",
+    "correction": "Read the buffer in narrow `since` windows until every sequence number has been individually observed. A request's ABSENCE may only be concluded after full coverage.",
+    "lesson": "This is the same failure the 2026-10-01 handoff recorded - reading the buffer once and concluding from what happened to be visible. The buffer was not the problem this time; the reading was."
+  },
+  "eliminated_hypotheses": [
+    {
+      "hypothesis": "The Gemini input-area reskin (ui-improvements-phase-1, gem-icon-button, leading-actions-wrapper) broke the send-button selector.",
+      "verdict": "ELIMINATED",
+      "evidence": "Direct DOM test on the live tab: with the editor empty, the arrow_upward send selector matches 0 elements. After typing 5 characters it matches a button with aria-label in Thai for send-message and no disabled or aria-disabled attribute. Clearing restored ql-blank and the match disappeared again. Behaviour matches the KAN-231 contract exactly. The reskin is cosmetic."
+    },
+    {
+      "hypothesis": "The extension build is stale, so the live run did not exercise the KAN-236 idle-deadline fix.",
+      "verdict": "ELIMINATED",
+      "evidence": "BUILD.json records commit 99c94fa while HEAD is c040a65, which looks stale. verify_build() compares a SHA-256 digest of the source tree rather than the commit, precisely because the tree is usually dirty. Current digest 8a38ec927bc9 matches the stamp, and dist/extension/native-recovery.js contains the KAN-236 hardCap logic at line 167."
+    },
+    {
+      "hypothesis": "kapture__evaluate is usable for DOM measurement.",
+      "verdict": "ELIMINATED",
+      "evidence": "Returns an empty value object for every script including the literal () => 1+1, while the tab metadata reports evalAllowed: true. All DOM facts here come from kapture__elements and kapture__dom instead."
+    }
+  ],
+  "open_question": "KAN-242 was reproduced on /app/72d00678d54a08dd, recorded as having two or more accumulated turns. This run reached 2 accumulated turns before its third call and it succeeded. Either the failure needs more turns than were reached, or something about that specific conversation - its age, its size, or state left behind by an earlier failed attempt - matters rather than turn count alone. Distinguishing these requires continuing on this same conversation past 3 accumulated turns, and separately retrying the original conversation id."
+}
