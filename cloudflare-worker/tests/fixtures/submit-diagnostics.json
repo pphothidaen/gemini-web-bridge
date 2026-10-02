@@ -203,6 +203,7 @@
     },
     "how_to_recheck": "curl -s .../health | jq .collection  (no browser needed)",
     "note": "The reload itself was performed by the operator, not from this session - see _reload_routes_closed. The verification is what was automated here.",
-    "supersedes": "the earlier 'NOT verified' entry in this same file"
+    "supersedes": "the earlier 'NOT verified' entry in this same file",
+    "caveat_DO_restart": "last_progress_at is in-memory DO state. A deploy restarts the Durable Object and resets it to null, which is NOT evidence of a stale extension - observed right after run 36969590860. The correct check is: run a call, THEN read /health. A completed call that leaves it null is a genuine fault; null with no call since the deploy is inconclusive."
   }
 }

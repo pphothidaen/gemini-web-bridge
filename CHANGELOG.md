@@ -126,18 +126,28 @@ it.
   session. An instrument that can report "nothing happened" when it has simply
   detached cannot support a conclusion.
 
-  With this, the extension-reload check is one `curl` and needs no browser:
+  With this, the extension-reload check is one `curl` and needs no browser.
+  **Run a call first, then read it** — the ordering matters:
 
   | `collection.last_progress_at` | meaning |
   |---|---|
-  | `null` | no heartbeat has ever arrived — pre-4.7.25 extension still loaded |
-  | recent timestamp | 4.7.25+ extension is live |
-  | stale on a healthy run | the extension is loaded but stopped heartbeating |
+  | recent timestamp, after a call | 4.7.25+ extension is live |
+  | `null`, after a call completed | extension loaded but not heartbeating — a real fault |
+  | `null`, no call since the last deploy | **inconclusive**, not a fault |
+
+  That third row is worth reading twice. The field is **in-memory DO state**, so
+  a deploy restarts the Durable Object and resets it to `null` — observed
+  straight after run `36969590860`, where a healthy, fully loaded extension
+  reported `null` purely because nothing had been collected since the restart.
+  Reading that as "the extension is stale" would raise a false alarm on every
+  single deploy. Hence "run a call, then check": only a *completed* call that
+  leaves the field `null` is a genuine failure.
 
   `null` is deliberately distinct from `0`. `lastCollectedResponseCount` alone
-  cannot tell "a heartbeat reported zero responses" from "no heartbeat ever
-  arrived", and that ambiguity is exactly what made the extension half
-  unverifiable. The field starts `null` and is only written on arrival.
+  cannot tell "a heartbeat reported zero responses" from "no heartbeat has
+  arrived during this DO's lifetime", and that ambiguity is exactly what made the
+  extension half unverifiable. The field starts `null` and is only written on
+  arrival.
 
   Pinned by two tests, including a mutation that removes the health block and
   fails.
