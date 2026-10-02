@@ -3,6 +3,11 @@
 **Verdict: NOT ESTABLISHED. The direct worker → `StreamGenerate` path remains
 unbuilt and unproven. This document records why, and what it would take.**
 
+> **Update 2026-10-02 (later the same day).** Blocker 2 is gone and blocker 1 is
+> now a single Reload button. The capture path is built, deployed and
+> auth-verified. See "The relay" below before re-reading the blocker text, which
+> is retained because it explains why the relay was built this way.
+
 This is a negative result reached without fabrication. The measurement that
 would have confirmed or killed the idea could not be taken in this session, and
 the one capture on file was not re-verified. Both facts are stated here rather
@@ -19,6 +24,53 @@ a heartbeat and a hard cap just to survive a slow generation.
 The proposed replacement: skip the page. Have the worker POST directly to
 `StreamGenerate` and decode the `wrb.fr` chunk stream, which
 `ProtocolDecoder.decodeChunk` already does for the replay path.
+
+## The relay (4.7.28 / 4.7.29)
+
+The sanitized record already existed. `injected.js` runs a fetch/XHR interceptor
+on every request and, for `StreamGenerate`, already builds a record reduced by
+`extractBoundedStructure` — `{kind, length, cls}` per node, no prompt text, no
+token — and then discarded it unless a page-console toggle was on. It was being
+computed in production and thrown away.
+
+4.7.28 ships it to the worker instead, so the captures are readable with curl.
+
+**Where it lives.** The obvious home was `/health`, and that is the wrong one:
+measured, an unauthenticated `GET /health` returns **200**. It is public. Field
+counts, string lengths and whether a notebook ref is present are conversation
+metadata and do not belong on a world-readable endpoint. It is therefore
+`/debug/payload-capture`, which is not in `publicPaths` and so falls under the
+generic bearer gate — verified returning **401** unauthenticated. A test asserts
+`publicPaths` never gains it, because the convenient-looking change is exactly
+the one that would leak it.
+
+**The safety properties, and one that was not actually tested.** Off on load;
+dropped at the worker if unarmed; buffer capped at 3; never logged; cleared on
+arming so cases cannot bleed. The first version of the "off by default" test
+called `armPayloadCapture(false)` and then asserted the relay was quiet — which
+passes even with the default flipped to `true`, because it never read the
+default. Found by mutation: flipping it left all 8 tests green. Fixed by
+exporting `isPayloadCaptureArmed` so the default is readable without being set.
+
+**A bug that shipped, caught only by running it.** 4.7.28 wired the upward hop
+(record → worker) but not the downward one (arm → page): `PAYLOAD_CAPTURE_ARM`
+was missing from `background.js`'s `forwardToActiveTab` group. `POST` returned
+`{"armed":true}`, the DO flag flipped, and zero captures arrived. Half of a
+two-way relay is indistinguishable from a working one in a diff, and an endpoint
+that reports success turns a broken chain into a silence rather than an error.
+Fixed in 4.7.29 and pinned by a test that walks both directions; its mutation is
+confirmed failing.
+
+### What remains: one button
+
+Reload the extension at `chrome://extensions` so `background.js` is 4.7.29. Then
+arming, the three captures and the analysis are all automatable.
+
+Note `GET /health` still reports **4.7.28** after the 4.7.29 deploy: the Durable
+Object keeps running the code it was instantiated with until it is reset. The
+only worker-side change in 4.7.29 was the version string itself — the functional
+fix is in the extension — so the discrepancy is cosmetic, but it is real and
+worth knowing before someone reads it as a failed deploy.
 
 ## The two known blockers
 
