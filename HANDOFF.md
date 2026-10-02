@@ -1,6 +1,6 @@
 # 🧭 Master Project Handoff & Architecture Blueprint
 
-> ## ⚠️ START HERE INSTEAD → [`docs/HANDOFF-NEXT-SESSION.md`](docs/HANDOFF-NEXT-SESSION.md)
+> ## ⚠️ START HERE INSTEAD → [`SESSION_HANDOFF_2026-10-01.md`](SESSION_HANDOFF_2026-10-01.md)
 >
 > **This file is stale.** It describes `v4.4.3`, 95 tests, and a production host
 > (`gemini-web-bridge.pansakorn-pho.workers.dev`) that is **no longer** the
@@ -16,8 +16,17 @@
 >
 > Treat the sections below as background on the architecture only. For the
 > current state, the commands, the operational gotchas and the open work, use
-> `docs/HANDOFF-NEXT-SESSION.md`. The detailed working log for the most recent
-> ticket is `docs/HANDOFF-KAN-182.md`.
+> [`SESSION_HANDOFF_2026-10-01.md`](SESSION_HANDOFF_2026-10-01.md). The working
+> plan for what comes next is [`implementation_plan.md`](implementation_plan.md).
+> The detailed working log for KAN-182 — the ticket that established the typed
+> path — is `docs/HANDOFF-KAN-182.md`.
+>
+> **Removed 2026-10-02.** This banner previously pointed at
+> `docs/HANDOFF-NEXT-SESSION.md`, which was deleted along with `plan.md`,
+> `PHASE_PROGRESS.md`, `HERMES_SESSION_HANDOFF.md` and the per-ticket handoffs
+> for KAN-168 and KAN-176. All six were superseded, and three of them stated on
+> their own first line that they were. `docs/HANDOFF-KAN-182.md` is kept because
+> KAN-182 is where the typed path was established and the reasoning still holds.
 
 ---
 
