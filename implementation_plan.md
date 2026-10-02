@@ -679,6 +679,41 @@ already diagnosed and already recorded as incomplete in `[4.7.24]`:
 "failing conversation behaves differently" check, because Phase B established
 that no failing conversation was reproduced.
 
+#### RESULT — Phase C executed 2026-10-02: SHIPPED as 4.7.25
+
+Both timer defects fixed, both recorded in `[4.7.25]`. Committed `b5828ea`,
+tagged `v4.7.25`, deployed via run `36966455556`, confirmed live at 4.7.25 with
+`consecutive_errors: 0`.
+
+Two bugs were found **by the tests, not by review**, and both are worth
+recording because each reads as correct in a diff:
+
+- The slide was first written as a *duration* — `timeoutMs + elapsed` — and
+  re-armed from the current clock. That compounds: every heartbeat pushed the
+  next deadline a full `timeoutMs` further out. Measured 204000 ms of wait in
+  100 s of virtual time, and the promise never settled.
+- `hardCap` was first enforced by *ceasing to slide* past it, which leaves the
+  already-armed timer in place. The call reached 117000 ms against a 90000 ms
+  cap and still never returned. A hang is worse than the timeout being fixed.
+
+Three mutations, each observed to fail then reverted: removing the cap
+enforcement hangs the suite, removing the count write fails two tests, and
+arming with an absolute rather than a relative deadline hangs.
+
+**Degradation is safe and was checked.** With no heartbeat arriving — which is
+the case until the extension is reloaded — the timer fires at
+`startedAt + timeoutMs`, identical to 4.7.24. The new behaviour is additive, not
+a replacement.
+
+**Not yet verified end to end:** the extension half. `content.js` now sends
+`COLLECT_ANSWER_PROGRESS` every 3 s, but the browser profile available to this
+session is not the one running the Gemini tab, so the extension could not be
+reloaded at `chrome://extensions`. Until it is reloaded, the deployed worker
+runs with no heartbeat and behaves exactly as 4.7.24 did. A live grounded call
+on 4.7.25 succeeded (verified, 2 citations, 3 accumulated turns), which
+confirms no regression — but the slide itself stays unexercised in production
+until that reload happens.
+
 ### Phase D — Finish the KAN-236 measurement (browser required)
 
 19. Enable the payload probe through the page (`PAYLOAD_PROBE_SET`).

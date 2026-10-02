@@ -169,5 +169,18 @@
       "evidence": "Returns an empty value object for every script including the literal () => 1+1, while the tab metadata reports evalAllowed: true. All DOM facts here come from kapture__elements and kapture__dom instead."
     }
   ],
-  "open_question": "KAN-242 was reproduced on /app/72d00678d54a08dd, recorded as having two or more accumulated turns. This run reached 2 accumulated turns before its third call and it succeeded. Either the failure needs more turns than were reached, or something about that specific conversation - its age, its size, or state left behind by an earlier failed attempt - matters rather than turn count alone. Distinguishing these requires continuing on this same conversation past 3 accumulated turns, and separately retrying the original conversation id."
+  "open_question": "KAN-242 was reproduced on /app/72d00678d54a08dd, recorded as having two or more accumulated turns. This run reached 2 accumulated turns before its third call and it succeeded. Either the failure needs more turns than were reached, or something about that specific conversation - its age, its size, or state left behind by an earlier failed attempt - matters rather than turn count alone. Distinguishing these requires continuing on this same conversation past 3 accumulated turns, and separately retrying the original conversation id.",
+  "post_phase_c_verification": {
+    "at": "2026-10-02T05:05:00Z",
+    "worker": "4.7.25 deployed (run 36966455556)",
+    "live_call": {
+      "ok": true,
+      "verified": true,
+      "citationCount": 2,
+      "accumulated_turns_before": 3,
+      "note": "confirms the deployed worker half does not regress the typed path"
+    },
+    "extension_half": "NOT verified. content.js sends COLLECT_ANSWER_PROGRESS every 3s, but the extension could not be reloaded - the Chrome profile reachable from this session is not the one running the Gemini tab. Until reload, no heartbeat arrives and the worker degrades to the old flat 120s.",
+    "degradation_check": "verified by reading the code: with no COLLECT_ANSWER_PROGRESS the timer fires at startedAt+timeoutMs, identical to 4.7.24. The change is additive."
+  }
 }
