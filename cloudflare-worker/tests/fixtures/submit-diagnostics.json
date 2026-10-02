@@ -182,5 +182,17 @@
     },
     "extension_half": "NOT verified. content.js sends COLLECT_ANSWER_PROGRESS every 3s, but the extension could not be reloaded - the Chrome profile reachable from this session is not the one running the Gemini tab. Until reload, no heartbeat arrives and the worker degrades to the old flat 120s.",
     "degradation_check": "verified by reading the code: with no COLLECT_ANSWER_PROGRESS the timer fires at startedAt+timeoutMs, identical to 4.7.24. The change is additive."
+  },
+  "extension_reload_status": {
+    "at": "2026-10-02T05:20:00Z",
+    "worker": "4.7.26 deployed (run 36968113883)",
+    "required_build": "4.7.26 - the build on disk must be Reload-ed at chrome://extensions in the ORIGINAL Chrome",
+    "why_both_mcp_routes_are_closed": {
+      "browser_mcp": "A DIFFERENT Chrome instance. chrome://extensions there lists zero extensions and searching 'bridge' returns '0 results', so the Gemini bridge is not installed in that profile at all.",
+      "kapture": "Attached to the correct Chrome but cannot drive browser-internal pages: new_tab on chrome://extensions/ silently redirects to Kapture's own docs page."
+    },
+    "how_to_confirm_it_actually_reloaded": "Run any horo_consult call, then read the Gemini tab console. A line '[Bridge] COLLECT_ANSWER_PROGRESS active' means the 4.7.26 content script is live. No such line means the old content script is still loaded.",
+    "why_the_line_exists": "Added in 4.7.26 because the heartbeat was otherwise unobservable - the worker's deadline slide is invisible whenever a generation finishes inside the flat 120s budget, which is every healthy run. So the case you most want to confirm produced no evidence either way.",
+    "observed_this_session": "NOT confirmed. The extension in the original Chrome could not be reloaded from here, so the running content script is still the pre-4.7.25 build."
   }
 }

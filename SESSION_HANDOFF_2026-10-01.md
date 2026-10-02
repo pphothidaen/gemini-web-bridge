@@ -23,8 +23,8 @@ production และวัดว่า payload ของ Gemini หน้าต�
 | :--- | :--- |
 | HEAD | ดู `git log --oneline -1` (main, synced with origin) |
 | untracked | `prompts/` 7 ไฟล์ — **ยังไม่ commit ตั้งใจ** |
-| production | **4.7.25**, `CONNECTED_AND_READY`, `consecutive_errors: 0` |
-| tests | **631 / 626 pass / 0 fail** / 5 skipped |
+| production | **4.7.26**, `CONNECTED_AND_READY`, `consecutive_errors: 0` |
+| tests | **632 / 627 pass / 0 fail** / 5 skipped |
 
 > **อัปเดต 2026-10-02 (Phase A–F จบ):** ตัวเลขในตารางเดิม (`11524c2`, 3 commits
 > ที่ยังไม่ push, 4.7.24, 622/616/**1 fail**) เป็นของ snapshot ก่อน Phase A
@@ -39,6 +39,22 @@ production และวัดว่า payload ของ Gemini หน้าต�
 > **Phase E** — `sendButtonFallback` **ไม่ได้** match 0 อย่างที่เคยเขียนไว้ มัน match
 > ได้จริง (วัดใหม่ 2026-10-02)
 > **Phase F** — แก้ `cd-watchdog.yml` ที่สั่ง approve แล้วได้ 422
+>
+> **⚠️ ค้าง 1 อย่างเดียว: reload extension** ที่ `chrome://extensions` ใน
+> **Chrome ตัวเดิม** (ตัวที่เปิด gemini.google.com) ให้เป็น build 4.7.26
+> MCP ทั้งสองตัวเข้าไปไม่ได้: Browser MCP เป็นคนละ Chrome instance
+> (`chrome://extensions` มี 0 extensions, ค้น "bridge" ได้ 0 results) ส่วน
+> Kapture ต่อ Chrome ถูกตัวแต่ `new_tab` ไป `chrome://extensions/` จะ
+> redirect ไปหน้า doc ของ Kapture เอง
+>
+> **วิธีเช็คว่า reload สำเร็จ:** เรียก `horo_consult` หนึ่งครั้ง แล้วดู console
+> ของแท็บ Gemini — ถ้าเห็น `[Bridge] COLLECT_ANSWER_PROGRESS active`
+> แปลว่า content script 4.7.26 ทำงานอยู่ ถ้าไม่เห็น = ยังเป็นตัวเก่า
+> (บรรทัดนี้เพิ่มใน 4.7.26 เพราะ heartbeat เดิมไม่ log อะไรเลย
+> ทำให้ยืนยันไม่ได้ว่าโหลดตัวใหม่แล้วจริง)
+>
+> **PAT ที่ leak:** จะ rotate หลังทุก phase เสร็จ — ตอนนี้ phase ครบแล้ว
+> (ผู้ใช้แจ้งว่าจะทำต่อ) ยังไม่ rotate ใน session นี้
 
 **push ก่อนเสมอ** — `cd.yml` deploy เมื่อ `cloudflare-worker/**` เปลี่ยน
 และต้องอนุมัติที่ environment `production` (required reviewer)
