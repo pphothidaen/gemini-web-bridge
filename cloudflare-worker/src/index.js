@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.24";
+const WORKER_VERSION = "4.7.25";
 
 // ─── API version routing ─────────────────────────────────────────────────
 //
@@ -291,6 +291,14 @@ export class GeminiBridgeDO extends DurableObject {
     this.extendedThinkingActive = false;
     this.dynamicModels = [];
     this.activeStreams = new Map();
+    // KAN-236: requestId -> re-arm callback for an in-flight collectTypedAnswer.
+    //
+    // The extension sends COLLECT_ANSWER_PROGRESS while Gemini is visibly
+    // working, and collectTypedAnswer's handler re-arms its deadline from
+    // there. This map is the registry of which collections are in flight and
+    // how to re-arm each one, cleared in the same `settle` that resolves the
+    // promise, so a collection can never leave a live timer behind.
+    this.pendingCollections = new Map();
     this.pendingRequests = [];
     this.requestBusy = false;
     // True only while a generation is actually being produced. Read by
@@ -2149,43 +2157,109 @@ export class GeminiBridgeDO extends DurableObject {
    * Resolves {ok:false} rather than throwing, so the caller keeps whatever
    * text it already has instead of losing everything to a collection error.
    */
-  collectTypedAnswer({ requestId, timeoutMs = 120000, responsesBefore = null }) {
+  collectTypedAnswer({
+    requestId,
+    timeoutMs = 120000,
+    responsesBefore = null,
+    // Injected so the test can drive the deadline without wall time, the same
+    // way waitForResponseChange already takes `now` and `setT`. Defaults are
+    // the real globals, so every production caller is unaffected.
+    now = Date.now,
+    setT = setTimeout,
+    clearT = clearTimeout
+  }) {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      // KAN-236: the deadline is IDLE-based, not wall-clock, matching the
+      // split `waitForResponseChange` already uses on the extension side.
+      //
+      // A generation that is proceeding correctly spends its whole wall-clock
+      // budget with no new `model-response` to count. Measured 2026-10-02 on
+      // three grounded calls: StreamGenerate ran 36151-38353 ms before the
+      // answer was rendered, so a flat 120 s leaves roughly 3.2x margin on a
+      // fast notebook-grounded answer and nothing at all on a slow one. The
+      // extension already slides its own deadline while isGenerating() reports
+      // progress; this was the caller-side half that was never changed, and it
+      // is the timer that actually fired.
+      //
+      // So the timer is re-armed on every heartbeat below, and the heartbeat
+      // only arrives while COLLECT_ANSWER_PROGRESS says a generation is in
+      // flight. `hardCap` bounds the whole thing, so a page stuck showing a
+      // spinner forever still fails rather than hanging.
+      const hardCap = Math.max(timeoutMs * 3, timeoutMs + 60000);
+      const startedAt = now();
+      // ABSOLUTE fire time, not a duration. The first version of this recomputed
+      // a duration on every heartbeat (`timeoutMs + elapsed`) and re-armed it
+      // from the CURRENT clock, which compounds: each heartbeat pushed the next
+      // deadline a full timeoutMs further out, so the wait grew geometrically
+      // instead of sliding by the time actually spent. At 3s heartbeats that
+      // reached 204000 ms after 100 s of virtual time and the call never
+      // returned. A slide has to be "the original budget plus the time already
+      // spent", measured from a FIXED origin — which is what startedAt gives.
+      let fireAt = startedAt + timeoutMs;
+      let timer = null;
+
+      const settle = (result) => {
+        if (timer) clearT(timer);
         this.activeStreams.delete(requestId);
-        // KAN-236: carry the count on the TIMEOUT path too. The success path
-        // right below does, and the KAN-182 comment explains why the field
-        // exists at all: so the failure can say "still N" instead of leaving
-        // the operator to guess whether a reply was ever produced.
-        //
-        // It was missing here, so the one case where the number matters most —
-        // the failure — printed `responses on screen=undefined`. Measured
-        // 2026-10-01: the page held 4 responses and the message could not say
-        // so, which is most of why that failure took reading to diagnose.
-        resolve({
-          ok: false,
-          reason: "collect_answer_timeout",
-          text: "",
-          // Best effort from the last count the extension reported; 0 when
-          // none is available, which is honest rather than undefined.
-          responses: Number(this.lastCollectedResponseCount) || 0
-        });
-      }, timeoutMs);
+        this.pendingCollections.delete(requestId);
+        resolve(result);
+      };
+
+      const armTimer = () => {
+        if (timer) clearT(timer);
+        timer = setT(() => {
+          // Best effort from the last count the extension reported. KAN-236:
+          // this used to be `undefined` because the field is only written when
+          // a COLLECT_ANSWER_RESULT arrives, which by definition has not
+          // happened on this path. COLLECT_ANSWER_PROGRESS now keeps it live,
+          // so the number here is the page's actual count rather than a memory
+          // of the previous call.
+          settle({
+            ok: false,
+            reason: "collect_answer_timeout",
+            text: "",
+            responses: Number(this.lastCollectedResponseCount) || 0,
+            // How long the page was actually given, so a timeout that slid is
+            // distinguishable from one that did not.
+            waitedMs: now() - startedAt
+          });
+        }, fireAt - now());
+      };
+
+      this.pendingCollections.set(requestId, armTimer);
+      armTimer();
 
       this.activeStreams.set(requestId, (msg) => {
+        // Progress heartbeat. Re-arms the deadline only while the extension
+        // says a generation is genuinely in flight, so an idle page still
+        // times out on schedule.
+        if (msg.type === "COLLECT_ANSWER_PROGRESS") {
+          this.lastCollectedResponseCount = Number(msg.responses) || 0;
+          const elapsed = now() - startedAt;
+          if (msg.generating) {
+            // The cap has to be ENFORCED, not merely stop the slide. Stopping
+            // the slide leaves whatever timer was already armed in place, and
+            // that timer was armed for `timeoutMs + elapsed` at the last
+            // heartbeat — so the call outlives hardCap anyway. Measured while
+            // testing this: with the cap set to 90000 the wait still reached
+            // 117000 and the promise never settled, which is a hang, not a
+            // timeout. So past the cap the fire time is pinned to the cap.
+            fireAt = Math.min(startedAt + timeoutMs + elapsed, startedAt + hardCap);
+            armTimer();
+          }
+          return;
+        }
         if (msg.type !== "COLLECT_ANSWER_RESULT") return;
-        clearTimeout(timer);
-        this.activeStreams.delete(requestId);
-        // KAN-236: remember the count, so the timeout path can report it too.
         this.lastCollectedResponseCount = Number(msg.responses) || 0;
-        resolve({
+        settle({
           ok: Boolean(msg.ok),
           reason: msg.reason || "",
           text: typeof msg.text === "string" ? msg.text : "",
           // KAN-182: how many responses the page held when the wait ended.
           // Carried so `no_new_response_rendered` can say "still N" instead of
           // leaving the operator to guess whether a reply was ever produced.
-          responses: Number(msg.responses) || 0
+          responses: Number(msg.responses) || 0,
+          waitedMs: now() - startedAt
         });
       });
 
@@ -2193,15 +2267,16 @@ export class GeminiBridgeDO extends DurableObject {
         this.activeSocket.send(JSON.stringify({
           type: "COLLECT_ANSWER",
           requestId,
+          // The extension gets slightly less than this caller's own budget, so
+          // its own timeout is the one that fires first and a progress heartbeat
+          // has a chance to arrive rather than a hard disconnect.
           timeoutMs: Math.max(timeoutMs - 5000, 10000),
           // KAN-182: the pre-send baseline. Without it the extension snapshots
           // on arrival, which can already include the answer being waited for.
           responsesBefore
         }));
       } catch (err) {
-        clearTimeout(timer);
-        this.activeStreams.delete(requestId);
-        resolve({ ok: false, reason: "collect_answer_send_failed", text: "" });
+        settle({ ok: false, reason: "collect_answer_send_failed", text: "", responses: 0 });
       }
     });
   }

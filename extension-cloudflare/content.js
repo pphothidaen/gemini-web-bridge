@@ -1770,12 +1770,46 @@
         : (Recovery.countModelResponses ? Recovery.countModelResponses(document) : responses.length);
 
       // Wait for a response that is not just the placeholder label.
-      const settled = await Recovery.waitForResponseChange({
-        previousText: previous,
-        minResponses: before,
-        timeoutMs,
-        doc: document
-      });
+      //
+      // KAN-236: run the wait alongside a heartbeat. The worker's own deadline
+      // is idle-based and re-arms on this message, so without a heartbeat a
+      // generation that legitimately takes three minutes would still be cut off
+      // by the caller even though the extension's slide had already accounted
+      // for it. The heartbeat carries the live response count, which also fixes
+      // the timeout message printing `responses on screen=0` when the page held
+      // 5 - `lastCollectedResponseCount` on the worker is only written when a
+      // RESULT arrives, which by definition has not happened on that path.
+      const startedAt = Date.now();
+      const hardCap = Math.max(timeoutMs * 2, timeoutMs + 60000);
+      const beat = setInterval(() => {
+        const generating = Recovery.isGenerating
+          ? Recovery.isGenerating(document)
+          : false;
+        if (Date.now() - startedAt >= hardCap) {
+          clearInterval(beat);
+          return;
+        }
+        sendToWorker({
+          type: "COLLECT_ANSWER_PROGRESS",
+          requestId,
+          generating,
+          responses: Recovery.countModelResponses
+            ? Recovery.countModelResponses(document)
+            : document.querySelectorAll("model-response").length
+        });
+      }, 3000);
+
+      let settled;
+      try {
+        settled = await Recovery.waitForResponseChange({
+          previousText: previous,
+          minResponses: before,
+          timeoutMs,
+          doc: document
+        });
+      } finally {
+        clearInterval(beat);
+      }
       let text = settled.text || "";
 
       // If it is still streaming, wait for the in-response signal to clear.

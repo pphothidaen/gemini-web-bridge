@@ -113,6 +113,48 @@ it.
 
 ## [Unreleased]
 
+### Fixed
+- **`collectTypedAnswer`'s deadline is now idle-based, and its timeout reports
+  the page's real response count.** Two defects the 4.7.24 entry recorded as
+  "known incomplete", both in the caller-side half that the KAN-236 extension
+  fix never covered — the extension slid its own deadline while the worker kept
+  a flat 120 s, and the worker is the timer that actually fired.
+
+  The extension now sends `COLLECT_ANSWER_PROGRESS` every 3 s while a
+  collection is in flight, carrying both the live `model-response` count and
+  whether `isGenerating()` reports work happening. The worker re-arms from
+  those, so a generation that is progressing is not cut off at the flat budget.
+
+  Measured 2026-10-02 on three grounded `horo_consult` calls: StreamGenerate ran
+  **36151–38353 ms** before the answer rendered, so the old flat timer left about
+  3.2× margin on a fast grounded answer and nothing on a slow one.
+
+  Three things this deliberately does **not** do:
+
+  - A heartbeat reporting `generating: false` does not extend anything, so an
+    idle or hung page still times out on schedule.
+  - `hardCap` (`max(timeout×3, timeout+60000)`) is **enforced**, not merely
+    allowed to stop the slide. The first version stopped sliding past the cap
+    and left the already-armed timer in place, which reached 117 s against a
+    90 s cap and never returned — a hang is worse than the timeout being fixed.
+  - The slide is anchored to a fixed origin (`startedAt + timeoutMs + elapsed`,
+    capped). The first version recomputed a *duration* per heartbeat and re-armed
+    it from the current clock, which compounds: the wait grew geometrically to
+    204 s in 100 s of virtual time and never settled.
+
+  The timeout message now prints the count the page actually reported instead of
+  `responses on screen=0`. `lastCollectedResponseCount` was only ever written
+  when a `COLLECT_ANSWER_RESULT` arrived, which by definition has not happened on
+  the timeout path. It also carries `waitedMs`, so a deadline that slid is
+  distinguishable from one that did not.
+
+  9 new tests in `collect-typed-answer-worker-deadline.test.mjs`, including the
+  three mutations above, each observed to fail and then reverted.
+
+  `collectTypedAnswer` now takes injectable `now` / `setT` / `clearT`, matching
+  the pattern `waitForResponseChange` already uses. Defaults are the real
+  globals, so no production caller changes behaviour.
+
 ### Added
 - **`/v2` exists as a place to make a breaking change without making one.**
   `/v2/models` and `/v2/chat/completions` are open and currently return

@@ -635,6 +635,10 @@ export const MessageTypes = Object.freeze({
   TYPE_PROMPT: 'TYPE_PROMPT',
   TYPE_PROMPT_RESULT: 'TYPE_PROMPT_RESULT',
   COLLECT_ANSWER: 'COLLECT_ANSWER',
+  // KAN-236: heartbeat from the extension while a collection is in flight, so
+  // the worker's deadline can slide with a live generation and so the timeout
+  // message reports the page's ACTUAL response count rather than 0.
+  COLLECT_ANSWER_PROGRESS: 'COLLECT_ANSWER_PROGRESS',
   COLLECT_ANSWER_RESULT: 'COLLECT_ANSWER_RESULT',
 
   // Control
