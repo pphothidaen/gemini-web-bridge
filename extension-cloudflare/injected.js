@@ -516,6 +516,63 @@
     } catch (e) {}
   }
 
+  // KAN-236 Phase D: relay the ALREADY-SANITIZED record to the extension so the
+  // worker can serve it over HTTP, and read it with curl instead of a browser
+  // console.
+  //
+  // Why this is safe to expose, and why it still needed an explicit arm:
+  //   - `record.structure` is `extractBoundedStructure` output — {kind, length,
+  //     cls} per node. There is no prompt text and no token in it, by
+  //     construction, not by filtering afterwards. That is the property the
+  //     GUARDRAILS care about, and it is why this is not the "raw network body"
+  //     surface the plan forbids.
+  //   - It is still metadata about someone's Gemini traffic (field counts,
+  //     string lengths, whether a notebook ref is present). So it is NOT
+  //     exposed by default: `payloadCaptureArmed` is false until the worker
+  //     explicitly asks, and the worker only asks from an authenticated
+  //     endpoint.
+  //
+  // `logProbeRecord` is left exactly as it was. Console remains the sink that
+  // cannot persist anything, and keeping it means the KAN-195 path still works
+  // even when the relay is off.
+  let payloadCaptureArmed = false;
+
+  function armPayloadCapture(armed) {
+    payloadCaptureArmed = armed === true;
+    return payloadCaptureArmed;
+  }
+
+  // Exported so the DEFAULT can be asserted. A test that wants "off by default"
+  // has to be able to read the flag without setting it first, and an earlier
+  // version of this suite called armPayloadCapture(false) then asserted the
+  // relay was quiet - which passed with the default flipped to true, because it
+  // never looked at the default at all. Caught by mutation, not by review.
+  function isPayloadCaptureArmed() {
+    return payloadCaptureArmed;
+  }
+
+  function relayProbeRecord(record) {
+    if (!record || !payloadCaptureArmed) return false;
+    if (typeof window === "undefined" || typeof window.postMessage !== "function") return false;
+    try {
+      window.postMessage({
+        source: "GEMINI_INJECTED",
+        type: "PAYLOAD_CAPTURE",
+        payload: record
+      }, "*");
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** Log and/or relay, so the two sinks cannot drift out of sync. */
+  function emitProbeRecord(record) {
+    if (!record) return;
+    logProbeRecord(record);
+    relayProbeRecord(record);
+  }
+
   /** Accepts only a boolean; anything else leaves the flag as it was. */
   function handleProbeSet(msg) {
     if (!msg || typeof msg.enabled !== "boolean") return false;
@@ -556,7 +613,7 @@
 
       // Logged before the response is awaited, so a slow or hanging endpoint
       // cannot delay or reorder the record relative to the request itself.
-      logProbeRecord(probeRecord(matched, "fetch", requestStructure, modelIdAtRequestTime));
+      emitProbeRecord(probeRecord(matched, "fetch", requestStructure, modelIdAtRequestTime));
 
 
       const response = await originalFetch.apply(this, arguments);
@@ -620,7 +677,7 @@
       // The prompt travels over XHR, so the fetch-side probe alone never sees
       // it — a fetch-only capture produces structures with no prompt field and
       // is what made the first KAN-195 pass come back empty.
-      logProbeRecord(probeRecord(matched, "xhr", requestStructure, modelIdAtRequestTime));
+      emitProbeRecord(probeRecord(matched, "xhr", requestStructure, modelIdAtRequestTime));
 
 
       this.addEventListener("loadend", () => {
@@ -662,6 +719,15 @@
     // boolean explicitly turns it on.
     if (type === "PAYLOAD_PROBE_SET") {
       handleProbeSet(event.data);
+      return;
+    }
+
+    // KAN-236 Phase D: arm/disarm the relay that ships the sanitized record to
+    // the worker. Separate from PAYLOAD_PROBE_SET on purpose — that one gates
+    // the console sink, this one gates the relay, and a measurement may want
+    // one without the other.
+    if (type === "PAYLOAD_CAPTURE_ARM") {
+      armPayloadCapture(event.data.armed === true);
       return;
     }
 
@@ -817,7 +883,10 @@
     STRING_CLASS,
     classifyString,
     extractBoundedStructure,
-    handleProbeSet
+    handleProbeSet,
+    armPayloadCapture,
+    isPayloadCaptureArmed,
+    emitProbeRecord
   };
 
   if (typeof module !== "undefined" && module.exports) {

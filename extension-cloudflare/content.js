@@ -701,6 +701,14 @@
         if (isLeaderTab) syncModelsToWorker();
         break;
 
+      // KAN-236 Phase D: arm/disarm the sanitized payload relay. Forwarded to
+      // every tab, not just the leader: whichever tab issues the next
+      // StreamGenerate is the one that must be armed, and that is not
+      // predictable from here.
+      case "PAYLOAD_CAPTURE_ARM":
+        handlePayloadCaptureArm(msg);
+        break;
+
       case "PING":
         sendToWorker({ type: "PONG" });
         break;
@@ -1739,6 +1747,25 @@
    * The "Gemini บอกว่า" label is excluded — Gemini renders it before the real
    * text, so returning it would hand the caller 13 characters of nothing.
    */
+  /**
+   * KAN-236 Phase D: arm or disarm the sanitized payload relay in the page.
+   *
+   * Reached only from an authenticated worker endpoint. Disarming is the
+   * important half: the relay is off by default, and this is how it gets turned
+   * back off after a measurement rather than being left armed by accident.
+   */
+  function handlePayloadCaptureArm(msg) {
+    const armed = Boolean(msg && msg.armed);
+    if (typeof window !== "undefined" && typeof window.postMessage === "function") {
+      window.postMessage({
+        source: "GEMINI_CONTENT",
+        type: "PAYLOAD_CAPTURE_ARM",
+        armed
+      }, "*");
+    }
+    console.log(`[Bridge] 📡 PAYLOAD_CAPTURE ${armed ? "ARMED" : "disarmed"}`);
+  }
+
   async function handleCollectAnswer(msg) {
     const { requestId, timeoutMs = 120000 } = msg;
     console.log(`[Bridge] 📥 COLLECT_ANSWER (${requestId})`);
@@ -1927,6 +1954,18 @@
 
       if (source === "GEMINI_INJECTED") {
         switch (type) {
+          // KAN-236 Phase D: the sanitized payload record, relayed so the
+          // worker can serve it over HTTP and Phase D's captures can be read
+          // with curl rather than a browser console.
+          //
+          // It arrives already reduced to {kind, length, cls} by
+          // extractBoundedStructure — there is no prompt text or token in it to
+          // strip here, and nothing in this handler adds any. The one thing
+          // worth guarding is the log line: it must not print the record
+          // itself, because this is the path that puts it somewhere durable.
+          case "PAYLOAD_CAPTURE":
+            sendToWorker({ type: "PAYLOAD_CAPTURE", record: payload });
+            break;
           case "SESSION_STATE":
           case "TOKENS_EXTRACTED":
             if (type === "TOKENS_EXTRACTED") {

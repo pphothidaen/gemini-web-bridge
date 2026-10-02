@@ -32,7 +32,12 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.27";
+const WORKER_VERSION = "4.7.28";
+
+// KAN-236 Phase D: how many sanitized payload records to keep. Phase D needs
+// three cases (chip present / absent / repeat), so three is the working figure
+// and the cap exists to stop the buffer becoming a history.
+const PAYLOAD_CAPTURE_MAX = 3;
 
 // ─── API version routing ─────────────────────────────────────────────────
 //
@@ -297,6 +302,13 @@ export class GeminiBridgeDO extends DurableObject {
     // `collection` block at all.
     this.lastProgressAt = null;
     this.lastProgressGenerating = null;
+    // KAN-236 Phase D: sanitized payload records, held only while armed and
+    // only ever served from the authenticated /debug/payload-capture endpoint.
+    // Deliberately NOT on /health — that path is public (it answers 200 with
+    // no Authorization header), and conversation metadata does not belong on a
+    // world-readable endpoint just because it is the convenient one.
+    this.payloadCaptureArmed = false;
+    this.payloadCaptures = [];
     // KAN-236: requestId -> re-arm callback for an in-flight collectTypedAnswer.
     //
     // The extension sends COLLECT_ANSWER_PROGRESS while Gemini is visibly
@@ -2719,6 +2731,28 @@ export class GeminiBridgeDO extends DurableObject {
               const handler = this.activeStreams.get(msg.requestId);
               if (handler) handler(msg);
             }
+          } else if (msg.type === "PAYLOAD_CAPTURE") {
+            // KAN-236 Phase D: the extension's sanitized payload record.
+            //
+            // Stored only while armed, and served only from an authenticated
+            // endpoint. The record is extractBoundedStructure output — {kind,
+            // length, cls} per node — so there is no prompt text or token in it
+            // to strip. What it does carry is metadata about someone's Gemini
+            // traffic, which is why it is neither stored nor served unless
+            // someone with the API key explicitly asked for it.
+            if (!this.payloadCaptureArmed) {
+              vlog("[Bridge DO] PAYLOAD_CAPTURE dropped: capture not armed");
+            } else {
+              this.payloadCaptures.push({
+                at: Date.now(),
+                record: msg.record
+              });
+              // Bounded. Phase D needs three cases, not a history; an unbounded
+              // buffer here would be a slow leak of conversation metadata.
+              while (this.payloadCaptures.length > PAYLOAD_CAPTURE_MAX) {
+                this.payloadCaptures.shift();
+              }
+            }
           } else if (msg.requestId && this.activeStreams.has(msg.requestId)) {
             const handler = this.activeStreams.get(msg.requestId);
             if (handler) handler(msg);
@@ -4178,6 +4212,52 @@ export class GeminiBridgeDO extends DurableObject {
     }
 
     // ─── 5. Status Dashboard (GET / หรือ /health) ───
+    if (url.pathname === "/debug/payload-capture") {
+      // KAN-236 Phase D. Authenticated by the generic gate above, because this
+      // path is not in `publicPaths` — verified: an unauthenticated GET to
+      // /health returns 200, so anything read off it would be world-readable.
+      // Deliberate: /health was the obvious home for this and the wrong one.
+      if (request.method === "POST") {
+        let armed = false;
+        try {
+          const body = await request.json();
+          armed = body && body.armed === true;
+        } catch (e) {
+          armed = false;
+        }
+        this.payloadCaptureArmed = armed;
+        // Arming clears the buffer, so a new measurement never reads records
+        // left over from the last one. Mixing cases is exactly the mistake that
+        // would corrupt the chip-present / chip-absent comparison.
+        if (armed) this.payloadCaptures = [];
+        // Every tab is armed, not just the leader: whichever tab issues the
+        // next StreamGenerate is the one that has to be listening, and that is
+        // not predictable from the worker.
+        //
+        // Guarded on readyState because the socket is frequently absent — a
+        // deploy drops it, and this endpoint is perfectly reachable while the
+        // extension is disconnected. Arming the DO flag is still correct in that
+        // case; only the push is skipped, and the next connect picks it up.
+        if (this.activeSocket && this.activeSocket.readyState === 1) {
+          this.activeSocket.send(JSON.stringify({
+            type: "PAYLOAD_CAPTURE_ARM",
+            armed
+          }));
+        }
+        return new Response(JSON.stringify({
+          armed: this.payloadCaptureArmed,
+          max: PAYLOAD_CAPTURE_MAX,
+          cleared: armed
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        armed: this.payloadCaptureArmed,
+        max: PAYLOAD_CAPTURE_MAX,
+        count: this.payloadCaptures.length,
+        captures: this.payloadCaptures
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     if (url.pathname === "/" || url.pathname === "/health") {
       const isReady = this.isExtensionReady();
       // Collect information about active connections
