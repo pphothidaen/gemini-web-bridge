@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.31";
+const WORKER_VERSION = "4.7.32";
 
 // KAN-236 Phase D: how many sanitized payload records to keep.
 //
@@ -2753,7 +2753,13 @@ export class GeminiBridgeDO extends DurableObject {
             } else {
               this.payloadCaptures.push({
                 at: Date.now(),
-                record: msg.record
+                record: msg.record,
+                // The build that produced this record, from the running
+                // extension. A capture that does not say which build produced it
+                // cannot be interpreted: "zero notebook_ref" means something
+                // completely different on 4.7.29 (classifier cannot see
+                // notebooks://) than on 4.7.31+ (it can, and found nothing).
+                extensionVersion: msg.extensionVersion || null
               });
               // Bounded. Phase D needs three cases, not a history; an unbounded
               // buffer here would be a slow leak of conversation metadata.

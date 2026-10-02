@@ -1964,7 +1964,25 @@
           // worth guarding is the log line: it must not print the record
           // itself, because this is the path that puts it somewhere durable.
           case "PAYLOAD_CAPTURE":
-            sendToWorker({ type: "PAYLOAD_CAPTURE", record: payload });
+            // Stamp the build that actually produced this record. Added
+            // 2026-10-02 after a capture came back "zero notebook_ref" and
+            // there was no way to tell whether that meant the payload lacks the
+            // reference or the classifier is too old to see it — because
+            // nothing in the record said which extension build sent it. Those
+            // two readings need opposite conclusions and were indistinguishable.
+            //
+            // chrome.runtime.getManifest() is authoritative: it reports the
+            // LOADED build, which is precisely the thing in doubt when a build
+            // has been made but not reloaded. A version derived from a source
+            // file or a git tag would report what SHOULD be loaded.
+            sendToWorker({
+              type: "PAYLOAD_CAPTURE",
+              record: payload,
+              extensionVersion: (typeof chrome !== "undefined"
+                && chrome.runtime && chrome.runtime.getManifest)
+                ? chrome.runtime.getManifest().version
+                : null
+            });
             break;
           case "SESSION_STATE":
           case "TOKENS_EXTRACTED":

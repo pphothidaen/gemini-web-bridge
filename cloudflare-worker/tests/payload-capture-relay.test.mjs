@@ -204,6 +204,27 @@ test('a notebook reference is recognised under BOTH schemes, anywhere in the str
     'the word "notebook" without the scheme is not a reference');
 });
 
+test('every capture records the build that produced it', () => {
+  // A capture that does not say which extension build sent it cannot be
+  // interpreted. "zero notebook_ref" means one thing on 4.7.29 (the classifier
+  // matched only notebook://, so it could not see notebooks:// at all) and the
+  // opposite thing on 4.7.31+ (it can see it, and found nothing). Those need
+  // opposite conclusions and were indistinguishable — which is how a blind
+  // instrument nearly got written up as a finding about the payload.
+  assert.match(WORKER_SOURCE, /extensionVersion: msg\.extensionVersion \|\| null/,
+    'the worker must store which build produced the capture');
+  assert.match(WORKER_SOURCE, /const publicPaths = \["\/", "\/health"\];/);
+
+  const content = fs.readFileSync(
+    new URL('../../extension-cloudflare/content.js', import.meta.url).pathname,
+    'utf8'
+  );
+  assert.match(content, /chrome\.runtime\.getManifest\(\)\.version/,
+    'the version must come from the LOADED extension, not a source file or a tag');
+  assert.match(content, /type: "PAYLOAD_CAPTURE",[\s\S]{0,400}extensionVersion:/,
+    'the stamp must travel with the record');
+});
+
 test('the arm travels BOTH ways, not just the record', () => {
   // Shipped broken, and only production caught it. The relay is two hops in
   // opposite directions:
@@ -252,8 +273,17 @@ test('the arm travels BOTH ways, not just the record', () => {
   assert.match(injected, /armPayloadCapture\(event\.data\.armed === true\)/,
     'injected.js must apply it, and only for an explicit boolean');
 
-  assert.match(content, /case "PAYLOAD_CAPTURE":\s*sendToWorker\(\{ type: "PAYLOAD_CAPTURE"/,
-    'content.js must relay the record to the background');
+  // Sliced rather than one wide regex: this branch now carries a long comment,
+  // and a character-budget regex silently fails the next time someone rewraps
+  // prose. What matters is "the record is relayed to the worker", not how much
+// explanation sits above it.
+  const captureCase = content.slice(
+  content.indexOf('case "PAYLOAD_CAPTURE":'),
+  content.indexOf('case "SESSION_STATE":')
+);
+  assert.ok(captureCase.length > 0, 'the PAYLOAD_CAPTURE case must exist');
+  assert.match(captureCase, /sendToWorker\(\{/);
+  assert.match(captureCase, /type: "PAYLOAD_CAPTURE"/);
   // Upward, rest of the hop. Slice the whole array literal rather than guessing
   // at offsets: PAYLOAD_CAPTURE is appended AFTER "GROUNDING_RESULT", so a
   // slice ending at that name cuts the very entry off.
