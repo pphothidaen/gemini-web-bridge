@@ -771,6 +771,13 @@ reached without fabrication, not a negative finding.
 
 Two things were deliberately *not* done, and both would have been faster:
 
+- **The blocker is Kapture itself, not a missing idea.** Recorded in
+  `docs/NOTEBOOK-API-FEASIBILITY.md`: `new_tab` ignores its URL and opens
+  Kapture's own docs page even for a plain https target, then drops the tab;
+  `console_logs` returns 0 where it returned 58 at session start. An earlier
+  conclusion here — that `new_tab` was filtering `chrome://` — was wrong, and
+  is corrected. Fixing the capture path is a Kapture-side problem, not
+  something a bridge change can route around.
 - **No hand-transcription from a network capture.** The raw `StreamGenerate`
   body holds the full prompt and session tokens, which G1.2.1 keeps out of
   written artifacts. A hand-derived structure would pass

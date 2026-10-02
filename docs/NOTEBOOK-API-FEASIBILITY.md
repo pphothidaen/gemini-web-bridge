@@ -66,11 +66,19 @@ closed for concrete, recorded reasons:
   to Kapture's own docs page.)
 
 **Blocker 2 — the output could not be read.** The probe's only sink is
-`console.log`, and the Kapture console reader is **detached**: it returns
-`totalCount: 0` straight after a page reload, and has done so across many
-successful `horo_consult` calls that certainly logged. It returned 58 entries at
-the start of the same session, so this is a regression in the instrument, not an
-absence of output.
+`console.log`, and the Kapture extension is **degraded**, not merely quiet:
+
+| call | behaviour |
+|---|---|
+| `console_logs` | `totalCount: 0` after reloads and across many successful `horo_consult` calls that certainly logged. It returned **58** entries at session start. |
+| `new_tab` | Ignores the URL entirely — `https://gemini.google.com/app` and `chrome://extensions/` both open Kapture's own docs page. Not URL filtering: a plain https URL is dropped too. |
+| `new_tab` (continued) | The tab it opens is then dropped from the tab list within a second, and reading its console returns `Tab not found`. |
+| `navigate` | Works on a real page; correctly refuses `chrome://` with `NAVIGATION_BLOCKED`. |
+
+So the earlier reading — "new_tab redirected `chrome://extensions/` to a docs
+page, therefore it filters `chrome://`" — was **wrong**. It does not filter; it
+does not navigate at all. The `NAVIGATION_BLOCKED` result from `navigate` is the
+honest signal, and it is the only one worth acting on.
 
 Blocker 2 is the one worth dwelling on. Had the reader merely looked empty
 without that 58-entry baseline, "the probe never fired" would have been a
