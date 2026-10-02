@@ -248,3 +248,41 @@ test('the heartbeat announces itself exactly once per collection', () => {
   assert.match(CONTENT, /if \(!announced\) \{\s*announced = true;/,
     'the announcement must be latched so it fires exactly once');
 });
+
+test('/health reports the heartbeat, so the reload check needs no browser', () => {
+  // The console is a manual step and its reader proved unreliable during the
+  // 4.7.26 verification attempt — it returned zero entries even straight after
+  // a page reload. So the same fact is surfaced on /health, where it is one
+  // curl away and needs no DevTools.
+  assert.match(SOURCE, /collection: \{[\s\S]{0,400}last_progress_at: this\.lastProgressAt/,
+    '/health must expose when the last heartbeat arrived');
+  assert.match(SOURCE, /this\.lastProgressAt = null;/,
+    'the field must start null so "never arrived" is distinguishable from "0 responses"');
+  // Sliced rather than one big regex: the branch carries explanatory comments
+  // whose length is free to change, and a line-count-bounded regex silently
+  // starts failing when someone rewraps a comment. The assertion that matters
+  // is "the handler stamps a timestamp", not how the prose sits around it.
+  const branch = SOURCE.slice(
+    SOURCE.indexOf('if (msg.type === "COLLECT_ANSWER_PROGRESS")'),
+    SOURCE.indexOf('const elapsed = now() - startedAt;')
+  );
+  assert.ok(branch.length > 0, 'the PROGRESS branch must exist');
+  assert.match(branch, /this\.lastProgressAt = now\(\);/,
+    'the heartbeat handler must stamp the arrival time it reports');
+  assert.match(branch, /this\.lastProgressGenerating = Boolean\(msg\.generating\);/,
+    'the handler must record whether a generation was live, not just that a beat arrived');
+});
+
+test('a heartbeat that never arrives leaves the health signal null, not zero', async () => {
+  // The distinction that matters: `last_progress_at: null` means the pre-4.7.25
+  // extension is still loaded. Reporting 0 there would read as "the heartbeat
+  // said zero responses", which is a different and much less alarming claim.
+  const h = harness({ timeoutMs: 30000 });
+  assert.equal(h.self.lastProgressAt, undefined,
+    'the harness must start with no progress recorded, matching a fresh DO');
+  const pending = h.run();
+  await h.advance(31000);
+  await pending;
+  assert.equal(h.self.lastProgressAt, undefined,
+    'a collection with no heartbeat must not fabricate a progress timestamp');
+});

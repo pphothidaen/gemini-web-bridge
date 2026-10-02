@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.26";
+const WORKER_VERSION = "4.7.27";
 
 // ─── API version routing ─────────────────────────────────────────────────
 //
@@ -291,6 +291,12 @@ export class GeminiBridgeDO extends DurableObject {
     this.extendedThinkingActive = false;
     this.dynamicModels = [];
     this.activeStreams = new Map();
+    // KAN-236: when the last COLLECT_ANSWER_PROGRESS arrived, and whether it
+    // reported a live generation. Null means no heartbeat has EVER arrived —
+    // the signature of a pre-4.7.25 extension, and the reason /health carries a
+    // `collection` block at all.
+    this.lastProgressAt = null;
+    this.lastProgressGenerating = null;
     // KAN-236: requestId -> re-arm callback for an in-flight collectTypedAnswer.
     //
     // The extension sends COLLECT_ANSWER_PROGRESS while Gemini is visibly
@@ -2235,6 +2241,13 @@ export class GeminiBridgeDO extends DurableObject {
         // times out on schedule.
         if (msg.type === "COLLECT_ANSWER_PROGRESS") {
           this.lastCollectedResponseCount = Number(msg.responses) || 0;
+          // KAN-236: stamp arrival time and the generating flag so /health can
+          // report the heartbeat. `lastCollectedResponseCount` alone cannot
+          // distinguish "a heartbeat said 0 responses" from "no heartbeat ever
+          // arrived", which is exactly the ambiguity that made the extension
+          // half unverifiable.
+          this.lastProgressAt = now();
+          this.lastProgressGenerating = Boolean(msg.generating);
           const elapsed = now() - startedAt;
           if (msg.generating) {
             // The cap has to be ENFORCED, not merely stop the slide. Stopping
@@ -4204,6 +4217,27 @@ export class GeminiBridgeDO extends DurableObject {
         conversation_state: {
           active: Boolean(this.conversationState.conversationId),
           conversationId: this.conversationState.conversationId || null
+        },
+        // KAN-236: what the last collection's extension half actually reported.
+        //
+        // This exists because the heartbeat was otherwise verifiable only by
+        // opening the Gemini tab's DevTools console — which is a manual step,
+        // and one whose reader is not reliable. Surfacing it here makes "did
+        // the operator's extension reload take?" a /health question instead of
+        // a browser question.
+        //
+        // `last_progress_at` null means no heartbeat has EVER arrived, which is
+        // the signature of the pre-4.7.25 extension still being loaded. A stale
+        // timestamp on an otherwise healthy run means the same thing.
+        collection: {
+          last_progress_at: this.lastProgressAt || null,
+          last_progress_responses: this.lastCollectedResponseCount || 0,
+          last_progress_generating: this.lastProgressGenerating ?? null,
+          // The content script logs the same fact, but from the extension's
+          // side. Both are needed: this proves the WORKER received a heartbeat,
+          // the console proves the EXTENSION sent one, and only together do
+          // they localise a failure to one side of the wire.
+          source: "extension COLLECT_ANSWER_PROGRESS"
         },
         // ─── Phase 3: Instance-ID Tracking + Epoch Counter ───
         instance_tracking: {

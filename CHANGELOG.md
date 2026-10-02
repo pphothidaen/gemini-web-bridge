@@ -113,6 +113,35 @@ it.
 
 ## [Unreleased]
 
+### Added
+- **`/health` now reports the extension's collection heartbeat.** A new
+  `collection` block carries `last_progress_at`, `last_progress_responses` and
+  `last_progress_generating`, stamped by the worker when a
+  `COLLECT_ANSWER_PROGRESS` arrives.
+
+  This exists because verifying the 4.7.25 heartbeat otherwise required opening
+  the Gemini tab's DevTools console — a manual step, and one whose reader proved
+  unreliable: during the 4.7.26 verification attempt it returned zero entries
+  even immediately after a page reload, having returned 58 earlier in the same
+  session. An instrument that can report "nothing happened" when it has simply
+  detached cannot support a conclusion.
+
+  With this, the extension-reload check is one `curl` and needs no browser:
+
+  | `collection.last_progress_at` | meaning |
+  |---|---|
+  | `null` | no heartbeat has ever arrived — pre-4.7.25 extension still loaded |
+  | recent timestamp | 4.7.25+ extension is live |
+  | stale on a healthy run | the extension is loaded but stopped heartbeating |
+
+  `null` is deliberately distinct from `0`. `lastCollectedResponseCount` alone
+  cannot tell "a heartbeat reported zero responses" from "no heartbeat ever
+  arrived", and that ambiguity is exactly what made the extension half
+  unverifiable. The field starts `null` and is only written on arrival.
+
+  Pinned by two tests, including a mutation that removes the health block and
+  fails.
+
 ### Fixed
 - **The 4.7.25 heartbeat is now observable.** The extension's
   `COLLECT_ANSWER_PROGRESS` sent every 3 s and logged nothing, which left the
