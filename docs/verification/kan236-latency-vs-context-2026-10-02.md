@@ -64,3 +64,42 @@ Remaining shape: 5+ turns, per-turn monitoring, one identical pinned-length
 question. The current n=4 uncontrolled run is not enough to separate "scales
 with context" from "scales with answer length", which is the whole point of the
 rerun.
+
+### Second attempt (same day) — network-based timing abandoned
+
+Tried the per-turn monitoring fix from the addendum above. It does not solve it.
+
+With the buffer force-cleared and monitoring re-enabled immediately before a
+single send, the buffer reached **57 entries in about 20 seconds**. Google emits
+roughly three `play.google.com/log` calls plus a `google-analytics.com`
+beacon per second from this page, and `network_requests` has no URL filter, so
+extracting one StreamGenerate row means paying for every analytics row around it.
+Per-turn monitoring reduces 566 entries to 57; it does not make the signal
+readable.
+
+**Do not spend further attempts on network-based timing.** It is a tooling
+dead end here, not a methodology problem.
+
+### The viable path, for whoever has context budget
+
+The capture channel already yields two of the three numbers per turn, exactly and
+with the producer build attached:
+
+- request fire time  → `captures[].at`
+- context length     → `structure[3].length`
+
+Only completion time is missing, and `/health` `last_successful_generation` will
+not supply it — it stays `null` for Kapture-driven sends because it only
+advances for bridge-initiated generations.
+
+Cheapest workable loop, about four tool calls per turn and no network buffer:
+
+1. `POST /debug/payload-capture {"armed":true}` — after any navigation.
+2. Send the pinned-length message via Kapture.
+3. One `kapture__elements` on `model-response` to see the turn has rendered.
+4. `python3 -c "import time;print(int(time.time()*1000))"` for completion.
+
+latency = (3) − `captures[].at`.
+
+Note `date +%s%3N` does not work on macOS — it is GNU-only and silently emits
+`N`. Use python for millisecond timestamps.
