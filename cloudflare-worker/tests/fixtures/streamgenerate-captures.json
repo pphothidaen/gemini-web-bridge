@@ -470,12 +470,13 @@
     },
     "interpretation": "An opaque per-notebook token, stable for the notebook rather than the session. Reproducible by a builder for a KNOWN notebook; not derivable without observing it once.",
     "openGap": "contains.notebook_id came back null on both turns: the worker derives the id from currentScope, but attach-in-place keeps the scope at app:*, so the notebook id is not in the scope string. The comparison was never actually run.",
-    "RETRACTED_2026_10_02": {
-      "claim": "the notebook binding lives at [0][3][0][2], an 88-char token present only when a notebook is attached",
-      "why_retracted": "docs/payload-samples/2026-09-29-streamgenerate.json holds two sanitized StreamGenerate captures from KAN-195: sample A (grounded) and sample B (ungrounded, fresh conversation). BOTH carry [0][3][0][0][3]=0, [0][3][0][1]=4 and [0][3][0][2]=88. The branch is therefore present in an UNGROUNDED request too, so it cannot be the attachment discriminator. The chip-present vs chip-absent comparison run on 2026-10-02 showed the branch present in one case and absent in the other, which contradicts this. The evidence is inconsistent and the location is NOT settled.",
-      "what_is_still_true": "[0][3][0][2] is 88 chars, charset lower+upper+digit, fingerprint cff9779e, stable across turns and across two different conversations. Those observations stand; what does not stand is the claim that its PRESENCE indicates attachment.",
-      "how_this_was_found": "Not by running anything. The prior KAN-195 samples were already in the repo at docs/payload-samples/ and had not been compared against the 2026-10-02 captures. Offline corroboration that disagreed with the live capture.",
-      "lesson": "A repository holding older captures of the same endpoint is a research channel, and it is checkable without a browser. It should have been read before drawing a conclusion from a single day's data. Two sanitised captures disagreeing is information; one capture agreeing with itself is not."
+    "CONFIRMED_2026_10_02": {
+      "claim": "[0][3] is present if and only if a notebook chip is attached. The 88-char field at [0][3][0][2] lives inside that branch.",
+      "corroboration": "All 7 sanitized captures in this repo and docs/payload-samples/ agree, 7 for 7: the five chip-attached captures (09-29 A, 09-29 B, 10-02 chip-present x2, chip-repeat) all carry the branch; both chip-absent captures lack it entirely.",
+      "the_mistake_that_did_this": "I retracted the claim after comparing against 09-29 sample B, which is labelled grounding_outcome 'ungrounded' and DOES carry the branch. I read 'ungrounded' as 'no chip attached'. It is not: sample B had the chip attached and the model simply answered without citing. Chip attachment and grounding verification are different facts on different sides of the wire - the request carries the chip, the response carries the citations.",
+      "discriminator": "[0][3] presence tracks CHIP ATTACHMENT in the request, not whether the answer happened to cite the notebook. A response can be ungrounded with the branch present, which is exactly sample B.",
+      "still_unconfirmed": "The 88-char field's fingerprint cff9779e is stable across two different conversations for the same notebook. Whether it changes for a DIFFERENT notebook has never been tested, so 'stable per notebook' remains an inference rather than a measurement.",
+      "known_data_loss": "The four 10-02 captures were written to this fixture through a serialiser that dropped length and cls, leaving bare 'string' markers. Field PRESENCE is recoverable from them and was used above; lengths were not, and the raw capture is the only source for those. The serialiser, not the capture, is at fault."
     }
   }
 }

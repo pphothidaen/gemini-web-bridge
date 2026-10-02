@@ -1,19 +1,23 @@
 # Notebook API feasibility — KAN-236 direct path
 
-> ## ⚠️ RETRACTED 2026-10-02 — the binding location is NOT established
+> ## CONFIRMED 2026-10-02 (after a false retraction)
 >
-> `docs/payload-samples/2026-09-29-streamgenerate.json` holds two sanitized
-> StreamGenerate captures from KAN-195 — one **grounded**, one **ungrounded** from
-> a fresh conversation. **Both** carry the `[0][3][0][2]` 88-character field. So
-> its presence does not indicate attachment, and the chip-present vs chip-absent
-> comparison that appeared to prove otherwise disagrees with data already in the
-> repository. The 88-char field's fingerprint, charset and cross-conversation
-> stability still stand; the claim that it *is* the notebook binding does not.
+> Cross-comparing **all seven** sanitized captures in the repo — the two KAN-195
+> samples from 2026-09-29 plus the five from 2026-10-02 — agrees 7 for 7. Every
+> chip-attached capture carries the `[0][3]` branch; both chip-absent captures
+> lack it completely.
 >
-> The verdict below is retained only as the record of what was believed and why
-> it no longer can be.
+> I retracted this claim mid-day after comparing against KAN-195 sample B, which
+> is labelled `grounding_outcome: "ungrounded"` and does carry the branch. That
+> retraction was wrong. Sample B had the chip **attached**; the model simply
+> answered without citing it. **Chip attachment is a property of the request;
+> grounding verification is a property of the response.** Reading "ungrounded" as
+> "no chip" conflated the two sides of the wire.
+>
+> The 88-char field's stability across two conversations for the same notebook
+> still stands. Whether it differs for a *different* notebook remains untested.
 
-**Verdict (retracted): VIABLE, with one dependency. All three captures taken. The notebook
+**Verdict: VIABLE, with one dependency. All three captures taken. The notebook
 binding IS in the payload, at index `[0][3][0][2]` — an 88-character token that
 is stable across turns AND across conversations. A builder can reproduce it for
 a known notebook. What it cannot do is invent one: the token is observed, not
