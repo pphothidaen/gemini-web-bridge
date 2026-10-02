@@ -1693,6 +1693,7 @@ export class GeminiBridgeDO extends DurableObject {
   }
 
   async callGcpGemini(messages, model = "gemini-1.5-flash") {
+    const startTime = Date.now();
     const apiKey = this.env.GEMINI_API_KEY;
     if (!apiKey) {
       const err = new Error("GCP Gemini API key not configured");
@@ -1742,10 +1743,13 @@ export class GeminiBridgeDO extends DurableObject {
     const candidate = data.candidates?.[0];
     const text = candidate?.content?.parts?.[0]?.text || "";
     this.recordHealthSuccess();
+    const endTime = Date.now();
+    vlog(`[Bridge DO] Gemini API request took {endTime - startTime}ms for {messages.length} messages`);
     return text;
   }
 
   async executeThroughExtension(messages, onChunk, model = "", opts = {}) {
+    const startTime = Date.now();
     // KAN-182: `requireGrounding` forces the typing path and skips replay.
     //
     // Replay is NOT a neutral fallback — it is architecturally incapable of

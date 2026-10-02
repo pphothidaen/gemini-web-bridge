@@ -337,6 +337,57 @@
         "number",
         null
       ]
+    },
+    {
+      "captureId": "app-chip-absent-2026-10-02",
+      "case": "chip-ABSENT (plain /app conversation, no notebook attached)",
+      "capturedAt": "2026-10-02T11:20:00Z",
+      "capturedBy": "operator-typed message via Kapture in a fresh /app conversation; PAYLOAD_CAPTURE relay, read with curl",
+      "producerExtensionVersion": "4.7.32",
+      "provenance": "extractBoundedStructure output verbatim from live production. Producer build self-reported.",
+      "endpoint": "StreamGenerate",
+      "transport": "xhr",
+      "buildLabel": "boq_assistant-bard-web-server_20260929.03_p0",
+      "canonicalModelId": "gemini-3.8-flash-lite",
+      "fieldCount": 20,
+      "structure": [
+        [
+          "string",
+          "number",
+          null,
+          null,
+          null,
+          null,
+          "number"
+        ],
+        [
+          "string"
+        ],
+        null,
+        "string",
+        "string",
+        null,
+        [
+          "number"
+        ],
+        "number",
+        null,
+        null,
+        "number",
+        "number",
+        null,
+        null,
+        null,
+        null,
+        null,
+        [
+          [
+            "number"
+          ]
+        ],
+        "number",
+        null
+      ]
     }
   ],
   "divergence_from_worker_builder": [
