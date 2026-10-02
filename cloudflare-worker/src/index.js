@@ -32,12 +32,20 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.29";
+const WORKER_VERSION = "4.7.30";
 
-// KAN-236 Phase D: how many sanitized payload records to keep. Phase D needs
-// three cases (chip present / absent / repeat), so three is the working figure
-// and the cap exists to stop the buffer becoming a history.
-const PAYLOAD_CAPTURE_MAX = 3;
+// KAN-236 Phase D: how many sanitized payload records to keep.
+//
+// Was 3 — "Phase D needs three cases" — which was a category error. The three
+// cases are three *turns*, but a single turn fires several BatchExecute RPCs,
+// and they arrive within ~500 ms of each other. With a cap of 3 the buffer held
+// three simultaneous non-prompt RPCs (all `outerLength: 1, hasEnvelope: false`)
+// and evicted the very request being looked for. The first live capture proved
+// it: three records, none of them StreamGenerate.
+//
+// 12 is comfortably more than one turn emits, and still a bound — the point of
+// the cap is that this is not a history.
+const PAYLOAD_CAPTURE_MAX = 12;
 
 // ─── API version routing ─────────────────────────────────────────────────
 //
