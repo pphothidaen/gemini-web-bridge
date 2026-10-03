@@ -340,6 +340,7 @@ export class GeminiBridgeDO extends DurableObject {
     this.enforcementMode = "strict";
     this.currentScope = null;
     this.lastNotebookScope = null;
+    this.targetNotebookScope = null;
     this.socketLostAt = null;
     this.conversationState = {
       conversationId: null,
@@ -2200,8 +2201,11 @@ export class GeminiBridgeDO extends DurableObject {
    * question worth asking.
    */
   resolveNotebookIdFromScope(scope) {
-    if (typeof scope !== "string") return null;
-    const m = scope.match(/^notebook:([0-9a-fA-F-]{8,})$/);
+    const target = (typeof scope === "string" && scope.startsWith("notebook:"))
+      ? scope
+      : this.targetNotebookScope;
+    if (typeof target !== "string") return null;
+    const m = target.match(/^notebook:([0-9a-fA-F-]{8,})$/);
     return m ? m[1] : null;
   }
 
@@ -3805,6 +3809,12 @@ export class GeminiBridgeDO extends DurableObject {
           const wantsDefaultNotebook =
             toolName === "horo_consult" && !(typeof args.scope === "string" && args.scope.trim());
 
+          if (wantsDefaultNotebook) {
+            this.targetNotebookScope = HORO_CONSULT_DEFAULT_SCOPE;
+          } else if (typeof args.scope === "string" && args.scope.startsWith("notebook:")) {
+            this.targetNotebookScope = args.scope;
+          }
+
           // Switch conversation scope (normal chat / notebook) before executing.
           const effectiveScope = wantsDefaultNotebook ? null : args.scope;
 
@@ -4255,11 +4265,15 @@ export class GeminiBridgeDO extends DurableObject {
       // Deliberate: /health was the obvious home for this and the wrong one.
       if (request.method === "POST") {
         let armed = false;
+        let body = null;
         try {
-          const body = await request.json();
+          body = await request.json();
           armed = body && body.armed === true;
         } catch (e) {
           armed = false;
+        }
+        if (body && typeof body.scope === "string" && body.scope.startsWith("notebook:")) {
+          this.targetNotebookScope = body.scope;
         }
         this.payloadCaptureArmed = armed;
         // Arming clears the buffer, so a new measurement never reads records
