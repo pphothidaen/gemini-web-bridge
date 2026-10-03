@@ -14,14 +14,36 @@
 > grounding verification is a property of the response.** Reading "ungrounded" as
 > "no chip" conflated the two sides of the wire.
 >
-> The 88-char field's stability across two conversations for the same notebook
-> still stands. Whether it differs for a *different* notebook remains untested.
+> The 88-char field's stability across two conversations for the Horo notebook
+> still stands. A capture from a second notebook showed a different, shorter
+> notebook-bearing field; because the field shape differs, it does not directly
+> compare the Horo token across notebooks. Stability across turns for the second
+> notebook also remains untested.
 
-**Verdict: VIABLE, with one dependency. All three captures taken. The notebook
-binding IS in the payload, at index `[0][3][0][2]` — an 88-character token that
-is stable across turns AND across conversations. A builder can reproduce it for
-a known notebook. What it cannot do is invent one: the token is observed, not
-derived.
+> ## Second-notebook capture — 2026-10-03
+>
+> A live `StreamGenerate` capture was taken from the existing
+> `claude-code-best-practice` notebook (56 sources), using the authenticated
+> Gemini UI. It did **not** contain the Horo notebook's 88-character field at
+> `[0][3][0][2]` (fingerprint `cff9779e`). Instead, the sanitized record marked
+> field `[19]` as a 46-character opaque string whose `contains.notebook_id`
+> check was `true`; its one-way fingerprint was `91296529`. Model/build were
+> `gemini-3.8-flash-lite` / `boq_gemini-web-uiserver_20261002.02_p0`.
+>
+> This establishes that the Horo 88-character token is not a universal
+> attachment shape: the second notebook emitted a different, shorter
+> notebook-bearing field. It does **not** establish that the 88-character value
+> varies per notebook, because no 88-character value appeared in this second
+> capture to compare. One sample per notebook also cannot establish stability
+> across turns for the second notebook. The capture relay was disarmed afterward.
+
+**Verdict: VIABLE for a known Horo notebook, with one dependency.** The Horo
+notebook binding is in the payload at `[0][3][0][2]` — an 88-character token
+stable across turns and conversations. A builder can reproduce it for that known
+notebook. A second notebook produced a different, shorter notebook-bearing field
+at `[19]`; the same 88-character token was absent, so cross-notebook stability
+of that token is not established. A builder cannot invent a binding for an
+unseen notebook: the value is observed, not derived.
 
 > All three captures taken; the third by operator-typing into a fresh
 > conversation. Producer build self-reported 4.7.33 on both stability turns.

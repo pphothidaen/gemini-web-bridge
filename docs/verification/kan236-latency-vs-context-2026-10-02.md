@@ -1,5 +1,106 @@
 # KAN-236: latency vs conversation-context length — measured 2026-10-02
 
+## Continuation 2026-10-03 — increasing-history fixed-output comparison
+
+Follow-up on the same authenticated Gemini UI, conversation, model
+(`gemini-3.8-flash-lite`), and build
+(`boq_gemini-web-uiserver_20261002.02_p0`). For each target turn, the prompt was
+identical and rendered to the same 16-character answer. I increased prior
+conversation history with neutral seed prompts. “Prior transcript chars” is the
+visible rendered transcript length before the target turn, used as a proxy; it
+is not the model's tokenized context length. Latency is from the captured
+`StreamGenerate` request time until the target response appeared settled.
+
+| prior visible transcript chars | target `f.req` field `[3]` chars | answer chars | latency (ms) |
+|---:|---:|---:|---:|
+| 0 | 2679 | 16 | 3683 |
+| 3048 | 2679 | 16 | 3612 |
+| 8143 | 2679 | 16 | 3194 |
+| 18297 | 2679 | 16 | 3226 |
+| 35397 | 1705 | 16 | 3098 |
+| 69924 | 1705 | 16 | 4612 |
+
+Across these six observations, latency ranged from 3.098 to 4.612 seconds and
+did not increase monotonically with visible history. The captured field `[3]`
+also did not track visible transcript size: it stayed at 2679 characters for
+the first four observations, then measured 1705 for the last two. Do not treat
+that field as a full context-length measure. The observations support only a
+preliminary finding; six samples from one conversation and rendered character
+counts cannot establish the causal effect of model context. Repeated paired
+measurements and an independently validated context-size measure are needed for
+a stronger conclusion.
+
+## Continuation 2026-10-04 — foreground, same-chat pair
+
+I repeated the fixed-output comparison in a visible Gemini tab, using the same
+conversation for both target turns. The UI model selector showed `Flash`. The
+first target had no prior rendered messages; then I sent a 10,400-character
+neutral seed prompt and repeated the exact target prompt. The transcript before
+the second target contained 10,672 rendered characters. Both target answers
+rendered to 16 characters.
+
+| prior visible transcript chars | answer chars | click-to-settled-response (ms) |
+|---:|---:|---:|
+| 0 | 16 | 3493 |
+| 10672 | 16 | 4677 |
+
+Chrome DevTools observed two `StreamGenerate` requests for the short-context
+target (request durations 2036 and 2410 ms) and one for the longer-context
+target (3106 ms). The request counts differ, so these network durations are not
+a clean one-to-one pair. The UI completion time increased by 1.18 seconds in
+this single pair. This is consistent with a possible increase but is not enough
+to establish one; the earlier six-point run was non-monotonic through 69,924
+rendered characters. The tab was visible for both sends, and payload capture
+was disarmed afterward. The context measure remains rendered transcript text,
+not model-token count.
+
+## Continuation 2026-10-03 — fixed-output attempt (inconclusive)
+
+I measured ten turns in one `/app` conversation through the authenticated Gemini
+UI. Each turn used the same 58-character prompt, `Output exactly 7. No
+punctuation, citation, or other text.` The rendered answer was the same 16
+JavaScript characters each time, so answer length was held constant. Model:
+`gemini-3.8-flash-lite`; self-reported build:
+`boq_gemini-web-uiserver_20261002.02_p0`.
+
+The relay was armed for each turn and disarmed immediately afterward. Completion
+was read from the new `model-response` after `aria-busy` cleared. For turns 6–10,
+I recorded the first 250 ms poll that saw a settled response, then confirmed the
+text stayed unchanged for one second. The table’s latency is completion
+observation minus `captures[].at`, so it is interval-censored by at most one poll
+interval. Turns 1–5 used an additional two-second stability wait and are shown
+separately because that wait adds a fixed delay.
+
+| turn | `f.req` field `[3]` length | answer chars | observed latency (ms) |
+|---:|---:|---:|---:|
+| 1 | 2672 | 16 | 5427* |
+| 2 | 2672 | 16 | 5449* |
+| 3 | 2680 | 16 | 6080* |
+| 4 | 2680 | 16 | 5446* |
+| 5 | 2680 | 16 | 4945* |
+| 6 | 2681 | 16 | 29753 |
+| 7 | 2681 | 16 | 24695 |
+| 8 | 2681 | 16 | 28723 |
+| 9 | 2681 | 16 | 26804 |
+| 10 | 2681 | 16 | 28845 |
+
+\* Turns 1–5 include the two-second stability wait and are upper estimates.
+
+The result is **inconclusive**. The captured context field changed by only nine
+characters across ten turns, while the measured latency shifted from roughly
+5–6 seconds in turns 1–5 to 25–30 seconds in turns 6–10. The browser tab was
+later brought to the foreground and verified visible/focused, but visibility was
+not recorded separately for each request. These captures do not establish that
+context length caused the latency change: the measured field did not vary enough,
+and service, model-side, or background-throttling conditions could explain the
+shift. The original question—whether latency scales with conversation context
+while answer length is held fixed—still needs a way to produce substantially
+different measured context sizes in the same controlled setup.
+
+No raw request body was written to the report; only sanitized structure lengths,
+timestamps, model/build, answer lengths, and grounding metadata were retained.
+The relay is disarmed.
+
 Method: 4 turns in one fresh `/app` conversation (`c_c3803f19a83c47c5`),
 prompts typed via Kapture, `StreamGenerate` requests captured with Kapture
 network monitoring. Context block = the opaque field at inner index `[3]`

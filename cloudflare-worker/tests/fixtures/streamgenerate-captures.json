@@ -153,9 +153,9 @@
     {
       "captureId": "app-chip-present-2026-10-02",
       "case": "chip-present (grounded, notebook attached)",
-      "capturedAt": "2026-10-02T08:57:00Z",
+      "capturedAt": "2026-10-02T09:04:12.503Z",
       "capturedBy": "PAYLOAD_CAPTURE relay, armed via authenticated POST /debug/payload-capture, read with curl",
-      "provenance": "extractBoundedStructure output verbatim from a live production capture. NOT hand-transcribed. Provenance RE-CONFIRMED in-session.",
+      "provenance": "extractBoundedStructure output from a live production capture. Structure recovered from the retained sanitized PAYLOAD_CAPTURE record with the type-aware serializer; lengths and classes were copied directly, not inferred.",
       "endpoint": "StreamGenerate",
       "transport": "xhr",
       "buildLabel": "boq_gemini-web-uiserver_20261001.01_p0",
@@ -164,7 +164,11 @@
       "fieldCount": 20,
       "structure": [
         [
-          "string",
+          {
+            "kind": "string",
+            "length": 484,
+            "cls": "opaque"
+          },
           "number",
           null,
           [
@@ -173,10 +177,22 @@
                 null,
                 "number",
                 "number",
-                "string"
+                {
+                  "kind": "string",
+                  "length": 0,
+                  "cls": "opaque"
+                }
               ],
-              "string",
-              "string"
+              {
+                "kind": "string",
+                "length": 4,
+                "cls": "opaque"
+              },
+              {
+                "kind": "string",
+                "length": 88,
+                "cls": "opaque"
+              }
             ]
           ],
           null,
@@ -184,11 +200,23 @@
           "number"
         ],
         [
-          "string"
+          {
+            "kind": "string",
+            "length": 2,
+            "cls": "opaque"
+          }
         ],
         null,
-        "string",
-        "string",
+        {
+          "kind": "string",
+          "length": 1855,
+          "cls": "opaque"
+        },
+        {
+          "kind": "string",
+          "length": 32,
+          "cls": "opaque"
+        },
         null,
         [
           "number"
@@ -218,7 +246,7 @@
       "capturedAt": "2026-10-02T11:12:00Z",
       "capturedBy": "PAYLOAD_CAPTURE relay via authenticated POST /debug/payload-capture; read with curl",
       "producerExtensionVersion": "4.7.32",
-      "provenance": "extractBoundedStructure output verbatim from a live production capture. Producer build self-reported via chrome.runtime.getManifest(), so the classifier version behind it is known rather than assumed.",
+      "provenance": "extractBoundedStructure output from a live production capture. Structure recovered from the retained sanitized PAYLOAD_CAPTURE record with the type-aware serializer; lengths and classes were copied directly, not inferred. Producer build self-reported via chrome.runtime.getManifest(), so the classifier version behind it is known rather than assumed.",
       "endpoint": "StreamGenerate",
       "transport": "xhr",
       "buildLabel": "boq_assistant-bard-web-server_20260929.03_p0",
@@ -227,7 +255,11 @@
       "fieldCount": 20,
       "structure": [
         [
-          "string",
+          {
+            "kind": "string",
+            "length": 489,
+            "cls": "opaque"
+          },
           "number",
           null,
           [
@@ -236,10 +268,22 @@
                 null,
                 "number",
                 "number",
-                "string"
+                {
+                  "kind": "string",
+                  "length": 0,
+                  "cls": "opaque"
+                }
               ],
-              "string",
-              "string"
+              {
+                "kind": "string",
+                "length": 4,
+                "cls": "opaque"
+              },
+              {
+                "kind": "string",
+                "length": 88,
+                "cls": "opaque"
+              }
             ]
           ],
           null,
@@ -247,11 +291,23 @@
           "number"
         ],
         [
-          "string"
+          {
+            "kind": "string",
+            "length": 2,
+            "cls": "opaque"
+          }
         ],
         null,
-        "string",
-        "string",
+        {
+          "kind": "string",
+          "length": 1725,
+          "cls": "opaque"
+        },
+        {
+          "kind": "string",
+          "length": 32,
+          "cls": "opaque"
+        },
         null,
         [
           "number"
@@ -281,7 +337,7 @@
       "capturedAt": "2026-10-02T11:12:00Z",
       "capturedBy": "PAYLOAD_CAPTURE relay via authenticated POST /debug/payload-capture; read with curl",
       "producerExtensionVersion": "4.7.32",
-      "provenance": "extractBoundedStructure output verbatim from a live production capture. Producer build self-reported via chrome.runtime.getManifest(), so the classifier version behind it is known rather than assumed.",
+      "provenance": "extractBoundedStructure output from a live production capture. Structure recovered from the retained sanitized PAYLOAD_CAPTURE record with the type-aware serializer; lengths and classes were copied directly, not inferred. Producer build self-reported via chrome.runtime.getManifest(), so the classifier version behind it is known rather than assumed.",
       "endpoint": "StreamGenerate",
       "transport": "xhr",
       "buildLabel": "boq_assistant-bard-web-server_20260929.03_p0",
@@ -290,7 +346,11 @@
       "fieldCount": 20,
       "structure": [
         [
-          "string",
+          {
+            "kind": "string",
+            "length": 487,
+            "cls": "opaque"
+          },
           "number",
           null,
           [
@@ -299,10 +359,22 @@
                 null,
                 "number",
                 "number",
-                "string"
+                {
+                  "kind": "string",
+                  "length": 0,
+                  "cls": "opaque"
+                }
               ],
-              "string",
-              "string"
+              {
+                "kind": "string",
+                "length": 4,
+                "cls": "opaque"
+              },
+              {
+                "kind": "string",
+                "length": 88,
+                "cls": "opaque"
+              }
             ]
           ],
           null,
@@ -310,11 +382,23 @@
           "number"
         ],
         [
-          "string"
+          {
+            "kind": "string",
+            "length": 2,
+            "cls": "opaque"
+          }
         ],
         null,
-        "string",
-        "string",
+        {
+          "kind": "string",
+          "length": 1853,
+          "cls": "opaque"
+        },
+        {
+          "kind": "string",
+          "length": 32,
+          "cls": "opaque"
+        },
         null,
         [
           "number"
@@ -344,7 +428,7 @@
       "capturedAt": "2026-10-02T11:20:00Z",
       "capturedBy": "operator-typed message via Kapture in a fresh /app conversation; PAYLOAD_CAPTURE relay, read with curl",
       "producerExtensionVersion": "4.7.32",
-      "provenance": "extractBoundedStructure output verbatim from live production. Producer build self-reported.",
+      "provenance": "extractBoundedStructure output from live production. Structure recovered from the retained sanitized PAYLOAD_CAPTURE record with the type-aware serializer; lengths and classes were copied directly, not inferred. Producer build self-reported.",
       "endpoint": "StreamGenerate",
       "transport": "xhr",
       "buildLabel": "boq_assistant-bard-web-server_20260929.03_p0",
@@ -352,7 +436,11 @@
       "fieldCount": 20,
       "structure": [
         [
-          "string",
+          {
+            "kind": "string",
+            "length": 35,
+            "cls": "opaque"
+          },
           "number",
           null,
           null,
@@ -361,11 +449,23 @@
           "number"
         ],
         [
-          "string"
+          {
+            "kind": "string",
+            "length": 2,
+            "cls": "opaque"
+          }
         ],
         null,
-        "string",
-        "string",
+        {
+          "kind": "string",
+          "length": 2155,
+          "cls": "opaque"
+        },
+        {
+          "kind": "string",
+          "length": 32,
+          "cls": "opaque"
+        },
         null,
         [
           "number"
@@ -476,7 +576,8 @@
       "the_mistake_that_did_this": "I retracted the claim after comparing against 09-29 sample B, which is labelled grounding_outcome 'ungrounded' and DOES carry the branch. I read 'ungrounded' as 'no chip attached'. It is not: sample B had the chip attached and the model simply answered without citing. Chip attachment and grounding verification are different facts on different sides of the wire - the request carries the chip, the response carries the citations.",
       "discriminator": "[0][3] presence tracks CHIP ATTACHMENT in the request, not whether the answer happened to cite the notebook. A response can be ungrounded with the branch present, which is exactly sample B.",
       "still_unconfirmed": "The 88-char field's fingerprint cff9779e is stable across two different conversations for the same notebook. Whether it changes for a DIFFERENT notebook has never been tested, so 'stable per notebook' remains an inference rather than a measurement.",
-      "known_data_loss": "The four 10-02 captures were written to this fixture through a serialiser that dropped length and cls, leaving bare 'string' markers. Field PRESENCE is recoverable from them and was used above; lengths were not, and the raw capture is the only source for those. The serialiser, not the capture, is at fault."
+      "known_data_loss": "Recovered 2026-10-03 from retained sanitized PAYLOAD_CAPTURE records. The one-off serializer checked node['kind'] for string descriptors, but the producer emits node['type']; its fallback therefore reduced each descriptor to the bare 'string' marker. The original sanitized sources retained length and cls, which were copied back without inference.",
+      "recovery_tool": "scripts/restore-streamgenerate-captures.py"
     }
   }
 }

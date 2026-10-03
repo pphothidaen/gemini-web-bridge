@@ -1,5 +1,17 @@
 # Next steps — pick-up plan for an AI agent
 
+> ## Status superseded — 2026-10-03
+>
+> The operational checklist below is historical and contains stale states.
+> Read `docs/HANDOVER-2026-10-02.md` → **Continuation status — 2026-10-03** for
+> current results: KAN-249 rotation verified, observability disabled, Jira
+> `coding` backfill complete for 38 live matches, four fixtures restored, and a
+> second-notebook capture taken. Latency data include a non-monotonic
+> 0–69,924-character run and one visible-tab pair that rose from 3.49 to 4.68 s
+> as rendered history increased from 0 to 10,672 characters. The pair had
+> mismatched StreamGenerate request counts, so repeated pairs and a direct
+> context-size measure are still needed. See the KAN-236 verification report.
+
 Written 2026-10-02 at `0ffbe3f`. Production **4.7.31**, `CONNECTED_AND_READY`,
 `consecutive_errors: 0`, suite **644 / 639 pass / 0 fail**. Payload capture is
 **disarmed**.
