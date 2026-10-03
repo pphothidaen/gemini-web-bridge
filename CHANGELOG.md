@@ -8,6 +8,30 @@ All notable changes to the Gemini Web-Bridge project.
 > anywhere. Production is `prod.gemini-web-bridge.workers.dev` and has been
 > since commit `fa97a5d` (KAN-157).
 
+## [4.7.34] - 2026-10-04
+
+### Added
+- **Timing telemetry for `executeThroughExtension` (KAN-182).** The Durable
+  Object's main Gemini execution path had no timing log at all — its
+  `startTime` was captured and never used. All vlog-gated now (visible with
+  `BRIDGE_VERBOSE=1`): a start line (message count + model), a took-line on
+  the success exit, and the same took-line plus the error message on every
+  error exit (extension disconnected, unhandled replay error, typed-path
+  failure, collection failure) via a single `failWith` helper, so no future
+  exit path can silently skip measurement. Only counts, model name and error
+  messages are logged — never prompt or response content.
+
+### Fixed
+- **`callGcpGemini` took-line printed its expressions literally.** The log
+  used `{endTime - startTime}` / `{messages.length}` (bare braces) inside a
+  template literal, so it emitted the text verbatim instead of the elapsed
+  time and could never match telemetry regexes. Fixed to `${...}`
+  interpolation and relabelled from the misleading "Gemini API request took"
+  to `[Bridge DO] callGcpGemini took`. Still vlog-gated.
+- Tests: `winansi-and-verbose-logging.test.mjs` now asserts the exact
+  `executeThroughExtension took` label with `${}` interpolation and that no
+  broken `{endTime - startTime}` pattern remains in `src/index.js`.
+
 ## [4.7.24] - 2026-10-01
 
 ### Fixed

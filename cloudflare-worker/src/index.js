@@ -32,7 +32,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.33";
+const WORKER_VERSION = "4.7.34";
 
 // KAN-236 Phase D: how many sanitized payload records to keep.
 //
@@ -1748,12 +1748,26 @@ export class GeminiBridgeDO extends DurableObject {
     const text = candidate?.content?.parts?.[0]?.text || "";
     this.recordHealthSuccess();
     const endTime = Date.now();
-    vlog(`[Bridge DO] Gemini API request took {endTime - startTime}ms for {messages.length} messages`);
+    // KAN-182: the old line used bare braces around endTime/messages.length
+    // inside a template literal, so it printed the expression verbatim instead
+    // of the elapsed time. Fixed interpolation, and relabelled so telemetry
+    // can tell this path apart from executeThroughExtension.
+    vlog(`[Bridge DO] callGcpGemini took ${endTime - startTime}ms for ${messages.length} messages`);
     return text;
   }
 
   async executeThroughExtension(messages, onChunk, model = "", opts = {}) {
     const startTime = Date.now();
+    // KAN-182: vlog-gated timing telemetry. Only counts and the model name go
+    // out — never prompt or response content.
+    vlog(`[Bridge DO] executeThroughExtension start for ${messages.length} messages, model=${model || "(default)"}`);
+    // KAN-182: failures must be measured too, or a path that starts timing out
+    // looks free in the logs. Every exit throw below goes through this, which
+    // logs the same took-line (plus the error message) before rethrowing.
+    const failWith = (err) => {
+      vlog(`[Bridge DO] executeThroughExtension took ${Date.now() - startTime}ms for ${messages.length} messages (error: ${err?.message || "unknown"})`);
+      throw err;
+    };
     // KAN-182: `requireGrounding` forces the typing path and skips replay.
     //
     // Replay is NOT a neutral fallback — it is architecturally incapable of
@@ -1798,7 +1812,7 @@ export class GeminiBridgeDO extends DurableObject {
     if (!this.isExtensionReady()) {
       const err = new Error("Extension not connected");
       err.code = "extension_disconnected";
-      throw err;
+      return failWith(err);
     }
 
     // One logical request keeps ONE requestId for its whole life, so a native
@@ -1836,7 +1850,7 @@ export class GeminiBridgeDO extends DurableObject {
     } catch (replayErr) {
       const forced = replayErr?.__typedOnly === true;
       const timedOut = /no response chunk|Timeout/i.test(replayErr?.message || "");
-      if (!forced && !timedOut) throw replayErr;
+      if (!forced && !timedOut) return failWith(replayErr);
 
       const prompt = messages?.[0]?.content || "";
       vlog(forced
@@ -1848,11 +1862,11 @@ export class GeminiBridgeDO extends DurableObject {
       });
       if (!typed.ok) {
         this.recordHealthError(`type_prompt_failed:${typed.reason}@${typed.step}`);
-        throw new Error(
+        return failWith(new Error(
           `${forced ? "Grounding requires the typed path" : "Replay produced no response chunk"} and the typed path failed ` +
           `(step=${typed.step || "unknown"}, reason=${typed.reason || "unknown"}). ` +
           `The Gemini tab must be in the foreground for a typed prompt to be submitted.`
-        );
+        ));
       }
       // The page now renders the answer itself; read it back from the DOM via
       // the native path, which is already proven to work.
@@ -1871,13 +1885,13 @@ export class GeminiBridgeDO extends DurableObject {
       });
       if (!collected.ok) {
         this.recordHealthError(`collect_answer_failed:${collected.reason}`);
-        throw new Error(
+        return failWith(new Error(
           `The prompt was submitted but no new answer was rendered for it ` +
           `(reason=${collected.reason || "unknown"}, responses on screen=${collected.responses}). ` +
           `This means Gemini never produced a reply to THIS question — the text already on ` +
           `screen belongs to an earlier turn and is deliberately not reused. ` +
           `Check the Gemini tab is still open and in the foreground.`
-        );
+        ));
       }
       text = collected.text;
       // KAN-233: no success writer here on purpose. The single exit below —
@@ -1947,6 +1961,9 @@ export class GeminiBridgeDO extends DurableObject {
       // STREAM_DONE. Re-recording costs a timestamp and nothing else.
       this.recordHealthSuccess();
     }
+    // KAN-182: single success exit — the took-line mirrors the one failWith
+    // emits on error paths, so both outcomes are measured against startTime.
+    vlog(`[Bridge DO] executeThroughExtension took ${Date.now() - startTime}ms for ${messages.length} messages`);
     return text;
   }
 

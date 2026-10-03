@@ -83,3 +83,34 @@ test('verbose logging reads env, not a bare global', () => {
     'the flag must be set from the Durable Object env');
   assert.match(SOURCE, /function vlog\(\.\.\.args\) \{\s*if \(VERBOSE_FLAG\)/);
 });
+
+// KAN-182: executeThroughExtension had no timing telemetry, and the one
+// "took ...ms" log that did exist (in callGcpGemini) used literal braces
+// inside a template literal, so it printed `{endTime - startTime}` verbatim
+// and could never match a telemetry regex. These tests pin the fixed labels
+// with real interpolation so neither defect can silently return.
+test('executeThroughExtension logs the telemetry took-line with real interpolation', () => {
+  // Success path: exact label, elapsed time and message count interpolated.
+  assert.match(SOURCE,
+    /vlog\(`\[Bridge DO\] executeThroughExtension took \$\{Date\.now\(\) - startTime\}ms for \$\{messages\.length\} messages`\)/,
+    'the success took-line must use ${} interpolation and the exact telemetry label');
+  // Error paths: the same took-line, plus the error message, before rethrow.
+  assert.match(SOURCE,
+    /vlog\(`\[Bridge DO\] executeThroughExtension took \$\{Date\.now\(\) - startTime\}ms for \$\{messages\.length\} messages \(error: \$\{err\?\.message \|\| "unknown"\}\)`/,
+    'the error took-line must measure failures too and carry the error message');
+  // Start line so a hung call is distinguishable from one that never began.
+  assert.match(SOURCE,
+    /vlog\(`\[Bridge DO\] executeThroughExtension start for \$\{messages\.length\} messages, model=/,
+    'the start line must also be interpolated');
+});
+
+test('no broken literal-brace telemetry patterns remain in src/index.js', () => {
+  // The original defect: `{endTime - startTime}` inside a template literal is
+  // printed literally — the expression is never evaluated. The lookbehind
+  // excludes the CORRECT `${endTime - startTime}` form, which contains the
+  // same brace pair as a substring.
+  assert.doesNotMatch(SOURCE, /(?<!\$)\{endTime - startTime\}/,
+    'a bare {endTime - startTime} prints verbatim; it must be ${endTime - startTime}');
+  assert.doesNotMatch(SOURCE, /took (?<!\$)\{[a-zA-Z]/,
+    'no took-line may interpolate via bare {expr} braces');
+});
