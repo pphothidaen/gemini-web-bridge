@@ -160,3 +160,31 @@ test('KAN-182: source contract — success exit and failWith both record, cap is
   assert.match(WORKER_SOURCE, /const TELEMETRY_BUFFER_MAX = 50;/,
     'the cap must be a named constant');
 });
+
+test('KAN-182: source contract — both early extension-disconnect fail-fast sites record preflight telemetry', () => {
+  // The chat-completions handler and the horo_consult fail-closed branch both
+  // return/throw "extension not connected" BEFORE executeThroughExtension or
+  // callGcpGemini ever runs, so without a preflight record /debug/telemetry
+  // stays empty exactly when the caller most needs to see the disconnect
+  // (verified live 2026-10-04). Source-regex assertions pin both sites.
+  const chatSite = WORKER_SOURCE.match(
+    /this\.recordTelemetry\(\{ kind: "preflight", outcome: "error", error: "extension disconnected", messages: body\.messages\.length \}\);[\s\S]{0,800}?code: "extension_disconnected"/
+  );
+  assert.ok(chatSite,
+    'the chat-completions 503 must be preceded by a preflight recordTelemetry call');
+
+  const horoSite = WORKER_SOURCE.match(
+    /this\.recordTelemetry\(\{ kind: "preflight", outcome: "error", error: "extension disconnected" \}\);[\s\S]{0,300}?Chrome Extension is not connected/
+  );
+  assert.ok(horoSite,
+    'the horo_consult fail-closed error must be preceded by a preflight recordTelemetry call');
+
+  // No preflight record may carry prompt or response content — the chat site
+  // carries only a message COUNT and the horo site carries no payload field.
+  const preflightCalls = WORKER_SOURCE.match(/this\.recordTelemetry\(\{ kind: "preflight"[^)]*\}\)/g) || [];
+  assert.equal(preflightCalls.length, 2,
+    'exactly two preflight record sites (chat-completions + horo_consult)');
+  for (const call of preflightCalls) {
+    assert.ok(!call.includes('content'), 'preflight telemetry must not log content');
+  }
+});

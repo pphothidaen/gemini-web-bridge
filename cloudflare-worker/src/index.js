@@ -3075,6 +3075,10 @@ export class GeminiBridgeDO extends DurableObject {
             console.error("[Bridge DO] GCP fallback error:", gcpErr);
           }
         }
+        // KAN-182: record the preflight disconnect before failing fast, so
+        // /debug/telemetry shows disconnects even when the call never reaches
+        // executeThroughExtension or callGcpGemini. No prompt/response content.
+        this.recordTelemetry({ kind: "preflight", outcome: "error", error: "extension disconnected", messages: body.messages.length });
         return new Response(JSON.stringify({
           error: {
             message: "Gemini Web-Bridge: Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session and the extension is loaded.",
@@ -3962,6 +3966,11 @@ export class GeminiBridgeDO extends DurableObject {
                 }
               }
 
+              // KAN-182: record the preflight disconnect before the fail-closed
+              // error, so /debug/telemetry shows disconnects even when the call
+              // never reaches executeThroughExtension or callGcpGemini. No
+              // prompt/response content.
+              this.recordTelemetry({ kind: "preflight", outcome: "error", error: "extension disconnected" });
               const res = {
                 jsonrpc: "2.0",
                 id,
