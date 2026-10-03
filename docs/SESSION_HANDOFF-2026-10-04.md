@@ -4,10 +4,10 @@
 
 - Repository: `/Users/kimlenglim/Project/gemini-web-bridge`
 - Branch: `main`
-- Deployed commit: `ee3a6094c6c22517f1e2eb23e26aaed3b06d1e0f` (`KAN-236: restore capture metadata and update handover`), pushed to `origin/main`.
-- GitHub CI passed: [run 37141407623](https://github.com/pphothidaen/gemini-web-bridge/actions/runs/37141407623).
-- Production CD passed, including secret sync, deploy, and verification: [run 37141407583](https://github.com/pphothidaen/gemini-web-bridge/actions/runs/37141407583).
-- Live Worker health: HTTP 200, version `4.7.33`, `CONNECTED_AND_READY`, zero consecutive errors.
+- Deployed commit: `6f269586fe5471d87f547169bc323ec9f18e9573` (`KAN-236: resolve notebook id for in-place attach, pin payload shape contract, modernize HANDOFF`), pushed to `origin/main`.
+- GitHub CI passed: [run 37143829394](https://github.com/pphothidaen/gemini-web-bridge/actions/runs/37143829394).
+- Production CD passed (deployment gate approved, secrets synced, deployed, verified): [run 37143829242](https://github.com/pphothidaen/gemini-web-bridge/actions/runs/37143829242).
+- Live Worker health: HTTP 200, version `4.7.33`, `CONNECTED_AND_READY`, zero consecutive errors, live generation tested and verified.
 - Test Suite: **659 tests (649 pass, 0 fail, 10 skipped)** — 100% green suite.
 - Production observability is disabled in `cloudflare-worker/wrangler.toml`.
 
