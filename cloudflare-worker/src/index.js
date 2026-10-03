@@ -47,6 +47,17 @@ const WORKER_VERSION = "4.7.34";
 // the cap is that this is not a history.
 const PAYLOAD_CAPTURE_MAX = 12;
 
+// KAN-182: cap for the DO telemetry ring buffer. This is a diagnostic window on
+// the most recent executeThroughExtension / callGcpGemini outcomes, not a
+// history — `wrangler tail` does not surface DO console output on this worker
+// (verified 2026-10-04: a top-level Worker diag log appears in tail, a DO diag
+// log does not, though every request routes through the DO), and `observability`
+// stays disabled per KAN-236 (Workers Logs shares the CPU budget with the DO).
+// 50 entries of `{ts, kind, durationMs, messages, outcome, error}` is enough to
+// read a failure pattern off /debug/telemetry without ever holding prompt or
+// response content.
+const TELEMETRY_BUFFER_MAX = 50;
+
 // ─── API version routing ─────────────────────────────────────────────────
 //
 // `/v1` is frozen. Clients depend on its response shapes, so a change that
@@ -317,6 +328,12 @@ export class GeminiBridgeDO extends DurableObject {
     // world-readable endpoint just because it is the convenient one.
     this.payloadCaptureArmed = false;
     this.payloadCaptures = [];
+    // KAN-182: ring buffer of recent executeThroughExtension / callGcpGemini
+    // outcomes. This is the durable telemetry channel that replaces the diag
+    // console.log: `wrangler tail` cannot see DO logs here, so the only way to
+    // read a timing/failure pattern back is an endpoint. Metadata only — never
+    // prompt or response content. Newest last; /debug/telemetry reverses.
+    this.telemetryBuffer = [];
     // The attached notebook's id, learned when a scope switch succeeds. Held
     // only to hand the page-side descriptor something to compare against.
     this.currentNotebookId = null;
@@ -1696,64 +1713,85 @@ export class GeminiBridgeDO extends DurableObject {
     });
   }
 
+  // KAN-182: append one telemetry record to the ring buffer, dropping the
+  // oldest once the cap is reached. Callers pass metadata only (kind, timing,
+  // counts, outcome, error message); nothing here ever sees prompt or response
+  // content, and an entry that did carry such content would have to be put
+  // there deliberately.
+  recordTelemetry(entry) {
+    this.telemetryBuffer.push({ ts: Date.now(), ...entry });
+    while (this.telemetryBuffer.length > TELEMETRY_BUFFER_MAX) {
+      this.telemetryBuffer.shift();
+    }
+  }
+
   async callGcpGemini(messages, model = "gemini-1.5-flash") {
     const startTime = Date.now();
-    const apiKey = this.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      const err = new Error("GCP Gemini API key not configured");
-      err.code = "gcp_not_configured";
+    // KAN-182: one try/catch around the whole attempt so every exit — missing
+    // key, HTTP error, network throw — records the same telemetry shape as the
+    // success path. Error message only, never the request or response body.
+    try {
+      const apiKey = this.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        const err = new Error("GCP Gemini API key not configured");
+        err.code = "gcp_not_configured";
+        throw err;
+      }
+
+      const contents = [];
+      let systemInstruction = null;
+
+      for (const m of messages) {
+        if (!m) continue;
+        if (m.role === "system") {
+          systemInstruction = { parts: [{ text: String(m.content || "") }] };
+        } else if (m.role === "user") {
+          contents.push({ role: "user", parts: [{ text: String(m.content || "") }] });
+        } else if (m.role === "assistant") {
+          contents.push({ role: "model", parts: [{ text: String(m.content || "") }] });
+        }
+      }
+
+      if (!contents.length) {
+        contents.push({ role: "user", parts: [{ text: "Hello" }] });
+      }
+
+      const targetModel = (model && model.includes("pro")) ? "gemini-1.5-pro" : "gemini-1.5-flash";
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+      const body = {
+        contents,
+        ...(systemInstruction ? { systemInstruction } : {})
+      };
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        this.recordHealthError(`GCP Error: ${res.status}`);
+        throw new Error(`GCP Gemini API error (${res.status}): ${errText}`);
+      }
+
+      const data = await res.json();
+      const candidate = data.candidates?.[0];
+      const text = candidate?.content?.parts?.[0]?.text || "";
+      this.recordHealthSuccess();
+      const endTime = Date.now();
+      // KAN-182: the old line used bare braces around endTime/messages.length
+      // inside a template literal, so it printed the expression verbatim instead
+      // of the elapsed time. Fixed interpolation, and relabelled so telemetry
+      // can tell this path apart from executeThroughExtension.
+      vlog(`[Bridge DO] callGcpGemini took ${endTime - startTime}ms for ${messages.length} messages`);
+      this.recordTelemetry({ kind: "callGcpGemini", durationMs: Date.now() - startTime, messages: messages.length, outcome: "ok" });
+      return text;
+    } catch (err) {
+      this.recordTelemetry({ kind: "callGcpGemini", durationMs: Date.now() - startTime, messages: messages.length, outcome: "error", error: err?.message || "unknown" });
       throw err;
     }
-
-    const contents = [];
-    let systemInstruction = null;
-
-    for (const m of messages) {
-      if (!m) continue;
-      if (m.role === "system") {
-        systemInstruction = { parts: [{ text: String(m.content || "") }] };
-      } else if (m.role === "user") {
-        contents.push({ role: "user", parts: [{ text: String(m.content || "") }] });
-      } else if (m.role === "assistant") {
-        contents.push({ role: "model", parts: [{ text: String(m.content || "") }] });
-      }
-    }
-
-    if (!contents.length) {
-      contents.push({ role: "user", parts: [{ text: "Hello" }] });
-    }
-
-    const targetModel = (model && model.includes("pro")) ? "gemini-1.5-pro" : "gemini-1.5-flash";
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-    const body = {
-      contents,
-      ...(systemInstruction ? { systemInstruction } : {})
-    };
-
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      this.recordHealthError(`GCP Error: ${res.status}`);
-      throw new Error(`GCP Gemini API error (${res.status}): ${errText}`);
-    }
-
-    const data = await res.json();
-    const candidate = data.candidates?.[0];
-    const text = candidate?.content?.parts?.[0]?.text || "";
-    this.recordHealthSuccess();
-    const endTime = Date.now();
-    // KAN-182: the old line used bare braces around endTime/messages.length
-    // inside a template literal, so it printed the expression verbatim instead
-    // of the elapsed time. Fixed interpolation, and relabelled so telemetry
-    // can tell this path apart from executeThroughExtension.
-    vlog(`[Bridge DO] callGcpGemini took ${endTime - startTime}ms for ${messages.length} messages`);
-    return text;
   }
 
   async executeThroughExtension(messages, onChunk, model = "", opts = {}) {
@@ -1766,6 +1804,8 @@ export class GeminiBridgeDO extends DurableObject {
     // logs the same took-line (plus the error message) before rethrowing.
     const failWith = (err) => {
       vlog(`[Bridge DO] executeThroughExtension took ${Date.now() - startTime}ms for ${messages.length} messages (error: ${err?.message || "unknown"})`);
+      // KAN-182: the ring buffer is the telemetry channel tail cannot see.
+      this.recordTelemetry({ kind: "executeThroughExtension", durationMs: Date.now() - startTime, messages: messages.length, outcome: "error", error: err?.message || "unknown" });
       throw err;
     };
     // KAN-182: `requireGrounding` forces the typing path and skips replay.
@@ -1964,6 +2004,7 @@ export class GeminiBridgeDO extends DurableObject {
     // KAN-182: single success exit — the took-line mirrors the one failWith
     // emits on error paths, so both outcomes are measured against startTime.
     vlog(`[Bridge DO] executeThroughExtension took ${Date.now() - startTime}ms for ${messages.length} messages`);
+    this.recordTelemetry({ kind: "executeThroughExtension", durationMs: Date.now() - startTime, messages: messages.length, outcome: "ok" });
     return text;
   }
 
@@ -4329,6 +4370,28 @@ export class GeminiBridgeDO extends DurableObject {
         count: this.payloadCaptures.length,
         captures: this.payloadCaptures
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // ─── KAN-182: DO Telemetry Ring Buffer (GET /debug/telemetry) ───
+    // Authenticated by the same generic gate as /debug/payload-capture: this
+    // path is not in `publicPaths`, so an unauthenticated request is rejected
+    // with 401 before reaching here. GET returns the newest entries first;
+    // DELETE clears the buffer (same auth, non-destructive beyond in-memory
+    // diagnostics). Entries are metadata only — timing, message counts,
+    // outcome, error message — never prompt or response content.
+    if (url.pathname === "/debug/telemetry") {
+      if (request.method === "DELETE") {
+        this.telemetryBuffer = [];
+        return new Response(JSON.stringify({ ok: true, cleared: true, count: 0, entries: [] }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" }
+        });
+      }
+      if (request.method === "GET") {
+        const entries = [...this.telemetryBuffer].reverse();
+        return new Response(JSON.stringify({ ok: true, count: entries.length, entries }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" }
+        });
+      }
     }
 
     if (url.pathname === "/" || url.pathname === "/health") {
