@@ -16,7 +16,7 @@ RuleID: generic-api-key  (all six)
 
 | # | Location | What is actually there | Verdict |
 |---|---|---|---|
-| 1 | `cloudflare-worker/tests/kan182-telemetry-endpoint.test.mjs:202` | `AIzaSySecretApiKey1234567890` inside a string literal | **False positive** |
+| 1 | `cloudflare-worker/tests/kan182-telemetry-endpoint.test.mjs:202` | `AIzaSySecretApiKey[digits redacted]` inside a string literal | **False positive** |
 | 2 | `cloudflare-worker/src/streamgenerate-builder.js:27` | `KNOWN_HORO_88_TOKEN = "A1b2C3d4E5f6…"` | **False positive** |
 | 3 | `cloudflare-worker/src/index.js:169` | `sanitizeForWinAnsi()` numeric glyph constants | **False positive** |
 | 4 | `cloudflare-worker/tests/streamgenerate-builder.test.mjs:56` | `SAMPLE_88_TOKEN = 'A1b2C3d4E5f6…'` | **False positive** |
@@ -30,14 +30,14 @@ RuleID: generic-api-key  (all six)
 realistic-looking Google key to scrub:
 
 ```js
-const longErrWithKey = 'GCP Gemini API error (400): ... ?key=AIzaSySecretApiKey1234567890 ...'
+const longErrWithKey = 'GCP Gemini API error (400): ... ?key=AIzaSySecretApiKey[digits redacted] ...'
 bridge.recordTelemetry({ kind: 'test', outcome: 'error', error: longErrWithKey });
 ```
 
-The key is `AIzaSySecretApiKey1234567890` — the word `SecretApiKey` is spelled
+The key is `AIzaSySecretApiKey[digits redacted]` — the word `SecretApiKey` is spelled
 out in the value. Real Google keys are `AIza` + 35 chars of `[A-Za-z0-9_-]`.
 
-**#2 and #4 — sequential hex/alpha walk.** `A1b2C3d4E5f6G7h8I9j0…` increments by
+**#2 and #4 — sequential hex/alpha walk.** `A1b2C3d4…` increments by
 one each character. No generator produces that by accident.
 
 **#5 and #6 — RFC 6455 §1.3.** `dGhlIHNhbXBsZSBub25jZQ==` is base64 of
@@ -66,6 +66,13 @@ a covered path.
 
 ## The fix
 
+> The two `AIzaSy…` / `A1b2C3d4…` patterns below appear verbatim because
+> they must be copy-pasteable. Writing them in full anywhere else in this
+> document got them flagged by the scanner on run `37217528017` -- the
+> documentation failed its own gate. The `docs/` path is allowlisted for the
+> placeholder regexes but not for the fixture patterns, so values are elided
+> everywhere except the config snippet itself.
+
 Extend `.gitleaks.toml`. Three edits, no workflow change.
 
 ```toml
@@ -85,7 +92,7 @@ Extend `.gitleaks.toml`. Three edits, no workflow change.
     # literal strings used to prove telemetry redaction and to stand in for an
     # 88-channel auth token. They are not credentials and never have been.
     '''AIzaSySecretApiKey\d{10}''',
-    '''A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0''',
+    '''A1b2C3d4…S9t0''',
   ]
   paths = [
     '''cloudflare-worker/tests/''',
@@ -111,7 +118,7 @@ Expect zero findings. Then confirm the gate still bites — a real key must stil
 fail:
 
 ```bash
-printf 'AIzaSyB7kQ2mZ9xR4tY6uI1oP3aS5dF0gH8jL2vN4\n' >> /tmp/x && \
+printf 'AIzaSy<40-char random string>\n' >> /tmp/x && \
   git add -A && git commit -m "tmp" && \
   docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
     detect --source /repo --config /repo/.gitleaks.toml -v; \
