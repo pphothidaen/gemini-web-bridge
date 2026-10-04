@@ -59,7 +59,7 @@ HTTP-level: `401` key ไม่ถูก, `429` คิวเต็ม, `503` ext
 
 ## 4. Tool `horo_consult` — Input Schema
 
-อ้างอิง `index.js:3042-3064`:
+อ้างอิง `index.js` tools/list (schema สร้างจาก `HORO_STAGE_IDS` ใน `src/horo-prompts.js`):
 
 ```json
 {
@@ -68,6 +68,8 @@ HTTP-level: `401` key ไม่ถูก, `429` คิวเต็ม, `503` ext
     "type": "object",
     "properties": {
       "query": { "type": "string" },
+      "stage": { "type": "string", "enum": ["birth-chart", "base-fortune", "turning-points", "forecast", "additional-insights", "full"] },
+      "name": { "type": "string" },
       "birth_context": {
         "type": "object",
         "properties": {
@@ -76,32 +78,70 @@ HTTP-level: `401` key ไม่ถูก, `429` คิวเต็ม, `503` ext
           "utc_offset_hours": { "type": "number" },
           "day_master":       { "type": "string" },
           "five_elements":    { "type": "string" },
-          "favorable_elements": { "type": "string" }
+          "favorable_elements": { "type": "string" },
+          "birth_place":      { "type": "string" },
+          "name":             { "type": "string" }
         }
       },
+      "from_year": { "type": "number" },
+      "to_year": { "type": "number" },
+      "reading_id": { "type": "string" },
+      "resume_reading": { "type": "boolean", "default": false },
+      "title": { "type": "string" },
       "response_format": { "type": "string", "enum": ["text", "pdf"], "default": "text" },
       "scope": { "type": "string" }
-    },
-    "required": ["query"]
+    }
   }
 }
 ```
 
 | Field | บังคับ | คำอธิบาย |
 | :--- | :--- | :--- |
-| `query` | ✅ | คำถามโหราศาสตร์ ตอบเป็นภาษาเดียวกับที่ถาม (worker ใส่ language directive ให้เอง) ต้องเป็น string ที่ไม่ว่าง |
-| `birth_context` | — | บริบทดวงชะตา **จากเอนจิน deterministic ของ backend** — field ไหนว่าง/undefined จะถูกตัดออกจาก prompt ไม่ serialize เป็น `null` |
+| `query` | ✅ (โหมดอิสระ) | คำถามโหราศาสตร์ ตอบเป็นภาษาเดียวกับที่ถาม (worker ใส่ language directive ให้เอง) ต้องเป็น string ที่ไม่ว่าง — ใน stage mode ใช้เป็นข้อความเพิ่มเติมจากผู้ถาม (optional) |
+| `stage` | — | **โหมด atomic stage (KAN-204)** — ดู §4.1; ไม่ส่ง = โหมดอิสระหนึ่งรอบ (legacy) |
+| `name` | — | ชื่อผู้ถูกดวง (stage mode; default `ผู้ถาม`) |
+| `birth_context` | ✅ (stage mode) | บริบทดวงชะตา **จากเอนจิน deterministic ของ backend** (G-4) — field ไหนว่าง/undefined จะถูกตัดออกจาก prompt ไม่ serialize เป็น `null` |
+| `from_year` / `to_year` | — | ช่วงปีของ stage `forecast` (default: ปีปัจจุบัน ถึง +4) |
+| `reading_id` | — | รหัสการอ่าน — default คือ SHA-256 hash ของ `name + birth_context` |
+| `resume_reading` | — | `true` = รันเฉพาะ stage ที่ยังไม่ grounded ของ reading เดิม |
+| `title` | — | ชื่อเอกสารของ `stage="full"` — ต้องตรงกับผู้ถูกดวง ห้ามคัดลอกชื่อตัวอย่าง |
 | `response_format` | — | `text` (default) หรือ `pdf` |
 | `scope` | — | **ห้ามส่งถ้าต้องการ notebook grounding** — ดูตาราง §2 |
 
+### 4.1 Stage mode (atomic pipeline)
+
+หลักฐานและเหตุผลของการแบ่ง atomic อยู่ใน `prompts/README.md`: คำถามแคบ grounded
+ด้วย 5 citations, คำถามกว้าง (เอกสารทั้งเล่มในรอบเดียว) grounded 0 และถูก
+fail-closed ปฏิเสธ — stage mode เลือกคำถามแคบตั้งแต่ต้น
+
+- `stage` = หนึ่งใน 5 stage → รัน stage เดียว: attach notebook 1 ครั้ง, typed
+  path, verify grounding, คืน `structuredContent.reading_id` + สถานะ stage
+- `stage = "full"` → รันครบ 5 stage ต่อกัน (notebook ถูกใช้ต่อข้อความ จึง
+  attach ใหม่ทุก stage), verify grounding ราย stage, บันทึกผลลง DO storage
+  หลังทุก stage, ประกอบเอกสารใต้ `title` เดียว; stage ไหนไม่ผ่านจะ retry 1
+  ครั้งใน conversation ใหม่ แล้วรายงาน FAILED ต่อ section — ความล้มเหลวบางส่วน
+  ไม่พาส่วนที่ grounded ไปด้วย
+- `resume_reading: true` + `reading_id` เดิม → ข้าม stage ที่ grounded แล้ว
+  รันเฉพาะที่ failed; `reading_id` ที่ถูกผูกกับ `birth_context` อื่นจะถูก
+  ปฏิเสธด้วย -32602
+- G-1 ยังใช้เต็มรูปแบบ: pipeline ไม่มี GCP fallback ทุก branch
+
 ## 5. Prompt Composition (สิ่งที่ worker ส่งจริงไป Gemini)
 
-อ้างอิง `prompt-templates.js:136-152` — worker ประกอบ prompt เอง ผู้เรียกควบคุมไม่ได้ (และไม่จำเป็นต้องควบคุม):
+โหมดอิสระ (ไม่ส่ง `stage`) — อ้างอิง `prompt-templates.js` — worker ประกอบ prompt เอง ผู้เรียกควบคุมไม่ได้ (และไม่จำเป็นต้องควบคุม):
 
 1. Persona: "Act as ซินแส AI ผู้เชี่ยวชาญโหราศาสตร์จีน (BaZi), numerology และดาราศาสตร์ไทย ตอบโดยอ้างอิงความรู้ใน Notebook ที่ผูกไว้เป็นหลัก"
 2. บรรทัด birth context: `นี่คือข้อมูลดวงชะตาของฉัน: <k>: <v>, ...` (หรือ "ฉันยังไม่ได้ให้ข้อมูลวันเกิดมาเลย" ถ้าไม่ส่ง)
 3. คำถาม: `คำถามของฉันคือ: <query>`
 4. Output directive: โครงสร้างชัดเจน, **ตอบเป็นภาษาเดียวกับคำถาม**, ระบุขีดจำกัดของการอ่าน
+
+Stage mode — prompt เป็น template ที่ **generate จาก `prompts/0*.md`** ด้วย
+`scripts/sync-horo-prompts.mjs` ไปที่ `src/horo-prompts.js` (ห้ามแก้
+generated file ตรง ๆ): placeholder `{{NAME}} {{BIRTH_DATE}} {{BIRTH_TIME}}
+{{BIRTH_PLACE}} {{LONGITUDE}} {{BIRTH_CONTEXT}}` (และ `{{FROM_YEAR}}
+{{TO_YEAR}}` สำหรับ stage forecast) interpolate จาก arguments; template ทุก
+stage ต้องมี guardrail ครบ (method-only opener / honesty clause / citation
+clause / Thai clause) และถูก assert ตอน build
 
 ## 6. Response Contract (success)
 
@@ -202,7 +242,7 @@ args = {
 
 - **ห้ามส่ง `scope`** ใน adapter ของ path นี้ (§2) — scope hygiene จริง ๆ คือ "ไม่ส่ง" ไม่ใช่ "ส่งทุกครั้ง"
 - **Discipline gate (fail-closed):** notebook ครอบคลุมแค่ BaZi / เลขศาสตร์ / โหราศาสตร์ไทย — discipline อื่น (ziwei, qimen, iching ฯลฯ) router ต้องปฏิเสธและ route กลับ node prompts/debate เดิม ห้าม fallback เงียบ ๆ
-- **Domain firewall รวมลง `query`:** `horo_consult` ไม่มีช่อง system prompt — ข้อจำกัดศาสตร์ + ห้ามคำนวณเอง ต้อง prepend ใน `query` (ดึงจาก `question_focus_router.build_focused_prompt()`)
+- **Domain firewall รวมลง `query`:** `horo_consult` ไม่มีช่อง system prompt — ข้อจำกัดศาสตร์ + ห้ามคำนวณเอง ต้อง prepend ใน `query` จากฝั่ง caller (router ที่วางแผนไว้เดิมไม่มีใน worker — คำถามแคบที่เคยวางให้ router จัด ทำได้ตรง ๆ ผ่าน `stage` แล้ว ดู §4.1)
 
 ### 9.3 Response mapping → gateway schema
 

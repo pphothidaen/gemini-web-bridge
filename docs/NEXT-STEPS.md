@@ -32,8 +32,10 @@ and a few will produce a confident wrong answer if you do not know them first.
 ## HANDOVER — what is actually left
 
 Production **4.7.33**, `CONNECTED_AND_READY`, `consecutive_errors: 0`, suite
-**650 / 645 pass / 0 fail**. Repo synced with `origin/main`. `prompts/` stays
-deliberately untracked. **Payload capture is currently ARMED — disarm it before
+**650 / 645 pass / 0 fail**. Repo synced with `origin/main`. `prompts/` is
+tracked since KAN-204 and is now the source of truth the runtime stage prompts
+are generated from (`scripts/sync-horo-prompts.mjs`). **Payload capture is
+currently ARMED — disarm it before
 handing over** (`POST /debug/payload-capture {"armed":false}`); an armed capture
 is the exact risk the flag exists to prevent, and it is a live authenticated
 endpoint.
@@ -271,7 +273,8 @@ coding.
   the earlier "zero match" was measured on an empty editor where no send control
   exists at all.
 - `DISCONNECTED` immediately after a deploy is expected — reload the Gemini tab.
-- The untracked `prompts/` directory is deliberate; leave it untracked.
+- `prompts/` was untracked early on; since KAN-204 it is tracked and is the
+  source the worker's atomic stage prompts are generated from.
 
 ## 5. House rules that will fail your commit otherwise
 
