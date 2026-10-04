@@ -188,3 +188,23 @@ test('KAN-182: source contract — both early extension-disconnect fail-fast sit
     assert.ok(!call.includes('content'), 'preflight telemetry must not log content');
   }
 });
+
+test('KAN-182: DELETE /debug/telemetry without credentials must be 401', async () => {
+  const worker = createMockWorker();
+  const del = await worker.fetch('/debug/telemetry', { method: 'DELETE' });
+  assert.equal(del.status, 401);
+});
+
+test('KAN-182: recordTelemetry sanitizes error messages: redacts key= and truncates to 200 chars', () => {
+  const worker = createMockWorker();
+  const { bridge } = worker;
+
+  const longErrWithKey = 'GCP Gemini API error (400): Request failed at https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSySecretApiKey1234567890 with error details: ' + 'x'.repeat(250);
+  bridge.recordTelemetry({ kind: 'test', outcome: 'error', error: longErrWithKey });
+
+  assert.equal(bridge.telemetryBuffer.length, 1);
+  const recorded = bridge.telemetryBuffer[0];
+  assert.ok(!recorded.error.includes('AIzaSySecretApiKey1234567890'), 'API key must be redacted');
+  assert.ok(recorded.error.includes('key=[REDACTED]'), 'key query param must be replaced with [REDACTED]');
+  assert.ok(recorded.error.length <= 200, `error length must be <= 200, got ${recorded.error.length}`);
+});

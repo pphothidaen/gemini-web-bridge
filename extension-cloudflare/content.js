@@ -709,6 +709,11 @@
         handlePayloadCaptureArm(msg);
         break;
 
+      // KAN-242: probe DOM response count and conversation state for context rotation
+      case "CONVERSATION_STATS":
+        if (isLeaderTab) handleConversationStats(msg);
+        break;
+
       case "PING":
         sendToWorker({ type: "PONG" });
         break;
@@ -1777,6 +1782,36 @@
       }, "*");
     }
     console.log(`[Bridge] 📡 PAYLOAD_CAPTURE ${armed ? "ARMED" : "disarmed"}`);
+  }
+
+  /**
+   * KAN-242: probe DOM response count, query count, generation state, and scope
+   * to inform worker-side automatic conversation context rotation decisions.
+   */
+  function handleConversationStats(msg) {
+    const requestId = msg?.requestId;
+    const Recovery = (typeof globalThis !== "undefined" && globalThis.NativeRecovery) || null;
+    const responses = Recovery && Recovery.countModelResponses
+      ? Recovery.countModelResponses(document)
+      : (typeof document !== "undefined" ? document.querySelectorAll("model-response").length : 0);
+    const userQueries = typeof document !== "undefined"
+      ? document.querySelectorAll("user-query, .user-query-container").length
+      : 0;
+    const generating = Recovery && Recovery.isGenerating
+      ? Recovery.isGenerating(document)
+      : false;
+    const scope = detectScope();
+    const pathname = typeof location !== "undefined" ? location.pathname : "/app";
+
+    sendToWorker({
+      type: "CONVERSATION_STATS_RESULT",
+      requestId,
+      responses,
+      userQueries,
+      scope,
+      pathname,
+      generating,
+    });
   }
 
   async function handleCollectAnswer(msg) {

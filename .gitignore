@@ -43,3 +43,10 @@ scripts/chrome-dev-shortcut.app/
 # *.zip above did not cover it because Finder-zipped archives landed at the
 # repo ROOT, not here. Ignore the whole directory.
 /release/
+
+# Local worker runtime telemetry and pid files
+cloudflare-worker/telemetry.json
+cloudflare-worker/wrangler.pid
+cloudflare-worker/wrangler_0.pid
+*.pid
+

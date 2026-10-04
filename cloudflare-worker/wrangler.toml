@@ -44,3 +44,4 @@ new_sqlite_classes = ["GeminiBridgeDO"]
 enabled = false
 [vars]
 BRIDGE_VERBOSE = "1"
+CONTEXT_ROTATION_THRESHOLD = "8"

@@ -937,7 +937,9 @@ export class BridgeSocketManager {
       // flag flipped, but zero captures arrived, because the message stopped
       // here. The upward path had a relay entry and the downward path did not,
       // and only one of the two being wired is not something a glance catches.
-      case "PAYLOAD_CAPTURE_ARM": {
+      case "PAYLOAD_CAPTURE_ARM":
+      // KAN-242: probe DOM response count and conversation state for context rotation
+      case "CONVERSATION_STATS": {
         const forwarded = this.forwardToActiveTab(msg);
         if (!forwarded && ["PREPARE_MODEL", "EXECUTE_REQUEST"].includes(msg.type)) {
           this.sendToWorker({
@@ -1174,7 +1176,7 @@ export class BridgeSocketManager {
       // Content script re-detected scope after navigation; resolve pending scopes
       // with the ACTUAL scope (not the target). Also forward to Worker for currentScope update.
       this.onScopeDetected(tabId, msg.scope);
-    } else if (["STREAM_CHUNK", "STREAM_DONE", "STREAM_ERROR", "MODEL_READY", "NATIVE_RETRY_RESULT", "NOTEBOOK_ATTACH_RESULT", "TYPE_PROMPT_RESULT", "COLLECT_ANSWER_PROGRESS", "COLLECT_ANSWER_RESULT", "GROUNDING_RESULT", "PAYLOAD_CAPTURE"].includes(msg.type)) {
+    } else if (["STREAM_CHUNK", "STREAM_DONE", "STREAM_ERROR", "MODEL_READY", "NATIVE_RETRY_RESULT", "NOTEBOOK_ATTACH_RESULT", "TYPE_PROMPT_RESULT", "COLLECT_ANSWER_PROGRESS", "COLLECT_ANSWER_RESULT", "GROUNDING_RESULT", "PAYLOAD_CAPTURE", "CONVERSATION_STATS_RESULT"].includes(msg.type)) {
       this.sendToWorker(msg);
     } else if (msg.type === "REQUEST_SCOPE_DETECTION") {
       // Forward scope re-detection requests to the active content script.

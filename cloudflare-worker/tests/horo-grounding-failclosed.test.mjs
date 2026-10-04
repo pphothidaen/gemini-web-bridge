@@ -182,3 +182,33 @@ test('a grounding-required empty response without GEMINI_API_KEY errors the same
   assert.equal(data.error.code, -32000);
   assert.match(data.error.message, /Empty model response/);
 });
+
+test('tools/list exposes the HoroConsultant notebook as the horo_consult scope default; explicit scope still overrides', async () => {
+  const b = createGroundingBridge();
+  const res = await postMcp(b, { jsonrpc: '2.0', id: 20, method: 'tools/list', params: {} });
+  const listed = await res.json();
+  const horo = listed.result.tools.find(t => t.name === 'horo_consult');
+  assert.equal(horo.inputSchema.properties.scope.default, 'notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0');
+  assert.ok(!horo.inputSchema.required.includes('scope'));
+
+  // The schema default is advisory only: an explicit scope must still win at
+  // runtime (no notebook grounding claimed, GCP fallback stays reachable).
+  b.callGcpGemini = async () => 'general-knowledge reading';
+  const data = await callTool(b, 21, 'horo_consult', { query: 'คำถามทั่วไป', scope: 'app' });
+  assert.ok(data.result, 'expected success, got: ' + JSON.stringify(data.error || data));
+  assert.equal(data.result.notebookGrounding, undefined);
+});
+
+test('horo_consult with explicit scope equal to default notebook behaves identically to omitted scope (requires grounding, no GCP fallback)', async () => {
+  const b = createGroundingBridge();
+  b.callGcpGemini = async () => { b.callGcpGemini.called = true; return 'fluent but ungrounded'; };
+
+  const data = await callTool(b, 22, 'horo_consult', {
+    query: 'คำถามดวงชะตา',
+    scope: 'notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0'
+  });
+
+  assertGcpUntouched(b);
+  assert.ok(data.error, 'expected grounding failure when citations are missing, got: ' + JSON.stringify(data.result || data));
+  assert.equal(data.error.code, -32000);
+});

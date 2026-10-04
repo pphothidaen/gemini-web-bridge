@@ -7,14 +7,14 @@
 > Its extension is permanently `DISCONNECTED`, and its `/v1/models` always returns `data: []`.
 >
 > **Canonical Production Host:** `https://prod.gemini-web-bridge.workers.dev`  
-> **Current Version:** `v4.7.33`  
-> **Test Baseline:** 659 tests (649 pass, 0 fail, 10 skipped) — 100% green suite  
-> **Active Working Documents:** [`docs/SESSION_HANDOFF-2026-10-04.md`](docs/SESSION_HANDOFF-2026-10-04.md) · [`SESSION_HANDOFF_2026-10-01.md`](SESSION_HANDOFF_2026-10-01.md) · [`docs/api-spec.md`](docs/api-spec.md)
+> **Current Version:** `v4.7.34`  
+> **Test Baseline:** 694 tests (684 pass, 0 fail, 10 skipped) — 100% green suite · KAN-242 Context Rotation implemented & verified  
+> **Active Working Documents:** [`SESSION_HANDOFF-2026-10-04.md`](SESSION_HANDOFF-2026-10-04.md) · [`docs/SESSION_HANDOFF-2026-10-04.md`](docs/SESSION_HANDOFF-2026-10-04.md) · [`docs/verification/kan242-context-rotation-design.md`](docs/verification/kan242-context-rotation-design.md) · [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md) · [`docs/api-spec.md`](docs/api-spec.md)
 
 ---
 
 > **Gemini Web Bridge (Edge AI Gateway & Hybrid Hub)**  
-> **Document Version:** `v4.7.33`  
+> **Document Version:** `v4.7.34`  
 > **Repository:** `gemini-web-bridge`  
 > **System Status:** Production Ready & Operational (Zero Known Defects)  
 > **Last Verified Date:** 2026-10-04
@@ -179,6 +179,7 @@ There is a permanent, deliberate bifurcation between execution paths:
 | `/mcp` | `POST`/`GET` | Bearer Token | Remote Model Context Protocol (JSON-RPC 2.0 / SSE) serving 9 tools. |
 | `/artifacts/{key}` | `GET` | Public (32-hex Key) | Downloads generated PDF consultation reports from `ARTIFACT_KV` (1h TTL). |
 | `/debug/payload-capture`| `GET`/`POST`| Bearer Token | Inspects and arms sanitized `StreamGenerate` payload captures. |
+| `/debug/telemetry` | `GET`/`DELETE` | Bearer Token | Queries DO telemetry ring buffer (newest-first, cap 50) or clears it (`DELETE`). |
 | `/bridge` | `GET` (Upgrade) | `BRIDGE_SECRET` | WebSocket endpoint for Chrome Extension Background Service Worker. |
 
 ---
@@ -264,7 +265,8 @@ Defined in `cloudflare-worker/tests/helpers/dom-signal.mjs`:
 | 2026-09-29 | **v4.7.0 – v4.7.18** | Typed path establishment (KAN-182); Grounding verification; DOM signal contract. | 492 Green |
 | 2026-10-01 | **v4.7.22 – v4.7.25** | Dual `/v1` & `/v2` API parity (KAN-234); Idle-based collection deadline & hard cap (KAN-236). | 629 Green |
 | 2026-10-02 | **v4.7.28 – v4.7.32** | Two-way payload capture relay (`/debug/payload-capture`); classifier hardening. | 645 Green |
-| 2026-10-04 | **v4.7.33** | Current production baseline; recovered fixtures; latency & context analysis; payload shape contract. | **659 Tests (649 pass, 0 fail, 10 skip)** |
+| 2026-10-04 | **v4.7.33** | Production baseline; recovered fixtures; latency & context analysis; payload shape contract. | 659 Tests (649 pass, 0 fail, 10 skip) |
+| 2026-10-04 | **v4.7.34** | KAN-182 DO telemetry ring buffer (`/debug/telemetry`), `executeThroughExtension` timing telemetry, preflight disconnect capture, fixed `callGcpGemini` vlog interpolation. | **669 Tests (659 pass, 0 fail, 10 skip)** |
 
 ---
 
@@ -277,7 +279,7 @@ Defined in `cloudflare-worker/tests/helpers/dom-signal.mjs`:
 
 ### 7.2 Cloudflare Workers Builds Failure Analysis
 - **Failure Cause**: Cloudflare Dashboard's automated Git integration ("Workers Builds: gemini-web-bridge") failed because the root directory lacks `package.json` and Doppler secrets, while also targeting an obsolete worker name.
-- **Resolution**: Disable or disconnect automatic Git integration in Cloudflare Dashboard; GitHub Actions CD remains the sole authorized deployment pathway.
+- **Resolution**: Disable or disconnect automatic Git integration in Cloudflare Dashboard; GitHub Actions CD remains the sole authorized deployment pathway. See full runbook: [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md).
 
 ---
 
@@ -285,7 +287,7 @@ Defined in `cloudflare-worker/tests/helpers/dom-signal.mjs`:
 
 ### 8.1 Automated Test Execution
 ```bash
-# Run complete test suite (659 tests, ~45s)
+# Run complete test suite (669 tests, ~46s)
 cd cloudflare-worker && npm test
 
 # Run DOM contract checks
@@ -297,6 +299,9 @@ cd cloudflare-worker && node --test tests/api_version_contract.test.mjs
 # Run payload shape contracts
 cd cloudflare-worker && node --test tests/payload-shape-contract.test.mjs
 
+# Run telemetry endpoint contract (KAN-182)
+cd cloudflare-worker && node --test tests/kan182-telemetry-endpoint.test.mjs
+
 # Run production host invariant
 cd cloudflare-worker && node --test tests/production-host.test.mjs
 ```
@@ -305,6 +310,14 @@ cd cloudflare-worker && node --test tests/production-host.test.mjs
 ```bash
 # Health check (includes collection heartbeat and API versions)
 curl -s https://prod.gemini-web-bridge.workers.dev/health | jq .
+
+# Telemetry inspection (KAN-182 DO ring buffer, newest first)
+curl -s https://prod.gemini-web-bridge.workers.dev/debug/telemetry \
+  -H "Authorization: Bearer ${CLIENT_API_KEY}" | jq .
+
+# Reset telemetry buffer before test runs
+curl -s -X DELETE https://prod.gemini-web-bridge.workers.dev/debug/telemetry \
+  -H "Authorization: Bearer ${CLIENT_API_KEY}" | jq .
 
 # Verify MCP tools (lists 9 tools including horo_consult)
 curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
@@ -328,6 +341,10 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   }' | jq .
 ```
 
+### 8.3 Tool-Calling & Conversation Isolation Pattern
+- **Session Isolation Rule**: When orchestrating multi-skill operations or delegating tasks, **different tool skills must execute in distinct, fresh conversation sessions**. Reusing a long-running conversation carrying previous task context causes context pollution and triggers latency degradation.
+- **Default Arguments & Explicit Overrides**: Tools provide declared defaults (e.g. `horo_consult` defaults to `notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0`), but callers can explicitly pass custom scopes/prompts to override.
+
 ---
 
 ## 9. Security Guardrails Reference (G1–G5)
@@ -335,13 +352,33 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
 1. **G1 (Zero-Token-Leak)**: Google CSRF token (`SNlM0e`) stays in volatile RAM within the browser's MAIN world. Never leaves the local host.
 2. **G2 (Strict Fail-Closed)**: No canned responses or mock responses. Offline extensions return HTTP 503; unverified groundings return JSON-RPC `-32000`.
 3. **G3 (Concurrency & Quota Control)**: 1 execution per session, max 10 queued waiters, idle-based collection deadline with strict `hardCap`.
-4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 659-test suite before pushing.
+4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 669-test suite before pushing.
 5. **G5 (Hybrid Transparency)**: GCP fallback emits `X-Provider: google-cloud-fallback` header; grounding-required requests are prohibited from falling back.
 
 ---
 
-## 10. Forward Roadmap Status
+## 10. Forward Roadmap Status & Empirical Findings
 
 1. **Sprint 1 (Alerting & Alarms)**: DO `alarm()` implemented for liveness and socket reaping. External webhook dispatcher (Discord/Slack) pending.
-2. **Sprint 2 (Context & Memory)**: KV artifact store active (`ARTIFACT_KV` with 1h expiration). Direct `StreamGenerate` research (KAN-236) demonstrated server-side context blocks (`[3]`) and opaque notebook tokens (`[0][3][0][2]`), establishing that direct worker-to-Google calls are viable only for pre-captured notebooks; UI typing remains primary for dynamic sessions.
-3. **Sprint 3 (Multi-Session Balancing)**: `ScopeRouter` envelope routing complete within DO. Cross-instance multi-account load balancing remains on the future roadmap.
+2. **Sprint 2 (Context & Memory & Latency)**:
+   - **DO Telemetry Ring Buffer (`/debug/telemetry`)**: Implemented in KAN-182 (v4.7.34). Tracks `executeThroughExtension` latency, GCP fallback calls, and preflight disconnects with microsecond accuracy.
+   - **Latency Failure Frontier (KAN-242)**: Live measurement via `/debug/telemetry` revealed clean turns average ~48–50s, but accumulated UI turns reach a hard failure frontier at 10 responses on screen (`no_answer_rendered`, timeout at 160s). This mandates automatic context rotation before conversations reach 10 turns. See full experimental plan: [`docs/verification/kan242-latency-measurement-plan.md`](docs/verification/kan242-latency-measurement-plan.md).
+   - **Notebook Wire Format Divergence (KAN-236)**:
+     - Horo notebook uses an 88-char opaque token at `[0][3][0][2]` (fingerprint `cff9779e`), stable across turns and conversations for that specific notebook.
+     - Second notebook (`claude-code-best-practice`) uses a 46-char resource reference at `[19]` (`notebooks/<UUID>`, fingerprint `91296529`), with `contains.notebook_id = true`.
+     - Direct worker-to-Google `StreamGenerate` calls cannot derive unknown notebook tokens/references without an empirical capture; UI typing remains the primary pathway for dynamic notebook sessions. See full investigation brief: [`docs/verification/kan236-notebook-token-stability-brief.md`](docs/verification/kan236-notebook-token-stability-brief.md).
+3. **Sprint 3 (Multi-Session Balancing & Infrastructure)**:
+   - `ScopeRouter` envelope routing complete within DO.
+   - **Cloudflare Dashboard Builds Integration**: Root lacks `package.json` and Doppler secrets; human one-time disconnect in Cloudflare Dashboard is required (see [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md)). GitHub Actions `cd.yml` remains the sole authorized deployment pathway.
+   - Cross-instance multi-account load balancing remains on the future roadmap.
+
+## Addendum 2026-10-04 (Orchestrator & Blue Team)
+- **KAN-242 (Automatic Conversation Context Rotation)**: **100% COMPLETE & VERIFIED** across full 3-day architecture.
+  - Extension probe (`CONVERSATION_STATS`) + Worker DO headroom guard (`ensureConversationHeadroom`).
+  - Flag ships ON (`CONTEXT_ROTATION_THRESHOLD = "8"` in `wrangler.toml`).
+  - Wire order invariant strictly preserved: context rotation (`prepareScope("app")`) runs BEFORE notebook attach (`ATTACH_NOTEBOOK`).
+  - Guardrails fully verified: pinned scopes (`app:<id>`, `notebook:<id>`) skipped with telemetry; in-flight protection; fail-open probe fallback; G1 zero prompt/response leak in telemetry.
+- **T4 (`horo_consult` scope default)**: Scope handling aligned (`HORO_CONSULT_DEFAULT_SCOPE` defaults cleanly to in-place attachment without triggering raw URL routing).
+- **Test Suite Baseline**: **694 tests (684 passed, 0 failed, 10 skipped)**. Full 100% Green Phase.
+- **Ticket Tracking**: Ready for commit under ticket **KAN-255** (or as assigned).
+- See detailed log in [`SESSION_HANDOFF-2026-10-04.md`](SESSION_HANDOFF-2026-10-04.md).

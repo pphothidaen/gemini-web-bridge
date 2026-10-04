@@ -116,6 +116,30 @@ function vlog(...args) {
   if (VERBOSE_FLAG) console.log(...args);
 }
 
+/**
+ * Constant-time comparison for secrets and API keys to prevent timing attacks.
+ */
+function constantTimeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (typeof TextEncoder !== "undefined") {
+    const enc = new TextEncoder();
+    const aBuf = enc.encode(a);
+    const bBuf = enc.encode(b);
+    if (aBuf.byteLength !== bBuf.byteLength) return false;
+    let diff = 0;
+    for (let i = 0; i < aBuf.byteLength; i++) {
+      diff |= aBuf[i] ^ bBuf[i];
+    }
+    return diff === 0;
+  }
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 // Characters encodable with WinAnsi (CP1252) standard PDF fonts.
 const WINANSI_EXTRA_CHARS = new Set([
   0x20AC, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030,
@@ -386,6 +410,17 @@ export class GeminiBridgeDO extends DurableObject {
       groundingAt: null,
       groundingReason: null
     };
+
+    // KAN-242: Automatic Conversation Context Rotation state and counter
+    this.rotationState = {
+      total: 0,
+      lastAt: null,
+      lastBefore: null,
+      lastReason: null,
+      lastError: null,
+      inFlight: false
+    };
+    this.typedTurnsInFlight = 0;
 
     // ─── Phase 3: Per-instance-id Tracking + Epoch Counter ───
     // Replaces origin-based identity with cryptographically random instance ID
@@ -1713,13 +1748,178 @@ export class GeminiBridgeDO extends DurableObject {
     });
   }
 
+  // ─── KAN-242: Automatic Conversation Context Rotation ───
+
+  /**
+   * Returns the integer threshold for conversation context rotation, or 0 if disabled/invalid.
+   */
+  rotationThreshold() {
+    const raw = this.env?.CONTEXT_ROTATION_THRESHOLD;
+    if (raw === undefined || raw === null || raw === "") return 0;
+    const val = parseInt(raw, 10);
+    return isNaN(val) || val <= 0 ? 0 : val;
+  }
+
+  /**
+   * Checks whether a scope string represents an explicitly pinned conversation or notebook.
+   * Pinned scopes (e.g. app:<id>, notebook:<id>) must never be rotated away.
+   */
+  isPinnedScope(scope) {
+    if (typeof scope !== "string" || !scope.trim()) return false;
+    const s = scope.trim();
+    if (["app", "/app", "default", "normal"].includes(s.toLowerCase())) return false;
+    return (
+      s.startsWith("app:") ||
+      s.startsWith("notebook:") ||
+      s.startsWith("/app/") ||
+      s.startsWith("/notebook/")
+    );
+  }
+
+  /**
+   * Probes the live tab for conversation statistics (response count, queries, generating status).
+   * Resolves with { ok: true, responses, userQueries, scope, pathname, generating }
+   * or { ok: false, reason }. Never throws.
+   */
+  async requestConversationStats({ requestId, timeoutMs = 2000 } = {}) {
+    const reqId = requestId ? (requestId.endsWith(":stats") ? requestId : `${requestId}:stats`) : `stats_${crypto.randomUUID()}`;
+    return new Promise((resolve) => {
+      let timer = null;
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        this.activeStreams.delete(reqId);
+      };
+      timer = setTimeout(() => {
+        cleanup();
+        resolve({ ok: false, reason: "probe_timeout" });
+      }, timeoutMs);
+
+      this.activeStreams.set(reqId, (msg) => {
+        if (msg.type === "CONVERSATION_STATS_RESULT") {
+          cleanup();
+          resolve({
+            ok: true,
+            responses: typeof msg.responses === "number" ? msg.responses : 0,
+            userQueries: msg.userQueries,
+            scope: msg.scope,
+            pathname: msg.pathname,
+            generating: Boolean(msg.generating),
+          });
+        } else if (msg.type === "STREAM_ERROR") {
+          cleanup();
+          resolve({ ok: false, reason: msg.error || "stats_error" });
+        }
+      });
+
+      try {
+        if (!this.activeSocket || this.activeSocket.readyState !== 1) {
+          cleanup();
+          resolve({ ok: false, reason: "socket_unavailable" });
+          return;
+        }
+        this.activeSocket.send(JSON.stringify({ type: "CONVERSATION_STATS", requestId: reqId }));
+      } catch (err) {
+        cleanup();
+        resolve({ ok: false, reason: err?.message || "stats_send_failed" });
+      }
+    });
+  }
+
+  /**
+   * Ensures the active conversation has enough context headroom to prevent Gemini
+   * UI degradation / collect_answer_timeout.
+   * If responses >= threshold, triggers prepareScope("app") to rotate into a fresh chat.
+   * Guardrails:
+   *  - Disabled if threshold <= 0
+   *  - Skips pinned scopes (app:<id>, notebook:<id>)
+   *  - Skips if generation or rotation is already in-flight
+   *  - Falls back to lastCollectedResponseCount if probe times out
+   *  - Fails open without throwing if prepareScope fails
+   */
+  async ensureConversationHeadroom({ requestId, explicitScope, timeoutMs = 2000 } = {}) {
+    const threshold = this.rotationThreshold();
+    if (threshold <= 0) {
+      return { rotated: false, reason: "disabled" };
+    }
+
+    if (this.isPinnedScope(explicitScope)) {
+      this.recordTelemetry({ kind: "rotation", outcome: "skipped", skipped: "pinned_scope", threshold });
+      return { rotated: false, reason: "pinned_scope" };
+    }
+
+    if (this.rotationState.inFlight || this.typedTurnsInFlight > 0) {
+      return { rotated: false, reason: "in_flight" };
+    }
+
+    const stats = await this.requestConversationStats({ requestId, timeoutMs });
+
+    if (stats.ok && stats.generating) {
+      return { rotated: false, reason: "generating" };
+    }
+
+    let count = null;
+    if (stats.ok && typeof stats.responses === "number") {
+      count = stats.responses;
+    } else if (typeof this.lastCollectedResponseCount === "number" && this.lastCollectedResponseCount > 0) {
+      count = this.lastCollectedResponseCount;
+    }
+
+    if (count === null) {
+      return { rotated: false, reason: "probe_unavailable" };
+    }
+
+    if (count < threshold) {
+      return { rotated: false, responses: count };
+    }
+
+    // Context headroom exhausted -> rotate to fresh conversation
+    this.rotationState.inFlight = true;
+    const t0 = Date.now();
+    try {
+      await this.prepareScope("app");
+      this.currentScope = "app";
+      this.lastCollectedResponseCount = 0;
+      this.rotationState.total++;
+      this.rotationState.lastAt = new Date().toISOString();
+      this.rotationState.lastBefore = count;
+      this.rotationState.lastReason = "threshold_reached";
+      this.recordTelemetry({
+        kind: "rotation",
+        outcome: "ok",
+        durationMs: Date.now() - t0,
+        responsesBefore: count,
+        threshold,
+      });
+      return { rotated: true, responsesBefore: count, threshold };
+    } catch (err) {
+      const errorMsg = err?.message || String(err);
+      this.rotationState.lastError = errorMsg;
+      this.rotationState.lastReason = "error";
+      this.recordTelemetry({
+        kind: "rotation",
+        outcome: "error",
+        error: errorMsg,
+        threshold,
+      });
+      return { rotated: false, error: errorMsg };
+    } finally {
+      this.rotationState.inFlight = false;
+    }
+  }
+
   // KAN-182: append one telemetry record to the ring buffer, dropping the
   // oldest once the cap is reached. Callers pass metadata only (kind, timing,
   // counts, outcome, error message); nothing here ever sees prompt or response
   // content, and an entry that did carry such content would have to be put
   // there deliberately.
   recordTelemetry(entry) {
-    this.telemetryBuffer.push({ ts: Date.now(), ...entry });
+    const sanitized = { ...entry };
+    if (sanitized.error !== undefined && sanitized.error !== null) {
+      sanitized.error = String(sanitized.error)
+        .replace(/key=[^&\s]+/gi, "key=[REDACTED]")
+        .slice(0, 200);
+    }
+    this.telemetryBuffer.push({ ts: Date.now(), ...sanitized });
     while (this.telemetryBuffer.length > TELEMETRY_BUFFER_MAX) {
       this.telemetryBuffer.shift();
     }
@@ -1892,48 +2092,53 @@ export class GeminiBridgeDO extends DurableObject {
       const timedOut = /no response chunk|Timeout/i.test(replayErr?.message || "");
       if (!forced && !timedOut) return failWith(replayErr);
 
-      const prompt = messages?.[0]?.content || "";
-      vlog(forced
-        ? `[Bridge DO] Grounding required; typing into Gemini's input (KAN-182).`
-        : `[Bridge DO] Replay produced no chunk; falling back to typing into Gemini's input (KAN-182).`);
-      const typed = await this.typePromptThroughUi({
-        requestId: `${requestId}:typed`,
-        prompt
-      });
-      if (!typed.ok) {
-        this.recordHealthError(`type_prompt_failed:${typed.reason}@${typed.step}`);
-        return failWith(new Error(
-          `${forced ? "Grounding requires the typed path" : "Replay produced no response chunk"} and the typed path failed ` +
-          `(step=${typed.step || "unknown"}, reason=${typed.reason || "unknown"}). ` +
-          `The Gemini tab must be in the foreground for a typed prompt to be submitted.`
-        ));
+      this.typedTurnsInFlight++;
+      try {
+        const prompt = messages?.[0]?.content || "";
+        vlog(forced
+          ? `[Bridge DO] Grounding required; typing into Gemini's input (KAN-182).`
+          : `[Bridge DO] Replay produced no chunk; falling back to typing into Gemini's input (KAN-182).`);
+        const typed = await this.typePromptThroughUi({
+          requestId: `${requestId}:typed`,
+          prompt
+        });
+        if (!typed.ok) {
+          this.recordHealthError(`type_prompt_failed:${typed.reason}@${typed.step}`);
+          return failWith(new Error(
+            `${forced ? "Grounding requires the typed path" : "Replay produced no response chunk"} and the typed path failed ` +
+            `(step=${typed.step || "unknown"}, reason=${typed.reason || "unknown"}). ` +
+            `The Gemini tab must be in the foreground for a typed prompt to be submitted.`
+          ));
+        }
+        // The page now renders the answer itself; read it back from the DOM via
+        // the native path, which is already proven to work.
+        //
+        // KAN-182: the `ok` flag was ignored here, so a collection that failed —
+        // or that timed out and returned the PREVIOUS response's text — was
+        // adopted as this call's answer. Live on 2026-09-29: the typed prompt
+        // never landed (editor empty, chip unconsumed), yet horo_consult
+        // answered with the text of the test prompt from the previous turn and
+        // then failed grounding on it. An unreadable answer must not be
+        // reported as an ungrounded one — the two need different fixes.
+        const collected = await this.collectTypedAnswer({
+          requestId,
+          timeoutMs: 120000,
+          responsesBefore: typed.responsesBefore
+        });
+        if (!collected.ok) {
+          this.recordHealthError(`collect_answer_failed:${collected.reason}`);
+          return failWith(new Error(
+            `The prompt was submitted but no new answer was rendered for it ` +
+            `(reason=${collected.reason || "unknown"}, responses on screen=${collected.responses}). ` +
+            `This means Gemini never produced a reply to THIS question — the text already on ` +
+            `screen belongs to an earlier turn and is deliberately not reused. ` +
+            `Check the Gemini tab is still open and in the foreground.`
+          ));
+        }
+        text = collected.text;
+      } finally {
+        this.typedTurnsInFlight--;
       }
-      // The page now renders the answer itself; read it back from the DOM via
-      // the native path, which is already proven to work.
-      //
-      // KAN-182: the `ok` flag was ignored here, so a collection that failed —
-      // or that timed out and returned the PREVIOUS response's text — was
-      // adopted as this call's answer. Live on 2026-09-29: the typed prompt
-      // never landed (editor empty, chip unconsumed), yet horo_consult
-      // answered with the text of the test prompt from the previous turn and
-      // then failed grounding on it. An unreadable answer must not be
-      // reported as an ungrounded one — the two need different fixes.
-      const collected = await this.collectTypedAnswer({
-        requestId,
-        timeoutMs: 120000,
-        responsesBefore: typed.responsesBefore
-      });
-      if (!collected.ok) {
-        this.recordHealthError(`collect_answer_failed:${collected.reason}`);
-        return failWith(new Error(
-          `The prompt was submitted but no new answer was rendered for it ` +
-          `(reason=${collected.reason || "unknown"}, responses on screen=${collected.responses}). ` +
-          `This means Gemini never produced a reply to THIS question — the text already on ` +
-          `screen belongs to an earlier turn and is deliberately not reused. ` +
-          `Check the Gemini tab is still open and in the foreground.`
-        ));
-      }
-      text = collected.text;
       // KAN-233: no success writer here on purpose. The single exit below —
       // after the verdict classification — records success for BOTH paths, so
       // adding one here would double-record and, worse, would clear a refusal
@@ -2974,7 +3179,7 @@ export class GeminiBridgeDO extends DurableObject {
     if (!publicPaths.includes(url.pathname) && !isArtifactPath) {
       const authHeader = request.headers.get("Authorization") || "";
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-      if (!token || token !== CLIENT_API_KEY) {
+      if (!token || !constantTimeEqual(token, CLIENT_API_KEY)) {
         return new Response(JSON.stringify({
           error: {
             message: "Invalid or missing API key. Please provide Authorization: Bearer ***",
@@ -3115,6 +3320,9 @@ export class GeminiBridgeDO extends DurableObject {
         }
         corsHeaders["X-Bridge-Scope"] = targetScope;
       }
+
+      // KAN-242: Automatic Conversation Context Rotation
+      await this.ensureConversationHeadroom({ requestId, explicitScope: scopeInput });
 
       const requestedModel = body?.model;
       if (this.protocolVersion < 2 || this.protocolVersion > 3) return this.failure(503,"extension_upgrade_required",`Protocol v${this.protocolVersion || 0} unsupported. Min: 2, Max: 3. Reload the extension.`);
@@ -3400,7 +3608,7 @@ export class GeminiBridgeDO extends DurableObject {
               }
             },
             response_format: { type: "string", enum: ["text", "pdf"], default: "text" },
-            scope: { type: "string", description: "\"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com — ถ้าไม่ระบุ ระบบจะใช้ค่าเริ่มต้นคือ App (https://gemini.google.com/app) ส่วน horo_consult เท่านั้น ที่จะแนบ Notebook ความรู้ HoroConsultant (notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0) เข้ากับบทสนทนาที่เปิดอยู่ โดยไม่เปลี่ยน URL (ผลลัพธ์จะรายงาน notebookGrounding และ bridgeScope.attachedInPlace=true)" }
+            scope: { type: "string", default: "notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0", description: "\"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com (เช่น https://gemini.google.com/app) — ค่าเริ่มต้นสำหรับ horo_consult คือ HoroConsultant Notebook (notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0) โดยจะแนบเข้ากับบทสนทนาที่เปิดอยู่โดยไม่เปลี่ยน URL (ผลลัพธ์จะรายงาน notebookGrounding และ bridgeScope.attachedInPlace=true) ทั้งนี้สามารถระบุ scope อื่น เช่น \"app\" เพื่อ override ได้" }
           },
           required: ["query"]
         }
@@ -3867,9 +4075,17 @@ export class GeminiBridgeDO extends DurableObject {
           // conversation, and the scope.
           //
           // An explicit `scope` argument still wins and still means a real
-          // scope switch — this only replaces the implicit default.
+          // scope switch — this only replaces the implicit default or explicit default.
           const wantsDefaultNotebook =
-            toolName === "horo_consult" && !(typeof args.scope === "string" && args.scope.trim());
+            toolName === "horo_consult" &&
+            (!(typeof args.scope === "string" && args.scope.trim()) ||
+             args.scope.trim() === HORO_CONSULT_DEFAULT_SCOPE);
+
+          const wantsNotebookAttach =
+            wantsDefaultNotebook ||
+            (toolName === "horo_consult" &&
+             typeof args.scope === "string" &&
+             args.scope.trim().startsWith("app:"));
 
           if (wantsDefaultNotebook) {
             this.targetNotebookScope = HORO_CONSULT_DEFAULT_SCOPE;
@@ -3984,6 +4200,11 @@ export class GeminiBridgeDO extends DurableObject {
               return { response: res };
             }
 
+            // KAN-242: Automatic Conversation Context Rotation
+            // Before attaching notebooks or typing prompts, check if conversation headroom
+            // is exhausted. If responses >= threshold, rotate by prepareScope("app") first.
+            await this.ensureConversationHeadroom({ requestId: id, explicitScope: args.scope });
+
             try {
               // KAN-177: attach the HoroConsultant notebook to this
               // conversation before asking, so the answer is grounded in
@@ -3994,7 +4215,7 @@ export class GeminiBridgeDO extends DurableObject {
               // ungrounded BaZi answer that looks grounded is worse than
               // an honest error, because the caller cannot tell the two
               // apart from the text alone.
-              if (wantsDefaultNotebook) {
+              if (wantsNotebookAttach) {
                 const attach = await this.runNotebookAttach({
                   requestId: `${id}:notebook-attach`,
                   notebookName: HORO_CONSULT_NOTEBOOK_NAME
@@ -4442,6 +4663,15 @@ export class GeminiBridgeDO extends DurableObject {
         conversation_state: {
           active: Boolean(this.conversationState.conversationId),
           conversationId: this.conversationState.conversationId || null
+        },
+        conversation_rotation: {
+          enabled: this.rotationThreshold() > 0,
+          threshold: this.rotationThreshold(),
+          total: this.rotationState.total,
+          last_at: this.rotationState.lastAt,
+          last_responses_before: this.rotationState.lastBefore,
+          last_reason: this.rotationState.lastReason,
+          last_error: this.rotationState.lastError
         },
         // KAN-236: what the last collection's extension half actually reported.
         //
