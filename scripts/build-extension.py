@@ -36,6 +36,15 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = REPO_ROOT / "extension-cloudflare"
 
+try:
+    from dotenv import load_dotenv
+    if (REPO_ROOT / ".env").is_file():
+        load_dotenv(REPO_ROOT / ".env")
+    elif (REPO_ROOT / "cloudflare-worker" / ".env").is_file():
+        load_dotenv(REPO_ROOT / "cloudflare-worker" / ".env")
+except ImportError:
+    pass
+
 # ONE build root. Everything the build produces lives under dist/ so there is
 # never a second copy to fall out of date:
 #
