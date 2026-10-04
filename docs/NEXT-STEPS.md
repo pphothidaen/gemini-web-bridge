@@ -31,14 +31,11 @@ and a few will produce a confident wrong answer if you do not know them first.
 
 ## HANDOVER — what is actually left
 
-Production **4.7.33**, `CONNECTED_AND_READY`, `consecutive_errors: 0`, suite
-**650 / 645 pass / 0 fail**. Repo synced with `origin/main`. `prompts/` is
+Production **4.7.35** (tag `v4.7.35`), `CONNECTED_AND_READY`, `consecutive_errors: 0`, suite
+**756 / 751 pass / 0 fail**. Repo synced with `origin/main`. `prompts/` is
 tracked since KAN-204 and is now the source of truth the runtime stage prompts
 are generated from (`scripts/sync-horo-prompts.mjs`). **Payload capture is
-currently ARMED — disarm it before
-handing over** (`POST /debug/payload-capture {"armed":false}`); an armed capture
-is the exact risk the flag exists to prevent, and it is a live authenticated
-endpoint.
+DISARMED (verified live 2026-10-04).**
 
 ### 1. Phase D result — the direct path is viable, with one dependency
 
