@@ -3014,13 +3014,18 @@ export class GeminiBridgeDO extends DurableObject {
     if (new URL(request.url).pathname !== "/v1/chat/completions" || request.method !== "POST") return this.handleRequest(request);
     if (this.requestBusy) {
       if (this.pendingRequests.length >= 10) return this.failure(429, "queue_full", "Browser request queue is full");
+      const queueWaitMs = Number(this.env.QUEUE_TIMEOUT_MS) > 0 ? Number(this.env.QUEUE_TIMEOUT_MS) : 180000;
       try {
         await new Promise((resolve, reject) => {
           const entry = {resolve: () => {clearTimeout(entry.timer); resolve();}, reject: reason => {clearTimeout(entry.timer); reject(reason);}};
-          entry.timer = setTimeout(() => {this.pendingRequests = this.pendingRequests.filter(x => x !== entry); reject(new Error("queue_timeout"));}, 60000);
+          entry.timer = setTimeout(() => {this.pendingRequests = this.pendingRequests.filter(x => x !== entry); reject(new Error("queue_timeout"));}, queueWaitMs);
           this.pendingRequests.push(entry);
         });
-      } catch (error) { return this.failure(503, error.message, "Browser request queue interrupted"); }
+      } catch (error) {
+        const res = this.failure(503, error.message, error.message === "queue_timeout" ? "Timed out waiting for the browser to become free; retry shortly" : "Browser request queue interrupted");
+        res.headers.set("Retry-After", "15");
+        return res;
+      }
     } else this.requestBusy = true;
     // Bracket the whole generation so scheduleAlarm() keeps the fast interval
     // while a request is being produced, and drops to the idle interval the
