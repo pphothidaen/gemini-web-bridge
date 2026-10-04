@@ -39,7 +39,7 @@ import {
 //   • extension-cloudflare/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.34";
+const WORKER_VERSION = "4.7.35";
 
 // KAN-236 Phase D: how many sanitized payload records to keep.
 //

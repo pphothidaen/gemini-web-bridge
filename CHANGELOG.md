@@ -8,6 +8,40 @@ All notable changes to the Gemini Web-Bridge project.
 > anywhere. Production is `prod.gemini-web-bridge.workers.dev` and has been
 > since commit `fa97a5d` (KAN-157).
 
+## [4.7.35] - 2026-10-04
+
+### Added
+- **`horo_consult` atomic stage pipeline (KAN-204).** New `stage` parameter:
+  one of `birth-chart` / `base-fortune` / `turning-points` / `forecast` /
+  `additional-insights` runs a single notebook-grounded atomic request;
+  `full` runs all five as a pipeline — fresh notebook attach per stage (the
+  notebook is consumed per message), typed path, per-stage grounding
+  verification with one retry, and per-stage answers persisted in DO storage
+  keyed by a `reading_id` (SHA-256 of name + birth_context).
+  `resume_reading: true` reruns only the stages that never grounded. A stage
+  that keeps failing costs only its section: the document assembles from the
+  grounded stages and the footer reports the failure. G-1 holds everywhere —
+  the pipeline has no GCP fallback branch. Stage prompts are generated from
+  `prompts/0*.md` by `scripts/sync-horo-prompts.mjs` into
+  `src/horo-prompts.js` (the .md library is the source of truth; the
+  generated module asserts the shared guardrail clauses at build time).
+- **Thai-capable PDF export.** `buildAnswerPdf` embeds Noto Sans Thai
+  (fetched once, cached in DO storage) via `@pdf-lib/fontkit` — previously
+  every Thai glyph was replaced with `?` by the WinAnsi sanitizer. A failed
+  font fetch degrades to the old WinAnsi behavior with a warning.
+
+### Changed
+- **`horo_consult` schema**: `query` is no longer schema-required — it is
+  mandatory in the legacy free-form mode (validated at runtime with -32602)
+  and optional in stage mode, where it is appended as a caller refinement.
+  Stage-mode answers carry `structuredContent` (`reading_id`, `stage`,
+  per-stage status) and a per-stage `notebookGrounding` map.
+- The atomic prompt library was polished: shared guardrail block in all five
+  stages (method-only opener, honesty clause, citation clause, Thai clause),
+  fixed `##` assembly headings, count bounds for turning points and warnings,
+  a พ.ศ.↔ค.ศ. conversion rule, and full field lists on the forecast
+  fallback variants.
+
 ## [4.7.34] - 2026-10-04
 
 ### Added
