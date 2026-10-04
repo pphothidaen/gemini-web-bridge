@@ -19,9 +19,21 @@ nothing else. Broader requests in this area were measured to lose grounding.
 4. ถ้ามีระบบอื่นนอกเหนือจาก BaZi ที่อยู่ใน Notebook ให้ยกมาเพิ่ม — ถ้าไม่มี
    ก็บอกตรงๆ ว่าไม่มี อย่าเดา
 
+ตอบโดยขึ้นต้นด้วยหัวข้อ `## แผนภูมิกำเนิด (Birth Chart)` เพื่อให้ประกอบเป็นเอกสารเดียวได้
 อ้างอิงแหล่งที่มาใน Notebook ทุกประเด็น
 ตอบเป็นภาษาไทย
 ```
+
+## What a grounded answer looks like
+
+One sub-part, kept deliberately small:
+
+> 2. อำนาจของ Day Master — Day Master ของดวงนี้แข็ง เพราะได้ธาตุที่เสาเดือน
+>    หนุนตามที่ Notebook อธิบายไว้
+
+The citation clause is per point, not per answer: every numbered item must
+trace back to notebook material. An answer that is fluent but cites nothing
+is the failure, and it is what the grounding check rejects.
 
 ## Why this is worded the way it is
 

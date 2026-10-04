@@ -46,15 +46,18 @@ Five conversations, one section each. The notebook is consumed per message, so
 each needs a fresh conversation — new tab, or `/app` once the previous
 settles.
 
-| step | file | section produced |
-| :--- | :--- | :--- |
-| 1 | `01-birth-chart.md` | Birth Chart |
-| 2 | `02-base-fortune.md` | Base Fortune |
-| 3 | `03-turning-points.md` | Turning Points |
-| 4 | `04-forecast.md` | Future Forecast |
-| 5 | `05-additional-insights.md` | Additional Insights |
+| step | file | section produced | fixed heading |
+| :--- | :--- | :--- | :--- |
+| 1 | `01-birth-chart.md` | Birth Chart | `## แผนภูมิกำเนิด (Birth Chart)` |
+| 2 | `02-base-fortune.md` | Base Fortune | `## ดวงพื้นฐาน (Base Fortune)` |
+| 3 | `03-turning-points.md` | Turning Points | `## จุดเปลี่ยน (Turning Points)` |
+| 4 | `04-forecast.md` | Future Forecast | `## พยากรณ์อนาคต (Future Forecast)` |
+| 5 | `05-additional-insights.md` | Additional Insights | `## ข้อควรระวัง (Additional Insights)` |
 
-Then concatenate the five answers under one title.
+Each stage prompt asks for its fixed heading as the first line of its answer,
+so concatenation is literal: title line, then the five answers in step order.
+If stage 4 had to be split by year, reassemble its answers under its one
+heading first — see the *Reassembling a split span* note in `04-forecast.md`.
 
 Each step either grounds or fails on its own. A refusal at step 4 costs the
 forecast, not the other four sections — which is the whole reason for the

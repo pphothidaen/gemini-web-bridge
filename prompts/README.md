@@ -37,14 +37,38 @@ for a single turn; the next question needs a fresh conversation — a new tab, o
 | `01-birth-chart.md` | the four pillars and what they mean |
 | `02-base-fortune.md` | trajectory, love, career, skills, wealth |
 | `03-turning-points.md` | ages at which life turns, and why |
-| `04-forecast.md` | 2026–2030 — **granularity is a parameter** |
+| `04-forecast.md` | future forecast — **granularity is a parameter** |
 | `05-additional-insights.md` | warnings the experts would flag |
 | `TEMPLATE.md` | the whole document, and how to assemble it |
 
+## The shared guardrail block
+
+Every stage prompt carries the same closing block. It is standardized across
+all five files so the runtime loader (`horo-prompts.js`) can assert on it:
+
+1. **Method-only opener** — `ตรวจสอบด้วยวิธีการของคุณเท่านั้น ไม่ใช้ความรู้ทั่วไป`
+2. **Honesty clause** — `ถ้าข้อมูลใน Notebook ไม่พอ ... ให้บอกตรงๆ ว่าไม่มี อย่าเติมสิ่งที่ไม่มีใน Notebook`
+   (present in all five, not just the warnings stage — a fabricated turning
+   point is as bad as a fabricated warning)
+3. **Fixed assembly heading** — each stage opens its answer with its own `##`
+   heading so the five answers concatenate into one document (see *Assembly*
+   in `TEMPLATE.md`)
+4. **Citation clause** — `อ้างอิงแหล่งที่มาใน Notebook ทุกประเด็น`
+5. **Language clause** — `ตอบเป็นภาษาไทย`
+
+`{{LONGITUDE}}` appears in all five. The engine, not the prompt, does the
+computation (G-4) — the longitude line is informative framing that keeps the
+five prompt blocks structurally identical.
+
 ## Placeholders
 
-`{{NAME}}`, `{{BIRTH_DATE}}`, `{{BIRTH_TIME}}`, `{{BIRTH_PLACE}}`, `{{LONGITUDE}}`
-are filled by the caller. `'Sittiphol's Fate Book'` in `TEMPLATE.md` is a
+Filled by the caller (or by `horo-prompts.js` at runtime):
+
+- All stages: `{{NAME}}`, `{{BIRTH_DATE}}`, `{{BIRTH_TIME}}`, `{{BIRTH_PLACE}}`, `{{LONGITUDE}}`, `{{BIRTH_CONTEXT}}`
+- `04-forecast.md` only: `{{FROM_YEAR}}`, `{{TO_YEAR}}` (span), `{{TARGET_YEAR}}`, `{{Q}}`, `{{MONTH}}` (fallback variants)
+
+`{{TITLE}}` exists only in `TEMPLATE.md` — it labels the assembled document,
+not any single request. `'Sittiphol's Fate Book'` in `TEMPLATE.md` is a
 **worked example** of a title, not part of the request — the title belongs to
 the caller and must match their subject. A mismatch here silently mislabels the
 document.
