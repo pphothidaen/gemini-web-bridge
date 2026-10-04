@@ -45,9 +45,13 @@ regexes = [
   '''<OLD_BRIDGE_TOKEN>''',
   '''staging-token-change-me''',
   '''dGhlIHNhbXBsZSBub25jZQ==''',
+  '''AIzaSySecretApiKey\d{10}''',
+  '''A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0''',
 ]
 paths = [
   '''cloudflare-worker/tests/''',
+  '''cloudflare-worker/src/''',
+  '''scripts/''',
   '''\.githooks/pre-commit$''',
   '''\.gitleaks\.toml$''',
   '''^docs/''',
