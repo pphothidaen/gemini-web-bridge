@@ -352,7 +352,7 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
 1. **G1 (Zero-Token-Leak)**: Google CSRF token (`SNlM0e`) stays in volatile RAM within the browser's MAIN world. Never leaves the local host.
 2. **G2 (Strict Fail-Closed)**: No canned responses or mock responses. Offline extensions return HTTP 503; unverified groundings return JSON-RPC `-32000`.
 3. **G3 (Concurrency & Quota Control)**: 1 execution per session, max 10 queued waiters, idle-based collection deadline with strict `hardCap`.
-4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 669-test suite before pushing.
+4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 694-test suite before pushing.
 5. **G5 (Hybrid Transparency)**: GCP fallback emits `X-Provider: google-cloud-fallback` header; grounding-required requests are prohibited from falling back.
 
 ---
@@ -380,5 +380,8 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   - Guardrails fully verified: pinned scopes (`app:<id>`, `notebook:<id>`) skipped with telemetry; in-flight protection; fail-open probe fallback; G1 zero prompt/response leak in telemetry.
 - **T4 (`horo_consult` scope default)**: Scope handling aligned (`HORO_CONSULT_DEFAULT_SCOPE` defaults cleanly to in-place attachment without triggering raw URL routing).
 - **Test Suite Baseline**: **694 tests (684 passed, 0 failed, 10 skipped)**. Full 100% Green Phase.
-- **Ticket Tracking**: Ready for commit under ticket **KAN-255** (or as assigned).
+- **Git & Deployment Status**:
+  - Committed in `ed6c337` (`KAN-242: implement automatic conversation context rotation and horo_consult default scope (KAN-255)`)
+  - Build hardening committed in `a63e1b9` (`KAN-242: fix(build): add dotenv fallback for local extension packaging`)
+  - Both commits pushed and synchronized with `origin/main`.
 - See detailed log in [`SESSION_HANDOFF-2026-10-04.md`](SESSION_HANDOFF-2026-10-04.md).

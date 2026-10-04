@@ -4,9 +4,10 @@
 
 - Repository: `/Users/kimlenglim/Project/gemini-web-bridge`
 - Branch: `main`
-- Deployed commit: `43a5498` (`KAN-182: record preflight extension-disconnect telemetry in chat + horo_consult paths`), pushed to `origin/main`.
-- Live Worker health: HTTP 200, version `4.7.34`, `CONNECTED_AND_READY`, zero consecutive errors, active connections: 1, active model: `3.8 Flash-Lite`.
-- Test Suite: **694 tests (684 pass, 0 fail, 10 skipped) @ ~46.3s** — 100% green suite.
+- Latest commit: `a63e1b9` (`KAN-242: fix(build): add dotenv fallback for local extension packaging`), pushed to `origin/main`.
+- Preceding feature commit: `ed6c337` (`KAN-242: implement automatic conversation context rotation and horo_consult default scope (KAN-255)`), pushed to `origin/main`.
+- Live Worker health: HTTP 200, version `4.7.34`, `CONNECTED_AND_READY`, zero consecutive errors, active connections: 1, active model: `3.8 Flash-Lite`, 9 MCP tools operational.
+- Test Suite: **694 tests (684 pass, 0 fail, 10 skipped) @ ~46.0s** — 100% green suite.
 - Production observability is disabled (`observability = false`) in both `cloudflare-worker/wrangler.toml` and `wrangler.jsonc`.
 - Payload Capture status: **DISARMED** (`armed: false`).
 
@@ -49,24 +50,24 @@
      - `cloudflare-worker/src/index.js`: Added `rotationThreshold()`, `isPinnedScope()`, `requestConversationStats()`, `ensureConversationHeadroom()`, constructor initialization, typed turns in-flight tracking, wire order sequencing (`horo_consult` rotates before attaching notebook chip), and `/health` reporting.
      - `cloudflare-worker/wrangler.toml`: Set `CONTEXT_ROTATION_THRESHOLD = "8"` under `[vars]`.
    - Verified 100% Green Phase across repository (694 tests, 684 passed, 0 failed, 10 skipped).
-8. **Master Handoff Modernization:**
+   - Committed in `ed6c337` and pushed to `origin/main`.
+8. **Build Tooling Hardening (KAN-242):**
+   - Added `dotenv` fallback in `scripts/build-extension.py` for local offline extension packaging.
+   - Rebuilt `dist/extension` fresh at `v4.7.34` (`python3 scripts/build-extension.py --verify` passes).
+   - Committed in `a63e1b9` and pushed to `origin/main`.
+9. **Master Handoff Modernization:**
    - Updated [`HANDOFF.md`](../HANDOFF.md) and [`SESSION_HANDOFF-2026-10-04.md`](../SESSION_HANDOFF-2026-10-04.md) with latest baselines and verification records.
 
 ## Status of follow-ups
 
-1. **Cloudflare Dashboard Builds Integration (TODO - Operator):**
+1. **Extension Reload (TODO - Operator):**
+   - Action: Open `chrome://extensions` in Google Chrome and click the reload icon on the "Gemini Web Bridge Extension" to run the newly built `v4.7.34` extension with `CONVERSATION_STATS` DOM probe support.
+2. **Cloudflare Dashboard Builds Integration (TODO - Operator):**
    - Action: Follow [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md) to disconnect Git in Cloudflare Dashboard UI.
-2. **Second Notebook Single Capture (TODO - Operator):**
-   - Action: Follow [`docs/verification/kan236-notebook-token-stability-brief.md`](verification/kan236-notebook-token-stability-brief.md) §6 to perform the single capture.
-3. **Commit & Push KAN-242 / KAN-255 (Ready for Commit):**
-   - Ready to commit changes under ticket `KAN-255` (or assigned ticket):
-     - `cloudflare-worker/src/index.js`
-     - `cloudflare-worker/wrangler.toml`
-     - `cloudflare-worker/tests/context-rotation.test.mjs`
-     - `extension-cloudflare/protocol-messages.js`
-     - `extension-cloudflare/background.js`
-     - `extension-cloudflare/content.js`
-     - Documentation and handoff artifacts.
+3. **CD Production Gate Approval (TODO - Operator):**
+   - Action: Approve the GitHub Actions `production` review environment gate for commit `a63e1b9` in GitHub Actions.
+4. **Second Notebook Single Capture (TODO - Operator):**
+   - Action: Follow [`docs/verification/kan236-notebook-token-stability-brief.md`](verification/kan236-notebook-token-stability-brief.md) §6 to perform the single capture once the reloaded extension is running.
 
 ## Useful records
 
@@ -82,7 +83,7 @@
 The MCP settings location supplied for Codex is `/Users/kimlenglim/.cline/data/settings/cline_mcp_settings.json` (chmod 600). Do not place credentials or secret values in handoff notes or git commits.
 
 ## Addendum (Orchestrator)
-- KAN-242 Context Rotation and T4 scope defaults implemented and 100% verified.
-- Suite status: 694 tests (684 pass, 0 fail, 10 skip).
-- Ready for git commit under KAN-255.
+- KAN-242 Context Rotation and T4 scope defaults implemented, tested (694 tests passing), committed (`ed6c337`), hardened (`a63e1b9`), and pushed to `origin/main`.
+- Live production worker verified (`CONNECTED_AND_READY`, 9 MCP tools operational).
+- Next actions queued for Operator and Sprint roadmap.
 
