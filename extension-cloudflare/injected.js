@@ -817,8 +817,19 @@
     // the worker. Separate from PAYLOAD_PROBE_SET on purpose — that one gates
     // the console sink, this one gates the relay, and a measurement may want
     // one without the other.
+    //
+    // The ARM message may carry a `notebookId` field (derived from the worker's
+    // live scope at arm time). Apply the hint immediately so that
+    // `describeString` can answer `contains.notebook_id` correctly for every
+    // capture taken after this point. Without this, the hint was only applied
+    // by the separate SET_NOTEBOOK_ID_HINT message — which the worker never
+    // sends — so `NOTEBOOK_ID_HINT` stayed "" and `contains.notebook_id` was
+    // always null even when the notebook token was present in the payload.
     if (type === "PAYLOAD_CAPTURE_ARM") {
       armPayloadCapture(event.data.armed === true);
+      if (typeof event.data.notebookId === "string" && event.data.notebookId.length > 0) {
+        setNotebookIdHint(event.data.notebookId);
+      }
       return;
     }
 

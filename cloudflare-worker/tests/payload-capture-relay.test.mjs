@@ -29,7 +29,8 @@ const {
   isPayloadCaptureArmed,
   classifyString,
   STRING_CLASS,
-  emitProbeRecord
+  emitProbeRecord,
+  setNotebookIdHint
 } = Injected;
 
 const WORKER_SOURCE = fs.readFileSync(
@@ -362,3 +363,47 @@ function withFakeWindow(fn) {
     armPayloadCapture(false);
   }
 }
+
+test('PAYLOAD_CAPTURE_ARM applies notebook id hint when notebookId is present', () => {
+  // Regression for the `contains.notebook_id` always-null gap (KAN-236).
+  //
+  // The ARM message carries a `notebookId` field derived from the worker's live
+  // scope (index.js resolveNotebookIdFromScope). Before the fix, the
+  // PAYLOAD_CAPTURE_ARM handler in injected.js ignored that field entirely,
+  // so NOTEBOOK_ID_HINT stayed "" and describeString always returned
+  // `contains.notebook_id: null` instead of true/false — even when the
+  // notebook token was present at `[0][3][0][2]`.
+  //
+  // After the fix, the handler also calls setNotebookIdHint() when notebookId
+  // is present, so the very next capture can answer the question correctly.
+  const { describeString } = Injected;
+  const HORO_ID = 'b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0';
+
+  // Baseline: hint not set → null
+  setNotebookIdHint('');
+  assert.equal(describeString('anything').contains.notebook_id, null,
+    'without a hint the answer is null, not false');
+
+  // Simulate the ARM handler applying the hint from event.data.notebookId
+  setNotebookIdHint(HORO_ID);
+
+  // A string containing the id now answers true
+  const withId = `prefix-${HORO_ID}-suffix`;
+  assert.equal(describeString(withId).contains.notebook_id, true,
+    'hint set: string containing the id must answer true');
+
+  // A string NOT containing the id answers false
+  assert.equal(describeString('some-other-opaque-token-xyz').contains.notebook_id, false,
+    'hint set: string not containing the id must answer false');
+
+  // The fix must also be visible in the injected.js source
+  const injected = fs.readFileSync(
+    new URL('../../extension-cloudflare/injected.js', import.meta.url).pathname,
+    'utf8'
+  );
+  assert.match(injected, /PAYLOAD_CAPTURE_ARM[\s\S]{0,400}setNotebookIdHint\(event\.data\.notebookId\)/,
+    'PAYLOAD_CAPTURE_ARM handler must call setNotebookIdHint when notebookId is present');
+
+  // Cleanup
+  setNotebookIdHint('');
+});

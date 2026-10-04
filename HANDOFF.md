@@ -7,14 +7,14 @@
 > Its extension is permanently `DISCONNECTED`, and its `/v1/models` always returns `data: []`.
 >
 > **Canonical Production Host:** `https://prod.gemini-web-bridge.workers.dev`  
-> **Current Version:** `v4.7.34`  
-> **Test Baseline:** 748 tests (738 pass, 0 fail, 10 skipped) — 100% green suite · KAN-242 Context Rotation, KAN-243 DO Alerting, KAN-236 20-Field Topological Builder, KAN-256 Multi-Session Registry & Load Balancing verified  
-> **Active Working Documents:** [`SESSION_HANDOFF-2026-10-04.md`](SESSION_HANDOFF-2026-10-04.md) · [`docs/SESSION_HANDOFF-2026-10-04.md`](docs/SESSION_HANDOFF-2026-10-04.md) · [`docs/verification/kan242-context-rotation-design.md`](docs/verification/kan242-context-rotation-design.md) · [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md) · [`docs/api-spec.md`](docs/api-spec.md)
+> **Current Version:** `v4.7.35`  
+> **Test Baseline:** 757 tests (747 pass, 0 fail, 10 skipped) — 100% green suite · KAN-242 Context Rotation, KAN-243 DO Alerting, KAN-236 20-Field Topological Builder, KAN-256 Multi-Session Registry & Load Balancing, KAN-204 horo_consult Stage Pipeline & Thai PDF, KAN-257 Configurable Queue Timeout verified  
+> **Active Working Documents:** [`docs/SESSION_HANDOFF-2026-10-04.md`](docs/SESSION_HANDOFF-2026-10-04.md) · [`docs/NEXT-STEPS.md`](docs/NEXT-STEPS.md) · [`docs/api-spec.md`](docs/api-spec.md) · [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md)
 
 ---
 
 > **Gemini Web Bridge (Edge AI Gateway & Hybrid Hub)**  
-> **Document Version:** `v4.7.34`  
+> **Document Version:** `v4.7.35`  
 > **Repository:** `gemini-web-bridge`  
 > **System Status:** Production Ready & Operational (Zero Known Defects)  
 > **Last Verified Date:** 2026-10-04
@@ -237,7 +237,7 @@ For `horo_consult`:
 | `check_bridge_health` | Direct | *(none)* | Comprehensive health check (DO, WSS, queue, grounding). |
 | `list_bridge_models` | Direct | *(none)* | Discovered browser model catalog. |
 | `set_bridge_scope` | Direct | `scope` (required) | Swaps active bridge scope. |
-| `horo_consult` | Typed | `query` (req), `birth_context`, `response_format` | BaZi consultation grounded in NotebookLM with optional PDF export. |
+| `horo_consult` | Typed | `query` (req), `stage` (`birth-chart`/`base-fortune`/`turning-points`/`forecast`/`additional-insights`/`full`), `birth_context`, `resume_reading`, `reading_id`, `response_format` | BaZi consultation grounded in NotebookLM. Atomic 5-stage pipeline (KAN-204) with DO persistence & `resume_reading`. Thai PDF export (Noto Sans Thai). See [`docs/api-spec.md §4.1`](docs/api-spec.md). |
 
 ---
 
@@ -267,6 +267,8 @@ Defined in `cloudflare-worker/tests/helpers/dom-signal.mjs`:
 | 2026-10-02 | **v4.7.28 – v4.7.32** | Two-way payload capture relay (`/debug/payload-capture`); classifier hardening. | 645 Green |
 | 2026-10-04 | **v4.7.33** | Production baseline; recovered fixtures; latency & context analysis; payload shape contract. | 659 Tests (649 pass, 0 fail, 10 skip) |
 | 2026-10-04 | **v4.7.34** | KAN-182 DO telemetry ring buffer (`/debug/telemetry`), `executeThroughExtension` timing telemetry, preflight disconnect capture, fixed `callGcpGemini` vlog interpolation. | **669 Tests (659 pass, 0 fail, 10 skip)** |
+| 2026-10-04 | **v4.7.34+** (commits `740544a`, `94ecb67`, `5ba0d81`) | KAN-256 Multi-Session Registry & Least-Loaded Load Balancing; KAN-236 20-Field Topological StreamGenerate Payload Builder (Mode A/B/C); KAN-243 DO Alarm Webhook Alerting (Discord/Slack, 300s debounce, G1 zero-leak). | **748 Tests (738 pass, 0 fail, 10 skip)** |
+| 2026-10-04 | **v4.7.35** (tag `v4.7.35`, commit `4a62d22`) | KAN-204 `horo_consult` atomic 5-stage pipeline (`birth-chart`/`base-fortune`/`turning-points`/`forecast`/`additional-insights`/`full`), DO persistence + `resume_reading`, Thai PDF (Noto Sans Thai), `prompts/` tracked as source of truth (`scripts/sync-horo-prompts.mjs` → `src/horo-prompts.js`). KAN-257 configurable `QUEUE_TIMEOUT_MS` (default 180s) + `503 Retry-After`. Payload capture verified DISARMED. | **757 Tests (747 pass, 0 fail, 10 skip)** |
 
 ---
 
@@ -287,7 +289,7 @@ Defined in `cloudflare-worker/tests/helpers/dom-signal.mjs`:
 
 ### 8.1 Automated Test Execution
 ```bash
-# Run complete test suite (748 tests, ~46s)
+# Run complete test suite (757 tests, ~46s)
 cd cloudflare-worker && npm test
 
 # Run DOM contract checks
@@ -352,7 +354,7 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
 1. **G1 (Zero-Token-Leak)**: Google CSRF token (`SNlM0e`) stays in volatile RAM within the browser's MAIN world. Never leaves the local host.
 2. **G2 (Strict Fail-Closed)**: No canned responses or mock responses. Offline extensions return HTTP 503; unverified groundings return JSON-RPC `-32000`.
 3. **G3 (Concurrency & Quota Control)**: 1 execution per session, max 10 queued waiters, idle-based collection deadline with strict `hardCap`.
-4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 748-test suite before pushing.
+4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 757-test suite before pushing.
 5. **G5 (Hybrid Transparency)**: GCP fallback emits `X-Provider: google-cloud-fallback` header; grounding-required requests are prohibited from falling back.
 
 ---
@@ -394,10 +396,25 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   - Least-loaded connection selection (`getLeastLoadedConnection(targetScope)`) with scope affinity and sticky saturation cap (4 turns max per sticky connection before rebalance).
   - Surviving connection teardown and independent message demuxing: closing one connection leaves others operational and healthy without aborting active streams.
   - G1 safe serialization via `getRegistrySnapshot()` exposing strictly non-sensitive telemetry (`instanceId`, `inFlightTurns`, `idleSeconds`, `epoch`, `scope`, `isStale`).
-- **Test Suite Baseline**: **748 tests (738 passed, 0 failed, 10 skipped)**. Full 100% Green Phase.
+- **KAN-257 (Configurable Queue Timeout)**: **100% COMPLETE & VERIFIED** (commit `e287748`).
+  - `QUEUE_TIMEOUT_MS` env var (default 180,000ms), replaces hardcoded value.
+  - Queue timeout returns `503` with `Retry-After` header (clear signal to callers).
+- **KAN-204 (`horo_consult` Atomic Stage Pipeline & Thai PDF)**: **100% COMPLETE & VERIFIED** (commit `4a62d22`, tag `v4.7.35`).
+  - Atomic 5-stage pipeline: `birth-chart` → `base-fortune` → `turning-points` → `forecast` → `additional-insights`. `stage="full"` runs all in sequence.
+  - DO persistence per `reading_id` (SHA-256 of `name + birth_context`). `resume_reading: true` skips already-grounded stages.
+  - Thai PDF export using Noto Sans Thai font. `structuredContent.pdf_url` returned when `response_format="pdf"`.
+  - `prompts/0*.md` is source of truth; `scripts/sync-horo-prompts.mjs` generates `src/horo-prompts.js` — never edit generated file directly.
+  - Stage prompts assert guardrail presence at build time (method-only opener / honesty clause / citation clause / Thai clause).
+  - Full spec: [`docs/api-spec.md`](docs/api-spec.md) §4.1.
+- **Test Suite Baseline**: **757 tests (747 passed, 0 failed, 10 skipped)**. Full 100% Green Phase. _(verified live 2026-10-04)_
 - **Git & Deployment Status**:
   - `ed6c337`: KAN-242 context rotation & T4 default scope
   - `a63e1b9`: KAN-242 build tooling dotenv hardening
   - `7a4effa`: KAN-242 handoff synchronization
   - `5ba0d81`: KAN-243 DO alarm webhook alerting
-- See detailed log in [`SESSION_HANDOFF-2026-10-04.md`](SESSION_HANDOFF-2026-10-04.md).
+  - `740544a`: KAN-256 multi-session registry & least-loaded balancing
+  - `94ecb67`: KAN-236 20-field topological StreamGenerate builder
+  - `e287748`: KAN-257 configurable QUEUE_TIMEOUT_MS
+  - `5640d70` → `4a62d22`: KAN-204 stage pipeline, Thai PDF, version 4.7.35
+  - `98ffed7`: KAN-204 docs refresh (NEXT-STEPS HANDOVER state, payload capture DISARMED)
+- See detailed log in [`docs/SESSION_HANDOFF-2026-10-04.md`](docs/SESSION_HANDOFF-2026-10-04.md) and [`docs/NEXT-STEPS.md`](docs/NEXT-STEPS.md) (HANDOVER section).

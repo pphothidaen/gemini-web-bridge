@@ -2783,7 +2783,12 @@ export class GeminiBridgeDO extends DurableObject {
   resolveNotebookIdFromScope(scope) {
     const target = (typeof scope === "string" && scope.startsWith("notebook:"))
       ? scope
-      : this.targetNotebookScope;
+      // Fall back to the last known target scope, then to the canonical default
+      // so that PAYLOAD_CAPTURE_ARM always carries a valid hint even when the
+      // current scope is "app" and horo_consult hasn't run yet (targetNotebookScope
+      // is null).  The default is stable and G1-safe — it is the public notebook
+      // id already embedded in HORO_CONSULT_DEFAULT_SCOPE, not a token.
+      : (this.targetNotebookScope || HORO_CONSULT_DEFAULT_SCOPE);
     if (typeof target !== "string") return null;
     const m = target.match(/^notebook:([0-9a-fA-F-]{8,})$/);
     return m ? m[1] : null;
