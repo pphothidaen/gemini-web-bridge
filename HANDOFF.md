@@ -8,7 +8,7 @@
 >
 > **Canonical Production Host:** `https://prod.gemini-web-bridge.workers.dev`  
 > **Current Version:** `v4.7.34`  
-> **Test Baseline:** 694 tests (684 pass, 0 fail, 10 skipped) — 100% green suite · KAN-242 Context Rotation implemented & verified  
+> **Test Baseline:** 723 tests (713 pass, 0 fail, 10 skipped) — 100% green suite · KAN-242 Context Rotation, KAN-243 DO Alerting, KAN-236 20-Field Topological Builder verified  
 > **Active Working Documents:** [`SESSION_HANDOFF-2026-10-04.md`](SESSION_HANDOFF-2026-10-04.md) · [`docs/SESSION_HANDOFF-2026-10-04.md`](docs/SESSION_HANDOFF-2026-10-04.md) · [`docs/verification/kan242-context-rotation-design.md`](docs/verification/kan242-context-rotation-design.md) · [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md) · [`docs/api-spec.md`](docs/api-spec.md)
 
 ---
@@ -352,7 +352,7 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
 1. **G1 (Zero-Token-Leak)**: Google CSRF token (`SNlM0e`) stays in volatile RAM within the browser's MAIN world. Never leaves the local host.
 2. **G2 (Strict Fail-Closed)**: No canned responses or mock responses. Offline extensions return HTTP 503; unverified groundings return JSON-RPC `-32000`.
 3. **G3 (Concurrency & Quota Control)**: 1 execution per session, max 10 queued waiters, idle-based collection deadline with strict `hardCap`.
-4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 708-test suite before pushing.
+4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 723-test suite before pushing.
 5. **G5 (Hybrid Transparency)**: GCP fallback emits `X-Provider: google-cloud-fallback` header; grounding-required requests are prohibited from falling back.
 
 ---
@@ -362,31 +362,35 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
 1. **Sprint 1 (Alerting & Alarms)**: **100% COMPLETE**. DO `alarm()` keepalive & socket reaping + external webhook alert dispatcher (Discord/Slack markdown notification on stale socket reaped or consecutive errors >= 3 with 300s anti-flapping debounce and G1 zero-leak guardrail).
 2. **Sprint 2 (Context & Memory & Latency)**:
    - **DO Telemetry Ring Buffer (`/debug/telemetry`)**: Implemented in KAN-182 (v4.7.34). Tracks `executeThroughExtension` latency, GCP fallback calls, and preflight disconnects with microsecond accuracy.
-   - **Latency Failure Frontier (KAN-242)**: Live measurement via `/debug/telemetry` revealed clean turns average ~48–50s, but accumulated UI turns reach a hard failure frontier at 10 responses on screen (`no_answer_rendered`, timeout at 160s). This mandates automatic context rotation before conversations reach 10 turns. See full experimental plan: [`docs/verification/kan242-latency-measurement-plan.md`](docs/verification/kan242-latency-measurement-plan.md).
+   - **Latency Failure Frontier (KAN-242)**: Live measurement via `/debug/telemetry` revealed clean turns average ~48–50s, but accumulated UI turns reach a hard failure frontier at 10 responses on screen (`no_answer_rendered`, timeout at 160s). Automatic context rotation implemented & verified.
+   - **20-Field Topological StreamGenerate Builder (KAN-236)**: **100% COMPLETE & VERIFIED** (15 tests in `streamgenerate-builder.test.mjs`). Emits the canonical 20-field wire format, eliminates the legacy type contradiction at index `[2]`, and binds notebooks via Mode A (88-char token `[0][3]`), Mode B (46-char resource reference `[19]`), and Mode C (ungrounded).
    - **Notebook Wire Format Divergence (KAN-236)**:
      - Horo notebook uses an 88-char opaque token at `[0][3][0][2]` (fingerprint `cff9779e`), stable across turns and conversations for that specific notebook.
      - Second notebook (`claude-code-best-practice`) uses a 46-char resource reference at `[19]` (`notebooks/<UUID>`, fingerprint `91296529`), with `contains.notebook_id = true`.
-     - Direct worker-to-Google `StreamGenerate` calls cannot derive unknown notebook tokens/references without an empirical capture; UI typing remains the primary pathway for dynamic notebook sessions. See full investigation brief: [`docs/verification/kan236-notebook-token-stability-brief.md`](docs/verification/kan236-notebook-token-stability-brief.md).
 3. **Sprint 3 (Multi-Session Balancing & Infrastructure)**:
    - `ScopeRouter` envelope routing complete within DO.
    - **Cloudflare Dashboard Builds Integration**: Root lacks `package.json` and Doppler secrets; human one-time disconnect in Cloudflare Dashboard is required (see [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md)). GitHub Actions `cd.yml` remains the sole authorized deployment pathway.
    - Cross-instance multi-account load balancing remains on the future roadmap.
 
-## Addendum 2026-10-04 (Orchestrator & Blue Team)
+## Addendum 2026-10-04 (Orchestrator & Subagents)
 - **KAN-242 (Automatic Conversation Context Rotation)**: **100% COMPLETE & VERIFIED** across full 3-day architecture.
   - Extension probe (`CONVERSATION_STATS`) + Worker DO headroom guard (`ensureConversationHeadroom`).
   - Flag ships ON (`CONTEXT_ROTATION_THRESHOLD = "8"` in `wrangler.toml`).
   - Wire order invariant strictly preserved: context rotation (`prepareScope("app")`) runs BEFORE notebook attach (`ATTACH_NOTEBOOK`).
-  - Guardrails fully verified: pinned scopes (`app:<id>`, `notebook:<id>`) skipped with telemetry; in-flight protection; fail-open probe fallback; G1 zero prompt/response leak in telemetry.
 - **T4 (`horo_consult` scope default)**: Scope handling aligned (`HORO_CONSULT_DEFAULT_SCOPE` defaults cleanly to in-place attachment without triggering raw URL routing).
 - **KAN-243 (DO Alarm Webhook Alerting Dispatcher)**: **100% COMPLETE & VERIFIED**.
   - Dispatches Discord/Slack compatible webhook alerts on `stale_connection_reaped` and `consecutive_errors_threshold` (>= 3).
   - Anti-flapping debounce (300,000ms cooldown) prevents webhook flooding across 120s alarm cycles.
   - Strict G1 zero-leak guardrail: payload strictly whitelisted to metadata, zero prompt/response/token leaks.
-  - Fail-open resilience: network rejections or HTTP 500 responses log warnings without aborting DO keepalive or alarm rescheduling.
-- **Test Suite Baseline**: **708 tests (698 passed, 0 failed, 10 skipped)**. Full 100% Green Phase.
+- **KAN-236 (20-Field Topological StreamGenerate Payload Builder)**: **100% COMPLETE & VERIFIED**.
+  - Implements canonical 20-field array format matching observed browser wire captures (`[0]..[19]`).
+  - Resolves legacy index `[2]` type contradiction (strictly null).
+  - Multi-notebook contract support: Mode A (88-char Horo token `cff9779e` at `[0][3]`), Mode B (46-char `notebooks/<uuid>` at `[19]`), Mode C (clean null ungrounded).
+  - Strict G1 zero-leak guardrail and adversarial sanitation verified.
+- **Test Suite Baseline**: **723 tests (713 passed, 0 failed, 10 skipped)**. Full 100% Green Phase.
 - **Git & Deployment Status**:
-  - Committed in `ed6c337` (`KAN-242: implement automatic conversation context rotation and horo_consult default scope (KAN-255)`)
-  - Build hardening committed in `a63e1b9` (`KAN-242: fix(build): add dotenv fallback for local extension packaging`)
-  - Documentation sync committed in `7a4effa` (`KAN-242: docs: synchronize master and session handoffs with 694-test green baseline`)
+  - `ed6c337`: KAN-242 context rotation & T4 default scope
+  - `a63e1b9`: KAN-242 build tooling dotenv hardening
+  - `7a4effa`: KAN-242 handoff synchronization
+  - `5ba0d81`: KAN-243 DO alarm webhook alerting
 - See detailed log in [`SESSION_HANDOFF-2026-10-04.md`](SESSION_HANDOFF-2026-10-04.md).

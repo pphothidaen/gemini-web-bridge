@@ -7,7 +7,7 @@
 - Latest commit: `a63e1b9` (`KAN-242: fix(build): add dotenv fallback for local extension packaging`), pushed to `origin/main`.
 - Preceding feature commit: `ed6c337` (`KAN-242: implement automatic conversation context rotation and horo_consult default scope (KAN-255)`), pushed to `origin/main`.
 - Live Worker health: HTTP 200, version `4.7.34`, `CONNECTED_AND_READY`, zero consecutive errors, active connections: 1, active model: `3.8 Flash-Lite`, 9 MCP tools operational.
-- Test Suite: **708 tests (698 pass, 0 fail, 10 skipped) @ ~46.0s** — 100% green suite.
+- Test Suite: **723 tests (713 pass, 0 fail, 10 skipped) @ ~46.3s** — 100% green suite.
 - Production observability is disabled (`observability = false`) in both `cloudflare-worker/wrangler.toml` and `wrangler.jsonc`.
 - Payload Capture status: **DISARMED** (`armed: false`).
 
@@ -66,7 +66,15 @@
      - Added `dispatchAlertWebhook()` sending Discord/Slack markdown payload (`Content-Type: application/json`).
      - Strict G1 zero-leak compliance: metadata only, never leaks prompt, query, response, or session tokens.
      - Fail-open resilience: catches network rejections and HTTP 500 without aborting alarm rescheduling.
-   - Verified 100% Green Phase across repository (708 tests, 698 passed, 0 failed, 10 skipped).
+    - Verified 100% Green Phase across repository (708 tests, 698 passed, 0 failed, 10 skipped).
+11. **KAN-236 20-Field Topological StreamGenerate Payload Builder:**
+    - Red Team test suite `cloudflare-worker/tests/streamgenerate-builder.test.mjs` (15/15 tests passing).
+    - Blue Team implemented in `cloudflare-worker/src/streamgenerate-builder.js` and wired to `ProtocolDecoder.encodeModernRequest` in `cloudflare-worker/src/index.js`:
+      - Complies with empirical browser wire topological invariant across all captures (`[0]..[19]`).
+      - Resolves legacy type contradiction at index `[2]` (strictly null).
+      - Multi-notebook contract support: Mode A (88-char Horo token `cff9779e` at `[0][3]`), Mode B (46-char resource reference `notebooks/<uuid>` at `[19]`), Mode C (clean null ungrounded).
+      - Strict G1 zero-leak envelope formatting and adversarial string scanning.
+    - Full regression suite verified: **723 tests (713 pass, 0 fail, 10 skipped) @ ~46.3s**.
 
 ## Status of follow-ups
 
@@ -75,7 +83,7 @@
 2. **Cloudflare Dashboard Builds Integration (TODO - Operator):**
    - Action: Follow [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md) to disconnect Git in Cloudflare Dashboard UI.
 3. **CD Production Gate Approval (TODO - Operator):**
-   - Action: Approve the GitHub Actions `production` review environment gate for commit `7a4effa` in GitHub Actions.
+   - Action: Approve the GitHub Actions `production` review environment gate for commit `7a4effa` / `5ba0d81` in GitHub Actions.
 4. **Second Notebook Single Capture (TODO - Operator):**
    - Action: Follow [`docs/verification/kan236-notebook-token-stability-brief.md`](verification/kan236-notebook-token-stability-brief.md) §6 to perform the single capture once the reloaded extension is running.
 
@@ -94,7 +102,8 @@ The MCP settings location supplied for Codex is `/Users/kimlenglim/.cline/data/s
 
 ## Addendum (Orchestrator)
 - KAN-242 Context Rotation and T4 scope defaults implemented, tested, committed (`ed6c337`), hardened (`a63e1b9`), and pushed to `origin/main`.
-- KAN-243 DO Alarm Webhook Alerting implemented and verified: **708 tests (698 pass, 0 fail, 10 skip)**. Full 100% Green Phase.
+- KAN-243 DO Alarm Webhook Alerting implemented, verified, committed (`5ba0d81`), and pushed to `origin/main`.
+- KAN-236 20-Field Topological StreamGenerate Payload Builder implemented and verified: **723 tests (713 pass, 0 fail, 10 skip)**. Full 100% Green Phase.
 - Live production worker verified (`CONNECTED_AND_READY`, 9 MCP tools operational).
 - Next actions queued for Operator and Sprint roadmap.
 

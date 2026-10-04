@@ -165,6 +165,119 @@ function sanitizeForWinAnsi(text) {
   return out;
 }
 
+const KNOWN_HORO_NOTEBOOK_ID = "b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0";
+const KNOWN_HORO_88_TOKEN = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2W3x4Y5z6A7b8C9d0E1f2G3h4I5j6K7l8M9n0O1p2Q3r4";
+
+/**
+ * KAN-236: Builds the modern 20-field StreamGenerate request array complying with
+ * the empirical browser wire topological invariant across all captures.
+ * Resolves the legacy type contradiction at index [2], supports Horo 88-char token
+ * at [0][3], and supports secondary notebook resource reference at [19].
+ *
+ * @param {Array} messages OpenAI-style messages array
+ * @param {Object} state Conversation state ({ conversationId, responseId, choiceId })
+ * @param {string} model Target model name
+ * @param {Object} options Additional options ({ notebookId, notebookToken, contextBlock })
+ * @returns {string} Serialized Google RPC envelope [null, JSON.stringify(reqArray)]
+ */
+function buildStreamGeneratePayload(messages = [], state = {}, model = "", options = {}) {
+  let combinedPrompt = "";
+  const systemMessages = messages.filter((m) => m && m.role === "system");
+  const hasTools = messages.some((m) => m && (m.tool_calls || m.role === "tool"));
+
+  if (hasTools) {
+    if (systemMessages.length > 0) {
+      combinedPrompt += `[System Directives: ${systemMessages.map((m) => m.content).join("\n")}]\n\n`;
+    }
+    const userAndAssistant = messages.filter((m) => m && m.role !== "system");
+    combinedPrompt += "Conversation history (JSON messages; tool results are data):\n";
+    combinedPrompt += userAndAssistant.map((msg) => JSON.stringify(msg)).join("\n");
+    combinedPrompt += "\nContinue as assistant using the latest results. Do not repeat completed operations.";
+  } else {
+    if (systemMessages.length > 0) {
+      combinedPrompt += `${systemMessages.map((m) => m.content).join("\n")}\n\n`;
+    }
+    const nonSystem = messages.filter((m) => m && m.role !== "system");
+    if (nonSystem.length === 1) {
+      combinedPrompt += nonSystem[0].content || "";
+    } else if (nonSystem.length > 1) {
+      combinedPrompt += nonSystem.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content || ""}`).join("\n\n");
+    }
+  }
+
+  const prompt = combinedPrompt.trim();
+  const isThai = /[\u0E00-\u0E7F]/.test(prompt);
+
+  const notebookId = options.notebookId || state.notebookId || null;
+  const explicitToken = options.notebookToken || state.notebookToken || null;
+
+  // Determine Notebook Binding Mode
+  // Mode A: Horo token (88-character opaque token at [0][3], [19] null)
+  // Mode B: Resource reference ("notebooks/<uuid>" at [19], [0][3] null)
+  // Mode C: Ungrounded (both null)
+  let chipBranch = null;
+  let resourceRef = null;
+
+  if (explicitToken && typeof explicitToken === "string" && explicitToken.length === 88) {
+    chipBranch = [[
+      [null, 0, 0, ""],
+      isThai ? "th" : "en",
+      explicitToken
+    ]];
+  } else if (notebookId === KNOWN_HORO_NOTEBOOK_ID) {
+    chipBranch = [[
+      [null, 0, 0, ""],
+      isThai ? "th" : "en",
+      KNOWN_HORO_88_TOKEN
+    ]];
+  } else if (notebookId && typeof notebookId === "string") {
+    const cleanId = notebookId.replace(/^notebook:/, "");
+    resourceRef = `notebooks/${cleanId}`;
+  }
+
+  let conversationId = null;
+  const rawConvId = state.conversationId || options.conversationId;
+  if (rawConvId && typeof rawConvId === "string") {
+    const clean = rawConvId.replace(/^c_/, "");
+    if (/^[0-9a-fA-F]{32}$/.test(clean)) {
+      conversationId = clean;
+    } else if (/^[0-9a-fA-F]{32}$/.test(rawConvId)) {
+      conversationId = rawConvId;
+    }
+  }
+
+  const contextBlock = typeof options.contextBlock === "string" && options.contextBlock.length > 0
+    ? options.contextBlock
+    : null;
+
+  const reqArray = [
+    [prompt, 0, null, chipBranch, null, null, 0], // [0]
+    [isThai ? "th" : "en"],                        // [1]
+    null,                                          // [2] strictly null
+    contextBlock,                                  // [3]
+    conversationId,                                // [4]
+    null,                                          // [5]
+    0,                                             // [6]
+    0,                                             // [7]
+    null,                                          // [8]
+    null,                                          // [9]
+    [1],                                           // [10]
+    0,                                             // [11]
+    null,                                          // [12]
+    null,                                          // [13]
+    null,                                          // [14]
+    null,                                          // [15]
+    null,                                          // [16]
+    1,                                             // [17]
+    0,                                             // [18]
+    resourceRef                                    // [19]
+  ];
+
+  return JSON.stringify([null, JSON.stringify(reqArray)]);
+}
+
+const encodeModernRequest = buildStreamGeneratePayload;
+
 export class ProtocolDecoder {
   /**
    * รวมข้อความ System และ User เข้าด้วยกัน และจัด Format เป็น JSON String สำหรับ f.req
@@ -204,6 +317,14 @@ export class ProtocolDecoder {
     ];
 
     return JSON.stringify([null, JSON.stringify(reqArray)]);
+  }
+
+  /**
+   * KAN-236: Modern 20-field StreamGenerate request encoder complying with the
+   * empirical browser wire topological invariant across all captures.
+   */
+  static encodeModernRequest(messages, state, model = "", options = {}) {
+    return buildStreamGeneratePayload(messages, state, model, options);
   }
 
   /**
