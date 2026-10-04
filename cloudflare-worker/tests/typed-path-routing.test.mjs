@@ -30,22 +30,38 @@ const SOURCE = fs.readFileSync(
   'utf8'
 );
 
-/** The executeThroughExtension call that serves the MCP SDLC tools. */
-function mcpCallSite() {
-  const at = SOURCE.indexOf('requireTypedPath: true');
-  assert.ok(at > 0, 'the MCP tool call site must force the typed path');
-  const start = SOURCE.lastIndexOf('executeThroughExtension(', at);
-  const end = SOURCE.indexOf(');', at);
-  return SOURCE.slice(start, end);
+/** All executeThroughExtension call sites that serve horo_consult. There are
+ *  two since the KAN-204 stage pipeline: the single-call MCP handler and the
+ *  per-stage pipeline runner. Both must force the typed path. */
+function typedPathCallSites() {
+  const sites = [];
+  let from = 0;
+  while (true) {
+    const at = SOURCE.indexOf('requireTypedPath: true', from);
+    if (at < 0) break;
+    const start = SOURCE.lastIndexOf('executeThroughExtension(', at);
+    const end = SOURCE.indexOf(');', at);
+    sites.push(SOURCE.slice(start, end));
+    from = end;
+  }
+  assert.ok(sites.length >= 2, 'the MCP handler and the stage pipeline call sites must both exist');
+  return sites;
 }
 
 test('every MCP SDLC tool goes through the typed path, not just the grounded one', () => {
-  const call = mcpCallSite();
-  assert.match(call, /requireTypedPath:\s*true/,
-    'requireTypedPath must be unconditional here: the four ungrounded tools are ' +
-    'the ones that truncate, so requireGrounding alone would not cover them');
-  assert.match(call, /requireGrounding:\s*Boolean\(notebookGrounding\)/,
+  for (const call of typedPathCallSites()) {
+    assert.match(call, /requireTypedPath:\s*true/,
+      'requireTypedPath must be unconditional here: the four ungrounded tools are ' +
+      'the ones that truncate, so requireGrounding alone would not cover them');
+  }
+  const handlerCall = typedPathCallSites().find((call) => /Boolean\(notebookGrounding\)/.test(call));
+  assert.ok(handlerCall, 'the single-call handler site must exist');
+  assert.match(handlerCall, /requireGrounding:\s*Boolean\(notebookGrounding\)/,
     'the grounding requirement is unchanged and still expressed for what it is');
+  const pipelineCall = typedPathCallSites().find((call) => /Boolean\(wantsNotebookAttach\)/.test(call));
+  assert.ok(pipelineCall, 'the stage pipeline call site must exist');
+  assert.match(pipelineCall, /requireGrounding:\s*Boolean\(wantsNotebookAttach\)/,
+    'the stage pipeline grounds every stage off the same attach decision, not a flag that could drift');
 });
 
 test('useTypedOnly honours BOTH reasons', () => {

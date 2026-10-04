@@ -14,6 +14,7 @@ import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
 import * as pdfLib from 'pdf-lib';
 import * as promptTemplates from '../src/prompt-templates.js';
+import * as horoPrompts from "../src/horo-prompts.js";
 import { makeCtx } from './helpers/fake-ctx.mjs';
 
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
@@ -21,6 +22,7 @@ const context = {
   ...catalog,
   ...emulator,
   ...promptTemplates,
+  ...horoPrompts,
   ...pdfLib,
   DurableObject: class {},
   crypto,

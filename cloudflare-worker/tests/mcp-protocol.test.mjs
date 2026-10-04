@@ -6,6 +6,7 @@ import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
 import * as pdfLib from 'pdf-lib';
 import * as promptTemplates from '../src/prompt-templates.js';
+import * as horoPrompts from "../src/horo-prompts.js";
 import { makeCtx } from './helpers/fake-ctx.mjs';
 
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
@@ -16,6 +17,7 @@ const context = {
   ...catalog,
   ...emulator,
   ...promptTemplates,
+  ...horoPrompts,
   ...pdfLib,
   DurableObject: class {},
   crypto,
@@ -835,8 +837,16 @@ test('horo_consult: listed in tools/list with BaZi schema (query required, respo
   assert.ok(tool, 'horo_consult must be listed in tools/list');
   assert.ok(tool.description.includes('BaZi'));
 
-  assert.deepEqual(tool.inputSchema.required, ['query']);
+  // KAN-204 stage mode: `query` is required only in the legacy free-form mode
+  // (validated at runtime); stage mode is templated from prompts/0*.md and
+  // needs birth_context instead, so the schema no longer hard-requires query.
+  assert.deepEqual(tool.inputSchema.required, undefined);
   assert.equal(tool.inputSchema.properties.query.type, 'string');
+  assert.deepEqual(
+    tool.inputSchema.properties.stage.enum,
+    ['birth-chart', 'base-fortune', 'turning-points', 'forecast', 'additional-insights', 'full'],
+    'stage must offer the five atomic stages plus the full pipeline'
+  );
   assert.equal(tool.inputSchema.properties.birth_context.type, 'object');
   const bcProps = tool.inputSchema.properties.birth_context.properties;
   for (const p of ['birth_datetime', 'longitude', 'utc_offset_hours', 'day_master', 'five_elements', 'favorable_elements']) {

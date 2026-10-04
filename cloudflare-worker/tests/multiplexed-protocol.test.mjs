@@ -22,6 +22,7 @@ import * as modelCatalog from '../src/model-catalog.js';
 import * as liveness from '../src/liveness.js';
 import * as geminiRefusal from '../src/gemini-refusal.js';
 import * as promptTemplates from '../src/prompt-templates.js';
+import * as horoPrompts from "../src/horo-prompts.js";
 import * as protocol from '../../extension-cloudflare/protocol-messages.js';
 import { makeCtx } from './helpers/fake-ctx.mjs';
 
@@ -41,6 +42,7 @@ const sharedContext = {
   ...liveness,
   ...geminiRefusal,
   ...promptTemplates,
+  ...horoPrompts,
   DurableObject: class {},
   // Workers-runtime-accurate crypto: WebCrypto only. Node's global crypto also
   // exposes createHash/createHmac/Cipheriv, which do NOT exist in workerd —

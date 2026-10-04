@@ -20,6 +20,7 @@ import vm from 'node:vm';
 import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
 import * as promptTemplates from '../src/prompt-templates.js';
+import * as horoPrompts from "../src/horo-prompts.js";
 import { makeCtx } from './helpers/fake-ctx.mjs';
 
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
@@ -27,6 +28,7 @@ const context = {
   ...catalog,
   ...emulator,
   ...promptTemplates,
+  ...horoPrompts,
   DurableObject: class {},
   crypto,
   Request,
@@ -189,7 +191,9 @@ test('tools/list exposes the HoroConsultant notebook as the horo_consult scope d
   const listed = await res.json();
   const horo = listed.result.tools.find(t => t.name === 'horo_consult');
   assert.equal(horo.inputSchema.properties.scope.default, 'notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0');
-  assert.ok(!horo.inputSchema.required.includes('scope'));
+  // KAN-204 stage mode removed the hard `required` list; neither query nor
+  // scope may be schema-mandated.
+  assert.ok(!horo.inputSchema.required || !horo.inputSchema.required.includes('scope'));
 
   // The schema default is advisory only: an explicit scope must still win at
   // runtime (no notebook grounding claimed, GCP fallback stays reachable).

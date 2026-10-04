@@ -11,8 +11,15 @@ import {
   REFUSAL_KIND
 } from "./gemini-refusal.js";
 import { buildToolPrompt } from "./prompt-templates.js";
+import {
+  HORO_STAGE_IDS,
+  HORO_STAGE_HEADINGS,
+  buildHoroStagePrompt,
+  assembleHoroReading
+} from "./horo-prompts.js";
 import { DurableObject } from "cloudflare:workers";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
 import { 
   buildToolSystemPrompt, 
   createToolCallTransformer,
@@ -167,6 +174,15 @@ function sanitizeForWinAnsi(text) {
 
 const KNOWN_HORO_NOTEBOOK_ID = "b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0";
 const KNOWN_HORO_88_TOKEN = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2W3x4Y5z6A7b8C9d0E1f2G3h4I5j6K7l8M9n0O1p2Q3r4";
+
+// Module-level since the KAN-204 stage pipeline: the pipeline runs as a class
+// method, outside the handleSingleMcp scope where these used to live.
+// The notebook's canonical scope id, used to report the scope that served a
+// horo_consult answer.
+const HORO_CONSULT_DEFAULT_SCOPE = "notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0";
+// KAN-177: the notebook's DISPLAY NAME, used by the attach flow (matched
+// exactly, never by list position — see the attach dialog notes below).
+const HORO_CONSULT_NOTEBOOK_NAME = "Horo";
 
 /**
  * KAN-236: Builds the modern 20-field StreamGenerate request array complying with
@@ -3081,11 +3097,400 @@ export class GeminiBridgeDO extends DurableObject {
    * non-CP1252 glyphs are sanitized to "?" (embedding a Thai TTF is not
    * feasible without bundling a font file into the worker).
    */
-  async buildAnswerPdf(text) {
+  // ─── horo_consult atomic stage pipeline (KAN-204) ───
+  //
+  // prompts/ split the fate book into five atomic requests after measuring
+  // that the whole document in one request grounds with 0 citations while a
+  // narrow question grounds with 5. This orchestrator runs the five stage
+  // prompts (generated from prompts/0*.md into horo-prompts.js) as separate
+  // notebook-attached typed-path calls, verifies grounding per stage,
+  // persists each answer in DO storage, and assembles the document.
+  //
+  // Invariants carried over from the single-call path: G-1 (no GCP fallback —
+  // a fallback provider cannot see the notebook, so its answer is ungrounded
+  // by construction), G-4 (the chart arrives in birth_context and is never
+  // asserted in the prompt), attach-in-place, typed-path only. The notebook
+  // is consumed per message, so every stage — including a retry — is its own
+  // attach + round trip.
+
+  async _horoReadingId(name, birthContext) {
+    const canonical = JSON.stringify([name, birthContext]);
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+    return Array.from(new Uint8Array(digest))
+      .slice(0, 8)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  _horoStageParams(args) {
+    const bc = (args.birth_context && typeof args.birth_context === "object") ? args.birth_context : {};
+    const birthDatetime = String(bc.birth_datetime || "");
+    const [birthDate, birthTime = ""] = birthDatetime.split("T");
+    const name = (typeof args.name === "string" && args.name.trim()) ||
+      (typeof bc.name === "string" && bc.name.trim()) || "ผู้ถาม";
+    const currentYear = new Date().getUTCFullYear();
+    const birthContextLine = Object.entries(bc)
+      .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== "")
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(", ");
+    return {
+      NAME: name,
+      BIRTH_DATE: birthDate,
+      BIRTH_TIME: birthTime.slice(0, 5),
+      BIRTH_PLACE: typeof bc.birth_place === "string" ? bc.birth_place.trim() : "",
+      LONGITUDE: bc.longitude !== undefined && bc.longitude !== null ? String(bc.longitude) : "",
+      BIRTH_CONTEXT: birthContextLine,
+      FROM_YEAR: Number(args.from_year) > 0 ? Number(args.from_year) : currentYear,
+      TO_YEAR: Number(args.to_year) > 0 ? Number(args.to_year) : currentYear + 4
+    };
+  }
+
+  async _runHoroStageCall({ requestId, prompt, wantsNotebookAttach }) {
+    // One stage = one attach + one typed-path round trip + one grounding
+    // verify. Health bookkeeping mirrors the single-call path so operators
+    // see pipeline attach/grounding failures in the same place.
+    await this.ensureConversationHeadroom({ requestId });
+    if (wantsNotebookAttach) {
+      const attach = await this.runNotebookAttach({
+        requestId: `${requestId}:notebook-attach`,
+        notebookName: HORO_CONSULT_NOTEBOOK_NAME
+      });
+      this.notebookAttachState = {
+        ...this.notebookAttachState,
+        status: attach.ok ? "ok" : "failed",
+        at: new Date().toISOString(),
+        reason: attach.ok ? null : (attach.reason || attach.step || "unknown"),
+        failures: attach.ok
+          ? this.notebookAttachState.failures
+          : this.notebookAttachState.failures + 1
+      };
+      if (!attach.ok) {
+        this.recordHealthError(`notebook_attach_failed:${attach.reason}@${attach.step}`);
+        return {
+          ok: false,
+          reason: "notebook_attach_failed",
+          detail: `step=${attach.step || "unknown"} reason=${attach.reason || "unknown"}`
+        };
+      }
+    }
+
+    const targetModel = recommendedModel(this.dynamicModels) || this.activeBrowserModel || (this.dynamicModels[0]?.id) || "gemini-3.8-flash";
+    let resultText;
+    try {
+      resultText = await this.executeThroughExtension(
+        [{ role: "user", content: prompt }],
+        null,
+        targetModel,
+        // G-1: no fallback in any failure branch — the stage prompt is built
+        // around the notebook, so an answer from any other provider is
+        // ungrounded by construction and must fail, not drift.
+        { requireGrounding: Boolean(wantsNotebookAttach), requireTypedPath: true }
+      );
+    } catch (err) {
+      return { ok: false, reason: "execution_failed", detail: err.message };
+    }
+
+    const usableText = ProtocolDecoder._stripPrivateLink(resultText);
+    if (!usableText) {
+      return { ok: false, reason: "empty_response" };
+    }
+    resultText = usableText;
+
+    if (!wantsNotebookAttach) return { ok: true, text: resultText, citationCount: null };
+
+    const grounding = await this.verifyNotebookGrounding({ requestId: `${requestId}:grounding` });
+    this.notebookAttachState = {
+      ...this.notebookAttachState,
+      groundingStatus: grounding.verified ? "grounded" : "ungrounded",
+      groundingAt: new Date().toISOString(),
+      groundingReason: grounding.verified ? null : (grounding.reason || "unknown")
+    };
+    if (!grounding.verified) {
+      this.recordHealthError(`notebook_grounding_unverified:${grounding.reason}`);
+      return {
+        ok: false,
+        reason: "no_citations_in_response",
+        detail: grounding.reason || "unknown",
+        citationCount: grounding.chipCount
+      };
+    }
+    return { ok: true, text: resultText, citationCount: grounding.chipCount, citedSources: grounding.sources };
+  }
+
+  /**
+   * Run one horo_consult atomic stage or the full five-stage reading.
+   * Returns the JSON-RPC response object (the caller wraps it in { response }).
+   */
+  async runHoroPipeline({ id, args, url, applyScope }) {
+    const stageId = args.stage; // a HORO_STAGE_IDS member, or "full"
+    const wantsDefaultNotebook =
+      !(typeof args.scope === "string" && args.scope.trim()) ||
+      args.scope.trim() === HORO_CONSULT_DEFAULT_SCOPE;
+    const wantsNotebookAttach =
+      wantsDefaultNotebook ||
+      (typeof args.scope === "string" && args.scope.trim().startsWith("app:"));
+
+    const params = this._horoStageParams(args);
+    const fingerprint = await this._horoReadingId(params.NAME, args.birth_context || {});
+    const readingId = (typeof args.reading_id === "string" && args.reading_id.trim())
+      ? args.reading_id.trim()
+      : fingerprint;
+    const storageKey = `horo_reading:${readingId}`;
+    let record = await this.ctx.storage.get(storageKey) || null;
+    if (record && record.fingerprint && record.fingerprint !== fingerprint) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32602,
+          message: `reading_id '${readingId}' belongs to a different name/birth_context. Omit reading_id to start a new reading, or reuse it with the original birth_context.`
+        }
+      };
+    }
+    if (!record) {
+      record = {
+        fingerprint,
+        name: params.NAME,
+        title: (typeof args.title === "string" && args.title.trim()) || `หนังสือดวงชะตาของ${params.NAME}`,
+        stages: {},
+        createdAt: new Date().toISOString()
+      };
+    }
+    record.updatedAt = new Date().toISOString();
+
+    // Scope handling mirrors the single-call path (KAN-177): attach the
+    // notebook in place, remember the pre-call scope, restore it when the
+    // pipeline settles — including on early returns.
+    const scopeBeforeCall = this.currentScope;
+    let switchedScope = false;
+    const restorePreCallScope = async () => {
+      if (!switchedScope || !scopeBeforeCall) return;
+      try {
+        const restored = await applyScope(scopeBeforeCall);
+        if (!restored.ok) {
+          console.warn(`[Bridge DO] Scope restore to '${scopeBeforeCall}' failed: ${restored.message}`);
+        }
+      } catch (restoreErr) {
+        console.warn(`[Bridge DO] Scope restore to '${scopeBeforeCall}' threw: ${restoreErr.message}`);
+      }
+    };
+    const effectiveScope = wantsDefaultNotebook ? null : args.scope;
+
+    const refinement = typeof args.query === "string" && args.query.trim() ? args.query.trim() : "";
+
+    // Declared here, not inside runPipeline: the result annotations below run
+    // after runPipeline returns and still need the per-stage outcomes.
+    const stageStatus = {};
+
+    const runPipeline = async () => {
+      if (!this.isExtensionReady()) await this.waitForExtension();
+      if (!this.isExtensionReady()) {
+        // G-1: fail closed; the pipeline never answers from the GCP fallback.
+        this.recordTelemetry({ kind: "preflight", outcome: "error", error: "extension disconnected" });
+        return {
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32000,
+            message: wantsDefaultNotebook
+              ? "Chrome Extension is not connected. The horo_consult stage pipeline will not answer from the GCP fallback because stage answers must be grounded in the HoroConsultant notebook. Reconnect the browser session (open gemini.google.com) and retry."
+              : "Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session."
+          }
+        };
+      }
+
+      await this.ensureConversationHeadroom({ requestId: id, explicitScope: args.scope });
+
+      if (effectiveScope) {
+        let scopeOutcome;
+        try {
+          scopeOutcome = await applyScope(effectiveScope);
+        } catch (scopeErr) {
+          scopeOutcome = { ok: false, message: scopeErr.message };
+        }
+        switchedScope = this.currentScope !== scopeBeforeCall;
+        if (!scopeOutcome.ok && this.isExtensionReady()) {
+          return {
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32602, message: scopeOutcome.message }
+          };
+        }
+      }
+
+      const stagesToRun = stageId === "full" ? [...HORO_STAGE_IDS] : [stageId];
+      const resume = args.resume_reading === true;
+      let anyGrounded = false;
+
+      for (const current of stagesToRun) {
+        const prior = record.stages[current];
+        if (resume && prior && prior.status === "grounded") {
+          stageStatus[current] = { status: "grounded", citationCount: prior.citationCount, skipped: "already_grounded" };
+          anyGrounded = true;
+          continue;
+        }
+        let prompt = buildHoroStagePrompt(current, params);
+        if (refinement) prompt += `\n\nหมายเหตุเพิ่มเติมจากผู้ถาม: ${refinement}`;
+
+        let attempt = await this._runHoroStageCall({ requestId: `${id}:${current}`, prompt, wantsNotebookAttach });
+        if (!attempt.ok) {
+          // One retry on a fresh conversation. The notebook is consumed per
+          // message, so the retry re-attaches and re-asks the same atomic
+          // prompt; the finer-grained narrowing rules (stage 02's split,
+          // stage 04's granularity ladder) stay with the caller via the
+          // documented per-stage failure guidance.
+          attempt = await this._runHoroStageCall({ requestId: `${id}:${current}:retry`, prompt, wantsNotebookAttach });
+        }
+
+        if (attempt.ok) {
+          record.stages[current] = {
+            status: "grounded",
+            text: attempt.text,
+            citationCount: attempt.citationCount,
+            at: new Date().toISOString()
+          };
+          stageStatus[current] = { status: "grounded", citationCount: attempt.citationCount };
+          anyGrounded = true;
+        } else {
+          record.stages[current] = {
+            status: "failed",
+            reason: attempt.reason,
+            detail: attempt.detail || null,
+            at: new Date().toISOString()
+          };
+          stageStatus[current] = { status: "failed", reason: attempt.reason, detail: attempt.detail || null };
+        }
+        // Persist after every stage: a pipeline that dies at stage 4 must not
+        // lose the three grounded sections before it.
+        await this.ctx.storage.put(storageKey, record);
+      }
+
+      if (!anyGrounded) {
+        const reasons = stagesToRun.map((s) => `${s}: ${stageStatus[s].reason}`).join("; ");
+        return {
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32000,
+            message: `The horo_consult stage pipeline grounded no stage (${reasons}). Each stage was tried twice on a fresh conversation; consult prompts/0*.md for the narrowing rules per stage and retry.`
+          }
+        };
+      }
+
+      const groundedOutputs = {};
+      for (const s of HORO_STAGE_IDS) {
+        if (record.stages[s] && record.stages[s].status === "grounded") {
+          groundedOutputs[s] = { text: record.stages[s].text };
+        }
+      }
+
+      let finalText;
+      if (stageId === "full") {
+        finalText = assembleHoroReading(record.title, groundedOutputs);
+        const footerLines = stagesToRun.map((s) => {
+          const st = stageStatus[s];
+          const label = HORO_STAGE_HEADINGS[s];
+          return st.status === "grounded"
+            ? `- ${label}: grounded (citations=${st.citationCount}${st.skipped ? ", from previous run" : ""})`
+            : `- ${label}: FAILED (${st.reason}) — rerun with reading_id="${readingId}" and resume_reading=true`;
+        });
+        finalText += `\n\n---\nอ่านครั้งนี้รหัส reading_id: ${readingId}\nสถานะแต่ละส่วน:\n${footerLines.join("\n")}`;
+      } else {
+        finalText = groundedOutputs[stageId].text;
+      }
+
+      let structuredContent = {
+        reading_id: readingId,
+        stage: stageId,
+        stages: stageStatus
+      };
+      if (args.response_format === "pdf") {
+        try {
+          const artifactKey = crypto.randomUUID().replace(/-/g, "");
+          const pdfBytes = await this.buildAnswerPdf(finalText, record.title);
+          if (this.env.ARTIFACT_KV) {
+            await this.env.ARTIFACT_KV.put(`artifacts/${artifactKey}`, pdfBytes, { expirationTtl: 3600 });
+            structuredContent.pdf_url = `${url.origin}/artifacts/${artifactKey}`;
+          } else {
+            // Explicit, not silent: a missing binding is a caller-visible
+            // error field, not a note appended to a Thai reading.
+            structuredContent.pdf_error = "ARTIFACT_KV binding is not configured on this worker";
+          }
+        } catch (pdfErr) {
+          structuredContent.pdf_error = pdfErr.message;
+        }
+      }
+
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [{ type: "text", text: finalText }],
+          structuredContent
+        }
+      };
+    };
+
+    let outcome;
+    try {
+      outcome = await runPipeline();
+    } finally {
+      await restorePreCallScope();
+    }
+
+    // Mirror the single-call result annotations so MCP clients read pipeline
+    // results the same way.
+    const resultBody = outcome?.result;
+    if (resultBody && Array.isArray(resultBody.content)) {
+      resultBody.bridgeScope = {
+        used: wantsDefaultNotebook ? HORO_CONSULT_DEFAULT_SCOPE : (this.currentScope || scopeBeforeCall || null),
+        active: this.currentScope || null,
+        restored: switchedScope
+      };
+      if (wantsDefaultNotebook) resultBody.bridgeScope.attachedInPlace = true;
+      resultBody.notebookGrounding = {
+        verified: Object.values(stageStatus).every((st) => st.status === "grounded"),
+        citationCount: Object.values(stageStatus).reduce((sum, st) => sum + (st.citationCount || 0), 0),
+        stages: stageStatus
+      };
+    }
+    return outcome;
+  }
+
+  // Noto Sans Thai (OFL) for PDF export — the StandardFonts are WinAnsi-only,
+  // which turned every Thai glyph into "?" (see sanitizeForWinAnsi). The TTF
+  // is fetched once and cached in DO storage; a failed fetch degrades to the
+  // old WinAnsi behavior rather than failing the whole artifact.
+  static THAI_FONT_URL =
+    "https://cdn.jsdelivr.net/gh/notofonts/notofonts.github.io@main/fonts/NotoSansThai/hinted/ttf/NotoSansThai-Regular.ttf";
+
+  async _loadThaiFontBytes() {
+    const cacheKey = "horo_thai_font_bytes";
+    const cached = await this.ctx.storage.get(cacheKey);
+    if (cached) return cached;
+    const resp = await fetch(GeminiBridgeDO.THAI_FONT_URL);
+    if (!resp.ok) throw new Error(`Thai font fetch failed: HTTP ${resp.status}`);
+    const bytes = await resp.arrayBuffer();
+    await this.ctx.storage.put(cacheKey, bytes);
+    return bytes;
+  }
+
+  async buildAnswerPdf(text, title) {
     const doc = await PDFDocument.create();
-    const font = await doc.embedFont(StandardFonts.Helvetica);
-    const boldFont = await doc.embedFont(StandardFonts.HelveticaBold);
-    doc.setTitle("Horo Consultation Answer");
+    let font, boldFont, thaiFontLoaded = false;
+    try {
+      doc.registerFontkit(fontkit);
+      const thaiBytes = await this._loadThaiFontBytes();
+      font = await doc.embedFont(thaiBytes, { subset: true });
+      boldFont = font; // single weight; the bold heading renders in the same face
+      thaiFontLoaded = true;
+    } catch (fontErr) {
+      console.warn(`[Bridge DO] Thai font unavailable (${fontErr.message}); PDF falls back to WinAnsi and replaces non-Latin glyphs with '?'.`);
+      font = await doc.embedFont(StandardFonts.Helvetica);
+      boldFont = await doc.embedFont(StandardFonts.HelveticaBold);
+    }
+    const docTitle = (typeof title === "string" && title.trim()) || "Horo Consultation Answer";
+    doc.setTitle(docTitle);
     doc.setCreator("gemini-web-bridge");
 
     const pageW = 595.28, pageH = 841.89, margin = 56;
@@ -3131,9 +3536,10 @@ export class GeminiBridgeDO extends DurableObject {
       y -= lineHeight;
     };
 
-    drawLine("Horo Consultation Answer", boldFont);
+    drawLine(docTitle, boldFont);
     y -= lineHeight / 2;
-    for (const raw of sanitizeForWinAnsi(String(text || "")).split("\n")) {
+    const rendered = thaiFontLoaded ? String(text || "") : sanitizeForWinAnsi(String(text || ""));
+    for (const raw of rendered.split("\n")) {
       for (const line of wrapLine(raw.replace(/\t/g, "    "))) {
         drawLine(line, font);
       }
@@ -3924,11 +4330,17 @@ export class GeminiBridgeDO extends DurableObject {
       },
       {
         name: "horo_consult",
-        description: "ที่ปรึกษาโหราศาสตร์ผ่าน Gemini Web Session: ตอบคำถามโหราศาสตร์จีน (BaZi), numerology และดาราศาสตร์ไทย โดยอ้างอิงความรู้ใน Notebook ที่ผูกไว้เป็นหลัก เลือกรับคำตอบเป็นข้อความหรือไฟล์ PDF (ลิงก์ดาวน์โหลดชั่วคราว 1 ชั่วโมง)",
+        description: "ที่ปรึกษาโหราศาสตร์ผ่าน Gemini Web Session: ตอบคำถามโหราศาสตร์จีน (BaZi), numerology และดาราศาสตร์ไทย โดยอ้างอิงความรู้ใน Notebook ที่ผูกไว้เป็นหลัก เลือกรับคำตอบเป็นข้อความหรือไฟล์ PDF (ลิงก์ดาวน์โหลดชั่วคราว 1 ชั่วโมง) — รองรับการถามแบบ atomic ทีละ stage หรือรันครบ 5 stage เป็นเอกสารเดียว (stage=\"full\")",
         inputSchema: {
           type: "object",
           properties: {
-            query: { type: "string", description: "คำถามโหราศาสตร์/BaZi ของผู้ใช้" },
+            query: { type: "string", description: "คำถามโหราศาสตร์/BaZi ของผู้ใช้ (จำเป็นเมื่อไม่ระบุ stage; ถ้าระบุ stage จะถูกผนวกเป็นข้อความเพิ่มเติม)" },
+            stage: {
+              type: "string",
+              enum: [...HORO_STAGE_IDS, "full"],
+              description: "โหมด atomic stage (KAN-204): 'birth-chart', 'base-fortune', 'turning-points', 'forecast', 'additional-insights' รัน stage เดียว; 'full' รันครบ 5 stage ต่อกันเป็นเอกสาร fate book พร้อมเก็บผลแต่ละ stage ไว้ resume ได้ ไม่ระบุ = โหมดเดิม (ถามอิสระหนึ่งรอบ)"
+            },
+            name: { type: "string", description: "ชื่อผู้ถูกดวง (ใช้ใน stage mode; ค่าเริ่มต้น 'ผู้ถาม')" },
             birth_context: {
               type: "object",
               description: "บริบทดวงชะตา: birth_datetime, longitude, utc_offset_hours, day_master, five_elements",
@@ -3938,13 +4350,19 @@ export class GeminiBridgeDO extends DurableObject {
                 utc_offset_hours: { type: "number" },
                 day_master: { type: "string" },
                 five_elements: { type: "string" },
-                favorable_elements: { type: "string" }
+                favorable_elements: { type: "string" },
+                birth_place: { type: "string" },
+                name: { type: "string" }
               }
             },
+            from_year: { type: "number", description: "ปีเริ่มต้นของ stage 'forecast' (ค่าเริ่มต้น: ปีปัจจุบัน)" },
+            to_year: { type: "number", description: "ปีสิ้นสุดของ stage 'forecast' (ค่าเริ่มต้น: ปีปัจจุบัน + 4)" },
+            reading_id: { type: "string", description: "รหัสการอ่านดวงสำหรับ full/resume — ไม่ระบุจะสร้างใหม่จาก hash ของ name + birth_context" },
+            resume_reading: { type: "boolean", default: false, description: "true = รันเฉพาะ stage ที่ยังไม่ grounded จากการอ่านครั้งก่อนที่มี reading_id เดียวกัน" },
+            title: { type: "string", description: "ชื่อเอกสารสำหรับ stage='full' (เช่น 'หนังสือดวงชะตาของคุณพรรษกร') — ต้องตรงกับผู้ถูกดวง อย่าคัดลอกชื่อตัวอย่าง" },
             response_format: { type: "string", enum: ["text", "pdf"], default: "text" },
             scope: { type: "string", default: "notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0", description: "\"app\", \"app:<conversationId>\", \"notebook:<notebookId>\" หรือ URL ของ gemini.google.com (เช่น https://gemini.google.com/app) — ค่าเริ่มต้นสำหรับ horo_consult คือ HoroConsultant Notebook (notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0) โดยจะแนบเข้ากับบทสนทนาที่เปิดอยู่โดยไม่เปลี่ยน URL (ผลลัพธ์จะรายงาน notebookGrounding และ bridgeScope.attachedInPlace=true) ทั้งนี้สามารถระบุ scope อื่น เช่น \"app\" เพื่อ override ได้" }
-          },
-          required: ["query"]
+          }
         }
       }
     ];
@@ -4158,23 +4576,10 @@ export class GeminiBridgeDO extends DurableObject {
         }
 
         // ─── horo_consult grounding constants ──────────────────────────────
-        // Declared here, before every tool branch, because check_bridge_health
-        // reports them too. Declaring them further down left them in the
-        // temporal dead zone for any tool that ran first.
-        //
-        // The notebook's canonical scope id, used to report the scope that
-        // served a horo_consult answer.
-        const HORO_CONSULT_DEFAULT_SCOPE = "notebook:b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0";
-
-        // KAN-177: the notebook's DISPLAY NAME, used by the attach flow.
-        //
-        // The attach dialog (`+ > more uploads > Notebooks > เพิ่ม Notebook`)
-        // lists notebooks by name and exposes no id, so the name is the only
-        // key available there. It is matched exactly, never by list position:
-        // this account has six notebooks and the target is not always first.
-        // The id above stays the canonical scope identifier reported to
-        // callers; the two are deliberately separate concerns.
-        const HORO_CONSULT_NOTEBOOK_NAME = "Horo";
+        // HORO_CONSULT_DEFAULT_SCOPE and HORO_CONSULT_NOTEBOOK_NAME moved to
+        // module scope (top of file) when the KAN-204 stage pipeline needed
+        // them from a class method; check_bridge_health below still reports
+        // both.
 
         if (method === "tools/call") {
           const toolName = params.name;
@@ -4389,6 +4794,25 @@ export class GeminiBridgeDO extends DurableObject {
             if (!firstString(args.decision_context, args.problem_description)) return missingArg("decision_context");
             prompt = buildToolPrompt(toolName, args);
           } else if (toolName === "horo_consult") {
+            // `query` is required in the legacy mode. When an atomic `stage`
+            // (KAN-204) is requested, the prompt is templated from
+            // prompts/0*.md and needs birth_context instead — `query`, if
+            // present, is appended as a caller refinement.
+            if (args.stage !== undefined && args.stage !== "full" && !HORO_STAGE_IDS.includes(args.stage)) {
+              return {
+                response: {
+                  jsonrpc: "2.0",
+                  id,
+                  error: { code: -32602, message: `Invalid 'stage' argument '${args.stage}'. Use one of: ${[...HORO_STAGE_IDS, "full"].join(", ")}.` }
+                }
+              };
+            }
+            if (args.stage !== undefined) {
+              if (!args.birth_context || typeof args.birth_context !== "object" || !firstString(args.birth_context.birth_datetime)) {
+                return missingArg("birth_context.birth_datetime");
+              }
+              return { response: await this.runHoroPipeline({ id, args, url, applyScope }) };
+            }
             // `query` is declared required in the inputSchema. Check it before
             // anything expensive happens: without this the prompt was built
             // with "User Question: undefined" and the worker still switched the

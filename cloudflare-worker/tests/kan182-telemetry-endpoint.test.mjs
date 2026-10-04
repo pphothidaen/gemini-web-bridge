@@ -180,10 +180,13 @@ test('KAN-182: source contract — both early extension-disconnect fail-fast sit
     'the horo_consult fail-closed error must be preceded by a preflight recordTelemetry call');
 
   // No preflight record may carry prompt or response content — the chat site
-  // carries only a message COUNT and the horo site carries no payload field.
+  // carries only a message COUNT and the horo sites carry no payload field.
+  // Three sites since the KAN-204 stage pipeline: chat-completions,
+  // horo_consult single call, and the horo_consult stage pipeline, which
+  // fails closed the same way.
   const preflightCalls = WORKER_SOURCE.match(/this\.recordTelemetry\(\{ kind: "preflight"[^)]*\}\)/g) || [];
-  assert.equal(preflightCalls.length, 2,
-    'exactly two preflight record sites (chat-completions + horo_consult)');
+  assert.equal(preflightCalls.length, 3,
+    'exactly three preflight record sites (chat-completions + horo_consult + horo pipeline)');
   for (const call of preflightCalls) {
     assert.ok(!call.includes('content'), 'preflight telemetry must not log content');
   }

@@ -51,6 +51,7 @@ import * as pdfLib from 'pdf-lib';
 import * as liveness from '../src/liveness.js';
 import * as geminiRefusal from '../src/gemini-refusal.js';
 import * as promptTemplates from '../src/prompt-templates.js';
+import * as horoPrompts from "../src/horo-prompts.js";
 
 const HORO_NOTEBOOK_ID = 'b55f1ee0-384e-4bdf-ab1b-e2ee3b0063a0';
 const SAMPLE_88_TOKEN = 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2W3x4Y5z6A7b8C9d0E1f2G3h4I5j6K7l8M9n0O1p2Q3r4';
@@ -66,6 +67,7 @@ function createVmContext() {
     ...liveness,
     ...geminiRefusal,
     ...promptTemplates,
+  ...horoPrompts,
     DurableObject: class {},
     crypto,
     Request,

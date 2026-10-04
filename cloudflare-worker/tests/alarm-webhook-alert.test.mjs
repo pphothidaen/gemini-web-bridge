@@ -32,6 +32,7 @@ import * as pdfLib from 'pdf-lib';
 import * as liveness from '../src/liveness.js';
 import * as geminiRefusal from '../src/gemini-refusal.js';
 import * as promptTemplates from '../src/prompt-templates.js';
+import * as horoPrompts from "../src/horo-prompts.js";
 import { makeCtx } from './helpers/fake-ctx.mjs';
 
 // ─── Harness & Clock Double ──────────────────────────────────────────
@@ -152,6 +153,7 @@ function loadDO() {
     ...liveness,
     ...geminiRefusal,
     ...promptTemplates,
+  ...horoPrompts,
     DurableObject: class {},
     crypto: workerdCrypto,
     Response: MockResponse,

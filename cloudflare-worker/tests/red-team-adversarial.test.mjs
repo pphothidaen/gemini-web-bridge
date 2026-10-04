@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import * as catalog from '../src/model-catalog.js';
 import * as emulator from '../src/tool-emulator.ts';
 import * as promptTemplates from '../src/prompt-templates.js';
+import * as horoPrompts from "../src/horo-prompts.js";
 import { makeCtx } from './helpers/fake-ctx.mjs';
 
 // ─── Harness Setup ───────────────────────────────────────────
@@ -13,6 +14,7 @@ const context = {
   ...catalog,
   ...emulator,
   ...promptTemplates,
+  ...horoPrompts,
   DurableObject: class {},
   crypto,
   Request,
