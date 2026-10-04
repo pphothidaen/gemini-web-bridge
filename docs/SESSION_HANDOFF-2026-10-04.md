@@ -7,7 +7,7 @@
 - Latest commit: `a63e1b9` (`KAN-242: fix(build): add dotenv fallback for local extension packaging`), pushed to `origin/main`.
 - Preceding feature commit: `ed6c337` (`KAN-242: implement automatic conversation context rotation and horo_consult default scope (KAN-255)`), pushed to `origin/main`.
 - Live Worker health: HTTP 200, version `4.7.34`, `CONNECTED_AND_READY`, zero consecutive errors, active connections: 1, active model: `3.8 Flash-Lite`, 9 MCP tools operational.
-- Test Suite: **723 tests (713 pass, 0 fail, 10 skipped) @ ~46.3s** — 100% green suite.
+- Test Suite: **748 tests (738 pass, 0 fail, 10 skipped) @ ~46.0s** — 100% green suite.
 - Production observability is disabled (`observability = false`) in both `cloudflare-worker/wrangler.toml` and `wrangler.jsonc`.
 - Payload Capture status: **DISARMED** (`armed: false`).
 
@@ -75,6 +75,18 @@
       - Multi-notebook contract support: Mode A (88-char Horo token `cff9779e` at `[0][3]`), Mode B (46-char resource reference `notebooks/<uuid>` at `[19]`), Mode C (clean null ungrounded).
       - Strict G1 zero-leak envelope formatting and adversarial string scanning.
     - Full regression suite verified: **723 tests (713 pass, 0 fail, 10 skipped) @ ~46.3s**.
+12. **KAN-256 Multi-Session Registry & Load Balancing (Sprint 3 Completed):**
+    - Red Team test suite `cloudflare-worker/tests/session-registry.test.mjs` (25/25 tests passing).
+    - Blue Team implemented in `cloudflare-worker/src/index.js` and `cloudflare-worker/wrangler.toml`:
+      - Environment flag `MULTI_SESSION = "true"` activating multi-session registry mode (`multiSessionEnabled`).
+      - Relaxed instance ID regex under multi-session mode (`/^[a-zA-Z0-9_-]+$/`).
+      - Concurrent connection coexistence: DO registers multiple instances without 409 Conflict.
+      - Independent message demuxing: messages from Connection A continue processing even after Connection B connects.
+      - In-flight turn tracking (`beginTurn(instanceId)` / `endTurn(instanceId)`) with clamped non-negative guarantees.
+      - Least-loaded connection selection (`getLeastLoadedConnection(targetScope)`) with scope affinity and sticky saturation cap (4 turns max per sticky connection before rebalance).
+      - Graceful teardown independence and failover: closing Connection B leaves Connection A fully operational and ready without aborting active streams.
+      - G1 zero-leak safe registry serialization via `getRegistrySnapshot()` exposing safe telemetry (`instanceId`, `inFlightTurns`, `idleSeconds`, `epoch`, `scope`, `isStale`).
+    - Full regression suite verified: **748 tests (738 pass, 0 fail, 10 skipped) @ ~46.0s**.
 
 ## Status of follow-ups
 
@@ -103,7 +115,13 @@ The MCP settings location supplied for Codex is `/Users/kimlenglim/.cline/data/s
 ## Addendum (Orchestrator)
 - KAN-242 Context Rotation and T4 scope defaults implemented, tested, committed (`ed6c337`), hardened (`a63e1b9`), and pushed to `origin/main`.
 - KAN-243 DO Alarm Webhook Alerting implemented, verified, committed (`5ba0d81`), and pushed to `origin/main`.
-- KAN-236 20-Field Topological StreamGenerate Payload Builder implemented and verified: **723 tests (713 pass, 0 fail, 10 skip)**. Full 100% Green Phase.
+- KAN-236 20-Field Topological StreamGenerate Payload Builder implemented and verified.
+- KAN-256 Multi-Session Registry & Load Balancing implemented and verified: **748 tests (738 pass, 0 fail, 10 skip)**. Full 100% Green Phase.
+  - `multiSessionEnabled` via `MULTI_SESSION = "true"` in `wrangler.toml`.
+  - In-flight turn tracking (`beginTurn`/`endTurn`).
+  - Least-loaded connection selection (`getLeastLoadedConnection`) with scope affinity and sticky saturation cap (4).
+  - Surviving connection teardown and independent message demuxing.
+  - G1 safe serialization via `getRegistrySnapshot()`.
 - Live production worker verified (`CONNECTED_AND_READY`, 9 MCP tools operational).
 - Next actions queued for Operator and Sprint roadmap.
 

@@ -8,7 +8,7 @@
 >
 > **Canonical Production Host:** `https://prod.gemini-web-bridge.workers.dev`  
 > **Current Version:** `v4.7.34`  
-> **Test Baseline:** 723 tests (713 pass, 0 fail, 10 skipped) — 100% green suite · KAN-242 Context Rotation, KAN-243 DO Alerting, KAN-236 20-Field Topological Builder verified  
+> **Test Baseline:** 748 tests (738 pass, 0 fail, 10 skipped) — 100% green suite · KAN-242 Context Rotation, KAN-243 DO Alerting, KAN-236 20-Field Topological Builder, KAN-256 Multi-Session Registry & Load Balancing verified  
 > **Active Working Documents:** [`SESSION_HANDOFF-2026-10-04.md`](SESSION_HANDOFF-2026-10-04.md) · [`docs/SESSION_HANDOFF-2026-10-04.md`](docs/SESSION_HANDOFF-2026-10-04.md) · [`docs/verification/kan242-context-rotation-design.md`](docs/verification/kan242-context-rotation-design.md) · [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md) · [`docs/api-spec.md`](docs/api-spec.md)
 
 ---
@@ -287,7 +287,7 @@ Defined in `cloudflare-worker/tests/helpers/dom-signal.mjs`:
 
 ### 8.1 Automated Test Execution
 ```bash
-# Run complete test suite (669 tests, ~46s)
+# Run complete test suite (748 tests, ~46s)
 cd cloudflare-worker && npm test
 
 # Run DOM contract checks
@@ -352,7 +352,7 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
 1. **G1 (Zero-Token-Leak)**: Google CSRF token (`SNlM0e`) stays in volatile RAM within the browser's MAIN world. Never leaves the local host.
 2. **G2 (Strict Fail-Closed)**: No canned responses or mock responses. Offline extensions return HTTP 503; unverified groundings return JSON-RPC `-32000`.
 3. **G3 (Concurrency & Quota Control)**: 1 execution per session, max 10 queued waiters, idle-based collection deadline with strict `hardCap`.
-4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 723-test suite before pushing.
+4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 748-test suite before pushing.
 5. **G5 (Hybrid Transparency)**: GCP fallback emits `X-Provider: google-cloud-fallback` header; grounding-required requests are prohibited from falling back.
 
 ---
@@ -368,6 +368,7 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
      - Horo notebook uses an 88-char opaque token at `[0][3][0][2]` (fingerprint `cff9779e`), stable across turns and conversations for that specific notebook.
      - Second notebook (`claude-code-best-practice`) uses a 46-char resource reference at `[19]` (`notebooks/<UUID>`, fingerprint `91296529`), with `contains.notebook_id = true`.
 3. **Sprint 3 (Multi-Session Balancing & Infrastructure)**:
+   - **Multi-Session Registry & Least-Loaded Load Balancing (KAN-256)**: **100% COMPLETE & VERIFIED** (25 tests in `session-registry.test.mjs`). DO supports concurrent extension connections without 409 conflict, maintains individual instance tracking, demuxes messages independently, tracks in-flight turns, and load-balances via least-loaded selection with scope affinity and sticky saturation cap.
    - `ScopeRouter` envelope routing complete within DO.
    - **Cloudflare Dashboard Builds Integration**: Root lacks `package.json` and Doppler secrets; human one-time disconnect in Cloudflare Dashboard is required (see [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md)). GitHub Actions `cd.yml` remains the sole authorized deployment pathway.
    - Cross-instance multi-account load balancing remains on the future roadmap.
@@ -387,7 +388,13 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   - Resolves legacy index `[2]` type contradiction (strictly null).
   - Multi-notebook contract support: Mode A (88-char Horo token `cff9779e` at `[0][3]`), Mode B (46-char `notebooks/<uuid>` at `[19]`), Mode C (clean null ungrounded).
   - Strict G1 zero-leak guardrail and adversarial sanitation verified.
-- **Test Suite Baseline**: **723 tests (713 passed, 0 failed, 10 skipped)**. Full 100% Green Phase.
+- **KAN-256 (Multi-Session Registry & Least-Loaded Load Balancing)**: **100% COMPLETE & VERIFIED** (25/25 tests passing in `tests/session-registry.test.mjs`).
+  - `multiSessionEnabled` gated via `MULTI_SESSION = "true"` in `wrangler.toml` and environment config.
+  - In-flight turn tracking (`beginTurn(instanceId)` / `endTurn(instanceId)`) with clamped non-negative guarantees.
+  - Least-loaded connection selection (`getLeastLoadedConnection(targetScope)`) with scope affinity and sticky saturation cap (4 turns max per sticky connection before rebalance).
+  - Surviving connection teardown and independent message demuxing: closing one connection leaves others operational and healthy without aborting active streams.
+  - G1 safe serialization via `getRegistrySnapshot()` exposing strictly non-sensitive telemetry (`instanceId`, `inFlightTurns`, `idleSeconds`, `epoch`, `scope`, `isStale`).
+- **Test Suite Baseline**: **748 tests (738 passed, 0 failed, 10 skipped)**. Full 100% Green Phase.
 - **Git & Deployment Status**:
   - `ed6c337`: KAN-242 context rotation & T4 default scope
   - `a63e1b9`: KAN-242 build tooling dotenv hardening

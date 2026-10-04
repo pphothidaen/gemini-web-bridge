@@ -454,6 +454,7 @@ export class GeminiBridgeDO extends DurableObject {
     this.ctx = ctx;   // DO alarm API requires this reference
     this.env = env;
     VERBOSE_FLAG = (this.env.BRIDGE_VERBOSE === "1");
+    this.multiSessionEnabled = Boolean(env?.MULTI_SESSION === 'true' || env?.MULTI_SESSION === '1' || env?.ENABLE_MULTI_INSTANCE === 'true');
     this.activeSocket = null;
     this.currentTokens = null;
     this.activeBrowserModel = null;
@@ -753,6 +754,7 @@ export class GeminiBridgeDO extends DurableObject {
     this.epochCounter++;
 
     const connectionState = {
+      instanceId,
       socket,
       connectedAt: now,
       lastActivityAt: now,
@@ -762,7 +764,8 @@ export class GeminiBridgeDO extends DurableObject {
       lastPongAt: 0,
       epoch: this.epochCounter,
       tokens: null,
-      scope: null
+      scope: null,
+      inFlightTurns: 0
     };
 
     this.activeConnections.set(instanceId, connectionState);
@@ -832,6 +835,75 @@ export class GeminiBridgeDO extends DurableObject {
     }
     return wasPresent;
   }
+
+  /**
+   * Increments inFlightTurns for a connection and returns the count.
+   */
+  beginTurn(instanceId) {
+    const state = this.activeConnections.get(instanceId);
+    if (!state) return 0;
+    state.inFlightTurns = (state.inFlightTurns || 0) + 1;
+    return state.inFlightTurns;
+  }
+
+  /**
+   * Decrements inFlightTurns for a connection (clamped at 0) and returns the count.
+   */
+  endTurn(instanceId) {
+    const state = this.activeConnections.get(instanceId);
+    if (!state) return 0;
+    state.inFlightTurns = Math.max(0, (state.inFlightTurns || 0) - 1);
+    return state.inFlightTurns;
+  }
+
+  /**
+   * Selects the least-loaded healthy connection with optional scope affinity.
+   */
+  getLeastLoadedConnection(targetScope = null) {
+    const now = Date.now();
+    const candidates = [];
+    for (const [id, state] of this.activeConnections.entries()) {
+      if (!state || !state.socket || state.socket.readyState !== 1) continue;
+      if (isEvictable(state, now, { staleAfterMs: this.STALE_CONNECTION_TIMEOUT_MS })) continue;
+      if (!state.instanceId) state.instanceId = id;
+      candidates.push(state);
+    }
+    if (candidates.length === 0) return null;
+
+    if (targetScope) {
+      const matching = candidates.filter(c => c.scope === targetScope && (c.inFlightTurns || 0) < 4);
+      if (matching.length > 0) {
+        matching.sort((a, b) => (a.inFlightTurns || 0) - (b.inFlightTurns || 0));
+        return matching[0];
+      }
+    }
+
+    candidates.sort((a, b) => (a.inFlightTurns || 0) - (b.inFlightTurns || 0));
+    return candidates[0];
+  }
+
+  /**
+   * Returns a safe snapshot of registered connection metadata with G1 zero-leak guarantees.
+   */
+  getRegistrySnapshot() {
+    const now = Date.now();
+    const snapshot = [];
+    for (const [instanceId, state] of this.activeConnections.entries()) {
+      const idleMs = now - (state.lastActivityAt || now);
+      snapshot.push({
+        instanceId,
+        inFlightTurns: state.inFlightTurns || 0,
+        idleSeconds: Math.round(idleMs / 1000),
+        epoch: state.epoch,
+        scope: state.scope || '',
+        isStale: idleMs > this.STALE_CONNECTION_TIMEOUT_MS,
+        connectedAt: state.connectedAt,
+        lastActivityAt: state.lastActivityAt,
+      });
+    }
+    return snapshot;
+  }
+
 
   /**
    * Finds which instance ID owns the active streams.
@@ -1249,6 +1321,13 @@ export class GeminiBridgeDO extends DurableObject {
   }
 
   isExtensionReady() {
+    if (this.activeConnections && this.activeConnections.size > 0) {
+      for (const state of this.activeConnections.values()) {
+        if (state && state.socket && state.socket.readyState === 1) {
+          return true;
+        }
+      }
+    }
     return this.activeSocket !== null && this.currentTokens !== null && this.activeSocket.readyState === 1;
   }
 
@@ -3101,7 +3180,8 @@ export class GeminiBridgeDO extends DurableObject {
       // ─── Phase 3: Instance-ID based identity ───
       // Get instanceId from query parameter (sent by client)
       const instanceId = url.searchParams.get("instanceId") || request.headers.get("x-instance-id") || "";
-      if (!instanceId || !/^[a-f0-9-]{36}$/.test(instanceId)) {
+      const instanceIdPattern = this.multiSessionEnabled ? /^[a-zA-Z0-9_-]+$/ : /^[a-f0-9-]{36}$/;
+      if (!instanceId || !instanceIdPattern.test(instanceId)) {
         // Invalid or missing instanceId - reject for security
         console.warn("[Bridge DO] Rejected connection: invalid or missing instanceId.");
         return new Response("Unauthorized: Invalid instance ID", { status: 401, headers: corsHeaders });
@@ -3139,7 +3219,7 @@ export class GeminiBridgeDO extends DurableObject {
       // If there's still an active connection from a different instanceId and it
       // is responsive, reject the new connection (protect the healthy session
       // from being hijacked).
-      if (this.activeConnections.size > 0) {
+      if (!this.multiSessionEnabled && this.activeConnections.size > 0) {
         for (const [otherId, state] of this.activeConnections.entries()) {
           if (otherId === instanceId) continue;
           const idleTime = Date.now() - state.lastActivityAt;
@@ -3177,7 +3257,7 @@ export class GeminiBridgeDO extends DurableObject {
 
       // Update server message handler to track activity per instance
       server.addEventListener("message", (event) => {
-        if (this.activeSocket !== server) return;
+        if (!this.multiSessionEnabled && this.activeSocket !== server) return;
         // Record activity for this instance
         this.touchConnection(instanceId);
         try {
@@ -3191,13 +3271,13 @@ export class GeminiBridgeDO extends DurableObject {
             this.parseEnvelope(msg)
               .then(envelope => this.routeEnvelope(envelope, connId))
               .then(response => {
-                if (response && this.activeSocket === server && server.readyState === 1) {
+                if (response && (this.multiSessionEnabled || this.activeSocket === server) && server.readyState === 1) {
                   server.send(JSON.stringify(response));
                 }
               })
               .catch(parseErr => {
                 console.error("[Bridge DO] ScopeRouter envelope error:", parseErr.message);
-                if (this.activeSocket === server && server.readyState === 1) {
+                if ((this.multiSessionEnabled || this.activeSocket === server) && server.readyState === 1) {
                   server.send(JSON.stringify({
                     jsonrpc: "2.0",
                     error: { code: -32700, message: parseErr.message },
@@ -3208,12 +3288,20 @@ export class GeminiBridgeDO extends DurableObject {
           }
 
           if (msg.type === "SESSION_READY" || msg.type === "MODELS_DISCOVERED") {
-            if (msg.tokens) this.currentTokens = msg.tokens;
+            if (msg.tokens) {
+              this.currentTokens = msg.tokens;
+              const conn = this.activeConnections.get(instanceId);
+              if (conn) conn.tokens = msg.tokens;
+            }
             if (typeof msg.scope === "string" && msg.scope) {
               this.currentScope = msg.scope;
+              const conn = this.activeConnections.get(instanceId);
+              if (conn) conn.scope = msg.scope;
               if (msg.scope.startsWith("notebook:")) this.lastNotebookScope = msg.scope;
             } else if (msg.type === "SESSION_READY") {
               this.currentScope = null;
+              const conn = this.activeConnections.get(instanceId);
+              if (conn) conn.scope = null;
             }
             this.replaceModelCatalog(msg);
             vlog(`[Bridge DO] Synced from Web: Model=${this.activeBrowserModel}, Thinking=${this.extendedThinkingActive}, DiscoveredCount=${this.dynamicModels ? this.dynamicModels.length : 0}`);
@@ -3234,6 +3322,8 @@ export class GeminiBridgeDO extends DurableObject {
             // Phase 4: Extension confirmed scope switch is complete
             if (msg.scope) {
               this.currentScope = msg.scope;
+              const conn = this.activeConnections.get(instanceId);
+              if (conn) conn.scope = msg.scope;
               vlog(`[Bridge DO] Scope confirmed: ${msg.scope} (requestId: ${msg.requestId || 'N/A'})`);
               // Resolve any pending scope switch
               if (this.pendingScopeSwitch && this.pendingScopeSwitch.requestId === msg.requestId) {
@@ -3308,7 +3398,24 @@ export class GeminiBridgeDO extends DurableObject {
         // Each session's onUnsubscribe hook is fired so handlers can flush
         // pending work before the socket is gone.
         this.removeConnectionSessions(connId);
-        if (this.activeSocket === server) {
+
+        let survivingConnection = null;
+        for (const [id, state] of this.activeConnections.entries()) {
+          if (state && state.socket && state.socket.readyState === 1) {
+            survivingConnection = state;
+            break;
+          }
+        }
+
+        if (survivingConnection) {
+          this.activeSocket = survivingConnection.socket;
+          if (survivingConnection.tokens) {
+            this.currentTokens = survivingConnection.tokens;
+          }
+          if (survivingConnection.scope) {
+            this.currentScope = survivingConnection.scope;
+          }
+        } else {
           this.socketLostAt = Date.now();
           for (const handler of this.activeStreams.values()) {
             handler({ type: "STREAM_ERROR", error: "Extension disconnected" });
@@ -4849,18 +4956,7 @@ export class GeminiBridgeDO extends DurableObject {
     if (url.pathname === "/" || url.pathname === "/health") {
       const isReady = this.isExtensionReady();
       // Collect information about active connections
-      const activeConnectionsInfo = [];
-      for (const [instanceId, state] of this.activeConnections.entries()) {
-        const idleMs = Date.now() - state.lastActivityAt;
-        activeConnectionsInfo.push({
-          instanceId,
-          epoch: state.epoch,
-          connectedAt: state.connectedAt,
-          lastActivityAt: state.lastActivityAt,
-          idleSeconds: Math.round(idleMs / 1000),
-          isStale: idleMs > this.STALE_CONNECTION_TIMEOUT_MS
-        });
-      }
+      const activeConnectionsInfo = this.getRegistrySnapshot();
       return new Response(JSON.stringify({
         status: "ok",
         service: "gemini-web-bridge-cloud-hub",

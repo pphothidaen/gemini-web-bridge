@@ -45,3 +45,4 @@ enabled = false
 [vars]
 BRIDGE_VERBOSE = "1"
 CONTEXT_ROTATION_THRESHOLD = "8"
+MULTI_SESSION = "true"
