@@ -7,7 +7,7 @@
 - Latest commit: `a63e1b9` (`KAN-242: fix(build): add dotenv fallback for local extension packaging`), pushed to `origin/main`.
 - Preceding feature commit: `ed6c337` (`KAN-242: implement automatic conversation context rotation and horo_consult default scope (KAN-255)`), pushed to `origin/main`.
 - Live Worker health: HTTP 200, version `4.7.34`, `CONNECTED_AND_READY`, zero consecutive errors, active connections: 1, active model: `3.8 Flash-Lite`, 9 MCP tools operational.
-- Test Suite: **694 tests (684 pass, 0 fail, 10 skipped) @ ~46.0s** — 100% green suite.
+- Test Suite: **708 tests (698 pass, 0 fail, 10 skipped) @ ~46.0s** — 100% green suite.
 - Production observability is disabled (`observability = false`) in both `cloudflare-worker/wrangler.toml` and `wrangler.jsonc`.
 - Payload Capture status: **DISARMED** (`armed: false`).
 
@@ -56,7 +56,17 @@
    - Rebuilt `dist/extension` fresh at `v4.7.34` (`python3 scripts/build-extension.py --verify` passes).
    - Committed in `a63e1b9` and pushed to `origin/main`.
 9. **Master Handoff Modernization:**
-   - Updated [`HANDOFF.md`](../HANDOFF.md) and [`SESSION_HANDOFF-2026-10-04.md`](../SESSION_HANDOFF-2026-10-04.md) with latest baselines and verification records.
+   - Updated [`HANDOFF.md`](../HANDOFF.md) and [`SESSION_HANDOFF-2026-10-04.md`](../SESSION_HANDOFF-2026-10-04.md) with latest baselines and verification records (commit `7a4effa`).
+10. **KAN-243 DO Alarm Webhook Alerting (Sprint 1 Completed):**
+   - Red Team test suite `cloudflare-worker/tests/alarm-webhook-alert.test.mjs` (14/14 tests passing).
+   - Blue Team implemented in `cloudflare-worker/src/index.js`:
+     - Initialized `this.alertCooldowns` and `this.alertCooldownMs` (300,000ms debounce).
+     - Added `metrics` getter/setter mapping to `_consecutiveErrors` and `_lastError`.
+     - Wired alert triggers in `alarm()` for `stale_connection_reaped` and `consecutive_errors_threshold` (>= 3).
+     - Added `dispatchAlertWebhook()` sending Discord/Slack markdown payload (`Content-Type: application/json`).
+     - Strict G1 zero-leak compliance: metadata only, never leaks prompt, query, response, or session tokens.
+     - Fail-open resilience: catches network rejections and HTTP 500 without aborting alarm rescheduling.
+   - Verified 100% Green Phase across repository (708 tests, 698 passed, 0 failed, 10 skipped).
 
 ## Status of follow-ups
 
@@ -65,7 +75,7 @@
 2. **Cloudflare Dashboard Builds Integration (TODO - Operator):**
    - Action: Follow [`docs/CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md`](CLOUDFLARE-DASHBOARD-BUILDS-DISABLE.md) to disconnect Git in Cloudflare Dashboard UI.
 3. **CD Production Gate Approval (TODO - Operator):**
-   - Action: Approve the GitHub Actions `production` review environment gate for commit `a63e1b9` in GitHub Actions.
+   - Action: Approve the GitHub Actions `production` review environment gate for commit `7a4effa` in GitHub Actions.
 4. **Second Notebook Single Capture (TODO - Operator):**
    - Action: Follow [`docs/verification/kan236-notebook-token-stability-brief.md`](verification/kan236-notebook-token-stability-brief.md) §6 to perform the single capture once the reloaded extension is running.
 
@@ -83,7 +93,8 @@
 The MCP settings location supplied for Codex is `/Users/kimlenglim/.cline/data/settings/cline_mcp_settings.json` (chmod 600). Do not place credentials or secret values in handoff notes or git commits.
 
 ## Addendum (Orchestrator)
-- KAN-242 Context Rotation and T4 scope defaults implemented, tested (694 tests passing), committed (`ed6c337`), hardened (`a63e1b9`), and pushed to `origin/main`.
+- KAN-242 Context Rotation and T4 scope defaults implemented, tested, committed (`ed6c337`), hardened (`a63e1b9`), and pushed to `origin/main`.
+- KAN-243 DO Alarm Webhook Alerting implemented and verified: **708 tests (698 pass, 0 fail, 10 skip)**. Full 100% Green Phase.
 - Live production worker verified (`CONNECTED_AND_READY`, 9 MCP tools operational).
 - Next actions queued for Operator and Sprint roadmap.
 

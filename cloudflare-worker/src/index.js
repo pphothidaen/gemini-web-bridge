@@ -487,6 +487,10 @@ export class GeminiBridgeDO extends DurableObject {
       return this.scopeHandlers.get('notebook')(envelope, session, connId);
     });
 
+    // KAN-243: DO Alarm Webhook Alerting cooldown state (300s anti-flapping debounce)
+    this.alertCooldowns = new Map();
+    this.alertCooldownMs = 300_000;
+
     // ─── DO Alarm: Keepalive + Stale Socket Cleanup ───
     // Uses the native DurableObject alarm API instead of setInterval,
     // which would keep the DO hot indefinitely and exhaust the free-tier CPU quota.
@@ -522,6 +526,23 @@ export class GeminiBridgeDO extends DurableObject {
     if (value.lastSuccessfulGeneration !== undefined) this._lastSuccessfulGeneration = value.lastSuccessfulGeneration;
     if (value.consecutiveErrors !== undefined) this._consecutiveErrors = value.consecutiveErrors;
     if (value.lastError !== undefined) this._lastError = value.lastError;
+  }
+
+  // KAN-243: metrics getter/setter for compatibility and health counters
+  get metrics() {
+    return {
+      last_successful_generation: this._lastSuccessfulGeneration || null,
+      consecutive_errors: this._consecutiveErrors || 0,
+      last_error: this._lastError || null
+    };
+  }
+
+  set metrics(value) {
+    if (value && typeof value === "object") {
+      if (value.consecutive_errors !== undefined) this._consecutiveErrors = value.consecutive_errors;
+      if (value.last_error !== undefined) this._lastError = value.lastError;
+      if (value.last_successful_generation !== undefined) this._lastSuccessfulGeneration = value.last_successful_generation;
+    }
   }
 
   // ─── Health metric writers ────────────────────────────────────────────────
@@ -992,6 +1013,21 @@ export class GeminiBridgeDO extends DurableObject {
         } catch (e) {}
       }
       vlog(`[Bridge DO] Stale socket cleanup complete for instance ${instanceId}. Remaining connections: ${this.activeConnections.size}`);
+
+      // KAN-243: Dispatch alert for reaped connection
+      await this.dispatchAlertWebhook("stale_connection_reaped", {
+        instanceId,
+        idleSec
+      });
+    }
+
+    // KAN-243: Check consecutive errors threshold
+    const currentErrorCount = this.metrics?.consecutive_errors ?? this._consecutiveErrors ?? 0;
+    if (currentErrorCount >= 3) {
+      await this.dispatchAlertWebhook("consecutive_errors_threshold", {
+        count: currentErrorCount,
+        lastError: this.metrics?.last_error ?? this._lastError ?? "Unknown error"
+      });
     }
 
     // ─── 3. Reschedule alarm only if there is still active work ───
@@ -1015,6 +1051,71 @@ export class GeminiBridgeDO extends DurableObject {
         'The alarm is now unset; only a new connection, generation, or DO ' +
         'recreation will start it again.'
       );
+    }
+  }
+
+  /**
+   * KAN-243: Dispatch webhook alert for critical system events (stale connection, error threshold).
+   * Strictly adheres to G1 Zero-Leak Guardrail (metadata only; never leaks prompt, query, response, or tokens).
+   */
+  async dispatchAlertWebhook(event, details = {}) {
+    const webhookUrl = this.env?.ALERT_WEBHOOK_URL;
+    if (!webhookUrl || typeof webhookUrl !== "string" || !webhookUrl.trim()) {
+      return;
+    }
+
+    if (!this.alertCooldowns) {
+      this.alertCooldowns = new Map();
+    }
+    const cooldownMs = this.alertCooldownMs || 300_000;
+    const now = Date.now();
+    const lastAlertAt = this.alertCooldowns.get(event) || 0;
+    if (now - lastAlertAt < cooldownMs) {
+      vlog(`[Bridge DO] Webhook alert for '${event}' suppressed by debounce (${now - lastAlertAt}ms < ${cooldownMs}ms)`);
+      return;
+    }
+
+    // Set cooldown timestamp to prevent duplicate dispatch during in-flight network calls
+    this.alertCooldowns.set(event, now);
+
+    let content = "";
+    if (event === "stale_connection_reaped") {
+      content = `⚠️ **[gemini-web-bridge Alert]** Stale connection reaped.\n- **Instance ID:** \`${details.instanceId || "unknown"}\`\n- **Idle Duration:** \`${details.idleSec ?? "unknown"}s\`\n- **Service:** \`gemini-web-bridge-cloud-hub\` (v${WORKER_VERSION})`;
+    } else if (event === "consecutive_errors_threshold") {
+      const errCount = details.count ?? this._consecutiveErrors ?? 3;
+      const lastErr = details.lastError ?? this._lastError ?? "Unknown error";
+      content = `🚨 **[gemini-web-bridge Alert]** Consecutive errors threshold reached (${errCount}).\n- **Last Error:** \`${lastErr}\`\n- **Service:** \`gemini-web-bridge-cloud-hub\` (v${WORKER_VERSION})`;
+    } else {
+      content = `⚠️ **[gemini-web-bridge Alert]** Event: \`${event}\`\n- **Service:** \`gemini-web-bridge-cloud-hub\` (v${WORKER_VERSION})`;
+    }
+
+    if (content.length > 2000) {
+      content = content.slice(0, 1997) + "...";
+    }
+
+    const payload = {
+      event,
+      service: "gemini-web-bridge-cloud-hub",
+      version: WORKER_VERSION,
+      timestamp: now,
+      consecutive_errors: this._consecutiveErrors || 0,
+      details,
+      content
+    };
+
+    try {
+      const res = await fetch(webhookUrl.trim(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        console.warn(`[Bridge DO] Alert webhook delivery failed: HTTP status ${res.status}`);
+      }
+    } catch (err) {
+      console.warn("[Bridge DO] Alert webhook delivery failed:", err?.message || err);
     }
   }
 

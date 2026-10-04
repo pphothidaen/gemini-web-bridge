@@ -352,14 +352,14 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
 1. **G1 (Zero-Token-Leak)**: Google CSRF token (`SNlM0e`) stays in volatile RAM within the browser's MAIN world. Never leaves the local host.
 2. **G2 (Strict Fail-Closed)**: No canned responses or mock responses. Offline extensions return HTTP 503; unverified groundings return JSON-RPC `-32000`.
 3. **G3 (Concurrency & Quota Control)**: 1 execution per session, max 10 queued waiters, idle-based collection deadline with strict `hardCap`.
-4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 694-test suite before pushing.
+4. **G4 (Zero Technical Debt & 0 Fail Policy)**: All changes must maintain **0 failed tests** across the entire 708-test suite before pushing.
 5. **G5 (Hybrid Transparency)**: GCP fallback emits `X-Provider: google-cloud-fallback` header; grounding-required requests are prohibited from falling back.
 
 ---
 
 ## 10. Forward Roadmap Status & Empirical Findings
 
-1. **Sprint 1 (Alerting & Alarms)**: DO `alarm()` implemented for liveness and socket reaping. External webhook dispatcher (Discord/Slack) pending.
+1. **Sprint 1 (Alerting & Alarms)**: **100% COMPLETE**. DO `alarm()` keepalive & socket reaping + external webhook alert dispatcher (Discord/Slack markdown notification on stale socket reaped or consecutive errors >= 3 with 300s anti-flapping debounce and G1 zero-leak guardrail).
 2. **Sprint 2 (Context & Memory & Latency)**:
    - **DO Telemetry Ring Buffer (`/debug/telemetry`)**: Implemented in KAN-182 (v4.7.34). Tracks `executeThroughExtension` latency, GCP fallback calls, and preflight disconnects with microsecond accuracy.
    - **Latency Failure Frontier (KAN-242)**: Live measurement via `/debug/telemetry` revealed clean turns average ~48–50s, but accumulated UI turns reach a hard failure frontier at 10 responses on screen (`no_answer_rendered`, timeout at 160s). This mandates automatic context rotation before conversations reach 10 turns. See full experimental plan: [`docs/verification/kan242-latency-measurement-plan.md`](docs/verification/kan242-latency-measurement-plan.md).
@@ -379,9 +379,14 @@ curl -s -X POST https://prod.gemini-web-bridge.workers.dev/mcp \
   - Wire order invariant strictly preserved: context rotation (`prepareScope("app")`) runs BEFORE notebook attach (`ATTACH_NOTEBOOK`).
   - Guardrails fully verified: pinned scopes (`app:<id>`, `notebook:<id>`) skipped with telemetry; in-flight protection; fail-open probe fallback; G1 zero prompt/response leak in telemetry.
 - **T4 (`horo_consult` scope default)**: Scope handling aligned (`HORO_CONSULT_DEFAULT_SCOPE` defaults cleanly to in-place attachment without triggering raw URL routing).
-- **Test Suite Baseline**: **694 tests (684 passed, 0 failed, 10 skipped)**. Full 100% Green Phase.
+- **KAN-243 (DO Alarm Webhook Alerting Dispatcher)**: **100% COMPLETE & VERIFIED**.
+  - Dispatches Discord/Slack compatible webhook alerts on `stale_connection_reaped` and `consecutive_errors_threshold` (>= 3).
+  - Anti-flapping debounce (300,000ms cooldown) prevents webhook flooding across 120s alarm cycles.
+  - Strict G1 zero-leak guardrail: payload strictly whitelisted to metadata, zero prompt/response/token leaks.
+  - Fail-open resilience: network rejections or HTTP 500 responses log warnings without aborting DO keepalive or alarm rescheduling.
+- **Test Suite Baseline**: **708 tests (698 passed, 0 failed, 10 skipped)**. Full 100% Green Phase.
 - **Git & Deployment Status**:
   - Committed in `ed6c337` (`KAN-242: implement automatic conversation context rotation and horo_consult default scope (KAN-255)`)
   - Build hardening committed in `a63e1b9` (`KAN-242: fix(build): add dotenv fallback for local extension packaging`)
-  - Both commits pushed and synchronized with `origin/main`.
+  - Documentation sync committed in `7a4effa` (`KAN-242: docs: synchronize master and session handoffs with 694-test green baseline`)
 - See detailed log in [`SESSION_HANDOFF-2026-10-04.md`](SESSION_HANDOFF-2026-10-04.md).
