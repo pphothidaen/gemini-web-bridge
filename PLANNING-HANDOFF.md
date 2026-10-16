@@ -195,9 +195,9 @@ export default {
 
 | ไฟล์ | การเปลี่ยนแปลง |
 |:-----|:--------------|
-| `extension-cloudflare/settings.js` | เพิ่ม `sessionId` config field |
-| `extension-cloudflare/content.js` | ส่ง `sessionId` ใน WSS connection URL |
-| `extension-cloudflare/options.html/js` | UI สำหรับตั้ง session identity |
+| `dist/extension/settings.js` | เพิ่ม `sessionId` config field |
+| `dist/extension/content.js` | ส่ง `sessionId` ใน WSS connection URL |
+| `dist/extension/options.html/js` | UI สำหรับตั้ง session identity |
 
 **content.js — เพิ่ม session ID:**
 ```javascript
@@ -723,9 +723,9 @@ flowchart TD
 | [`index.js`](cloudflare-worker/src/index.js) | Core Worker + DO + API routes | ทุก Roadmap item |
 | [`model-catalog.js`](cloudflare-worker/src/model-catalog.js) | Model normalization & recommendation | #1 Multi-Session |
 | [`tool-emulator.ts`](cloudflare-worker/src/tool-emulator.ts) | OpenAI Tool Calling emulation | #2 Context Memory |
-| [`content.js`](extension-cloudflare/content.js) | WSS client + model selection | #1, #3 |
-| [`injected.js`](extension-cloudflare/injected.js) | MAIN world RPC interceptor | #3 Health Probe |
-| [`background.js`](extension-cloudflare/background.js) | Tab coordinator | #1 Multi-Session |
+| [`content.js`](dist/extension/content.js) | WSS client + model selection | #1, #3 |
+| [`injected.js`](dist/extension/injected.js) | MAIN world RPC interceptor | #3 Health Probe |
+| [`background.js`](dist/extension/background.js) | Tab coordinator | #1 Multi-Session |
 | [`wrangler.toml`](cloudflare-worker/wrangler.toml) | DO bindings, env vars, cron | ทุก Roadmap item |
 
 ### Environment Secrets ที่ต้องรู้

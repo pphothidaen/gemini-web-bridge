@@ -238,7 +238,7 @@ test('the heartbeat announces itself exactly once per collection', () => {
   // — which is every healthy run. One console line per collection is what makes
   // "is the 4.7.25 half actually loaded?" answerable.
   const CONTENT = fs.readFileSync(
-    path.resolve(new URL('../../extension-cloudflare/content.js', import.meta.url).pathname),
+    path.resolve(new URL('../../dist/extension/content.js', import.meta.url).pathname),
     'utf8'
   );
   assert.match(CONTENT, /COLLECT_ANSWER_PROGRESS active/,

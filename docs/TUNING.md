@@ -106,7 +106,7 @@ Chrome from reaping it and gives the DO the inbound frame that `alarm()` needs
 to make a real liveness decision instead of inferring one from silence.
 
 ```js
-// extension-cloudflare/background.js
+// dist/extension/background.js
 export const CLIENT_KEEPALIVE_INTERVAL_MS = 20000;
 ```
 

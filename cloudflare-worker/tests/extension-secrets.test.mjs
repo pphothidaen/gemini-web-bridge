@@ -1,5 +1,5 @@
 // Prevents the September-2026 incident from repeating: both production tokens
-// were committed verbatim to extension-cloudflare/ ("pre-filled defaults",
+// were committed verbatim to dist/extension/ ("pre-filled defaults",
 // commits 078824b → 4f6cced) and stayed retrievable from the public repo's git
 // history long after the working tree was cleaned.
 //
@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
-const EXT_DIR = path.join(REPO_ROOT, 'extension-cloudflare');
+const EXT_DIR = path.join(REPO_ROOT, 'dist/extension');
 
 // Matches the production token shapes. 16 hex chars is well below the real
 // 32-char length, so this errs toward false positives rather than misses.

@@ -151,7 +151,7 @@ OpenAI API Standard: รองรับโมเดลทั้งหมดท�
 5.5 Chrome Extension (v3.0)
 ติดตั้งผ่าน Chrome Developer Mode:
   1. chrome://extensions/ → Developer Mode ON
-  2. Load unpacked → เลือกโฟลเดอร์ extension-cloudflare/
+  2. Load unpacked → เลือกโฟลเดอร์ dist/extension/
   3. เปิด gemini.google.com → Extension เชื่อมต่อ WSS อัตโนมัติ
   4. ตั้งค่า Worker URL และ Token ผ่าน Options Page
 

@@ -26,7 +26,7 @@
 ## 1. G1: Security & Token Privacy Guardrails (กฎเหล็กด้านความปลอดภัย)
 
 ### 1.1 Zero-Token-Leak (CSRF & Cookies)
-* **[G1.1.1]** Google CSRF Token (`SNlM0e` / `at`) ต้องถูกเก็บและใช้งานภายใน **MAIN-world in-memory RAM** ของเบราว์เซอร์เท่านั้น ([`injected.js`](extension-cloudflare/injected.js))
+* **[G1.1.1]** Google CSRF Token (`SNlM0e` / `at`) ต้องถูกเก็บและใช้งานภายใน **MAIN-world in-memory RAM** ของเบราว์เซอร์เท่านั้น ([`injected.js`](dist/extension/injected.js))
 * **[G1.1.2]** **ห้ามเด็ดขาด** ในการส่ง `SNlM0e`, Google Session Cookies, หรือ First-party tokens ใดๆ ผ่าน WebSocket, HTTP Headers, Storage หรือ Logs ไปยัง Cloudflare Worker
 * **[G1.1.3]** การยืนยันตัวตนข้ามขอบเขต:
   * Extension ↔ Cloudflare DO: ใช้ `BRIDGE_SECRET` ผ่าน WSS handshake
@@ -34,7 +34,7 @@
   * Public Endpoint มีเพียง `/` และ `/health` เท่านั้น
 
 ### 1.2 Evidence Sanitization
-* **[G1.2.1]** ในการบันทึกหรือส่ง Structural Evidence ([`evidence-registry.js`](extension-cloudflare/evidence-registry.js)) ต้อง sanitize ข้อความ Prompt ของผู้ใช้ทิ้ง 100% ห้าม persist ข้อความส่วนบุคคล
+* **[G1.2.1]** ในการบันทึกหรือส่ง Structural Evidence ([`evidence-registry.js`](dist/extension/evidence-registry.js)) ต้อง sanitize ข้อความ Prompt ของผู้ใช้ทิ้ง 100% ห้าม persist ข้อความส่วนบุคคล
 
 ---
 
@@ -68,7 +68,7 @@
 ## 4. G4: Quality & Regression Gates (ประตูควบคุมคุณภาพโค้ด)
 
 ### 4.1 Zero Technical Debt in Production Code
-* **[G4.1.1]** ห้ามทิ้ง `TODO`, `FIXME`, `HACK`, `XXX`, หรือ `BLOCKER` ใน Production Source Code (`cloudflare-worker/src/` และ `extension-cloudflare/`) หากมีงานค้างต้องบันทึกใน `PLANNING-HANDOFF.md` เท่านั้น
+* **[G4.1.1]** ห้ามทิ้ง `TODO`, `FIXME`, `HACK`, `XXX`, หรือ `BLOCKER` ใน Production Source Code (`cloudflare-worker/src/` และ `dist/extension/`) หากมีงานค้างต้องบันทึกใน `PLANNING-HANDOFF.md` เท่านั้น
 * **[G4.1.2]** ห้ามใส่ Hardcoded Stale Strings (เช่น Fallback Build Versions) ในโค้ด ให้ใช้ Fail-Fast Mechanism แทน
 
 ### 4.2 Automated Testing Gate

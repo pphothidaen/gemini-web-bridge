@@ -36,10 +36,10 @@ import {
 // KEEP IN SYNC with:
 //   • cloudflare-worker/package.json          (npm test → version-consistency)
 //   • cloudflare-worker/package-lock.json
-//   • extension-cloudflare/manifest.json
+//   • dist/extension/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.35";
+const WORKER_VERSION = "4.7.38";
 
 // KAN-236 Phase D: how many sanitized payload records to keep.
 //
@@ -4094,6 +4094,34 @@ export class GeminiBridgeDO extends DurableObject {
       if(requestedModel && !["gemini-web","gemini-web-thinking",rawModel].includes(requestedModel)) corsHeaders["X-Model-Degraded"] = "true";
       const isStream = body?.stream === true;
 
+      // ─── Parse thinking/effort options (Hermes agent custom provider support) ───
+      // Support multiple formats:
+      // - body.thinking: boolean (legacy)
+      // - body.thinking_effort / body.effort: "off" | "low" | "medium" | "high" | "max"
+      // - body.options.thinking: { effort: "high" } (OpenAI compatible)
+      // - body.reasoning_effort: "low" | "medium" | "high" (OpenAI format)
+      let thinkingEffort = null;
+      if (body.thinking === true && !thinkingEffort) thinkingEffort = "high";
+      else if (body.thinking === false) thinkingEffort = "off";
+      if (body.thinking_effort && !thinkingEffort) thinkingEffort = body.thinking_effort;
+      if (body.effort && !thinkingEffort) thinkingEffort = body.effort;
+      if (body.reasoning_effort && !thinkingEffort) {
+        // Map OpenAI reasoning_effort to our levels
+        const map = { low: "low", medium: "medium", high: "high" };
+        thinkingEffort = map[body.reasoning_effort] || "medium";
+      }
+      if (body.options?.thinking?.effort && !thinkingEffort) {
+        thinkingEffort = body.options.thinking.effort;
+      }
+      // Normalize
+      if (thinkingEffort) {
+        thinkingEffort = thinkingEffort.toLowerCase();
+        const validEfforts = ["off", "low", "medium", "high", "max"];
+        if (!validEfforts.includes(thinkingEffort)) {
+          thinkingEffort = "high"; // default fallback
+        }
+      }
+
       // Extract tools from header or body and inject tool prompt if present
       let policy;
       try {
@@ -4156,7 +4184,7 @@ export class GeminiBridgeDO extends DurableObject {
                 } else if (typeof cumulative === "string") {
                   lastEmitted = cumulative;
                 }
-              }, upstreamModel);
+              }, upstreamModel, { thinkingEffort });
               sse(chunkFrame({}, "stop"));
               writer.write(encoder.encode("data: [DONE]\n\n"));
               await writer.close();
@@ -4188,7 +4216,7 @@ export class GeminiBridgeDO extends DurableObject {
         const readable = toolTransformer.readable.pipeThrough(new TextEncoderStream());
 
         let fullText;
-        try {fullText=await this.executeThroughExtension(messages,null,upstreamModel);}
+        try {fullText=await this.executeThroughExtension(messages,null,upstreamModel, { thinkingEffort });}
         catch(error) {return this.failure(503,error.code || "execution_failed",error.message);}
         try {parseToolCompletion(fullText,policy);}
         catch(error) {return this.failure(422,"invalid_tool_completion",error.message);}

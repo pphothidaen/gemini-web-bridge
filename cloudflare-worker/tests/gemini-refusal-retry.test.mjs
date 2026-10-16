@@ -20,10 +20,10 @@ import { readFileSync } from 'node:fs';
 import { buildToolPrompt } from '../src/prompt-templates.js';
 
 const require = createRequire(import.meta.url);
-const NativeRecovery = require('../../extension-cloudflare/native-recovery.js');
-const NotebookAttach = require('../../extension-cloudflare/notebook-attach.js');
-const PromptTyping = require('../../extension-cloudflare/prompt-typing.js');
-const GeminiInjected = require('../../extension-cloudflare/injected.js');
+const NativeRecovery = require('../../dist/extension/native-recovery.js');
+const NotebookAttach = require('../../dist/extension/notebook-attach.js');
+const PromptTyping = require('../../dist/extension/prompt-typing.js');
+const GeminiInjected = require('../../dist/extension/injected.js');
 
 // ── Prompt typing fallback (KAN-182) ────────────────────────────────────────
 //
@@ -848,7 +848,7 @@ test('generatingSignal keeps the Material spinner ahead of the falsified Lottie 
   // generation and matched nothing on this build. It must not become the
   // primary signal, or the wait silently degrades to text-stability.
   const source = readFileSync(
-    new URL('../../extension-cloudflare/native-recovery.js', import.meta.url), 'utf8'
+    new URL('../../dist/extension/native-recovery.js', import.meta.url), 'utf8'
   );
   const start = source.indexOf('function generatingSignal');
   const end = source.indexOf('\n  }', start);
@@ -867,7 +867,7 @@ test('the Lottie clipPath probe was falsified on the live DOM, kept only as fall
   // generation and matched nothing on this build. It must not be the PRIMARY
   // signal, or the wait silently degrades to text-stability every time.
   const source = readFileSync(
-    new URL('../../extension-cloudflare/native-recovery.js', import.meta.url), 'utf8'
+    new URL('../../dist/extension/native-recovery.js', import.meta.url), 'utf8'
   );
   const start = source.indexOf('function generatingSignal');
   const end = source.indexOf('\n  }', start);

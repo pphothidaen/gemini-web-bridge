@@ -111,7 +111,7 @@ timer and the always-zero response count that `[4.7.24]` records as
 anyway, but neither would have prevented this.
 
 That leaves the submit step, and it has a specific weakness. `typeAndSend` in
-`extension-cloudflare/prompt-typing.js` confirms submission like this:
+`dist/extension/prompt-typing.js` confirms submission like this:
 
 ```js
 const before = countUserQueries(doc);
@@ -141,7 +141,7 @@ invisible today and is the prime suspect. State 4 is not a bridge defect.
 
 ### The safety argument that constrains every capture here
 
-`classifyString` in `extension-cloudflare/injected.js` consults a fixed prefix
+`classifyString` in `dist/extension/injected.js` consults a fixed prefix
 allowlist — `notebook://`, `http(s)://`, a bare UUID, `boq_`, or a string that
 parses as JSON — and returns `OPAQUE` with nothing retained for everything else,
 prompts included. The canary in `payload-classifier.test.mjs` fails the moment
@@ -323,8 +323,8 @@ concluding it is open on the strength of an unexamined 2 KB string is not.
 
 ### Modified
 
-**`extension-cloudflare/prompt-typing.js`, `extension-cloudflare/injected.js`,
-`extension-cloudflare/content.js`** — **unchanged.** All three were specified for
+**`dist/extension/prompt-typing.js`, `dist/extension/injected.js`,
+`dist/extension/content.js`** — **unchanged.** All three were specified for
 the submit-window probe and its classifier. Phase B found no failing state, so
 there is nothing for them to do. Recording them as untouched is the honest
 outcome, not an omission.
@@ -344,7 +344,7 @@ defects; the Phase D artefacts go under `### Added`.
 
 **`PLANNING-HANDOFF.md`** — whatever remains open, in the form GUARDRAILS G4.1.1
 requires. No `TODO`/`FIXME` markers in `cloudflare-worker/src/` or
-`extension-cloudflare/`; unfinished work goes here.
+`dist/extension/`; unfinished work goes here.
 
 ### Not touched
 
@@ -352,7 +352,7 @@ requires. No `TODO`/`FIXME` markers in `cloudflare-worker/src/` or
 *subject* of the Phase D measurement, not its object. Changing it blind is what
 produced KAN-182's workaround.
 
-**`extension-cloudflare/manifest.json`'s DOM selectors and the KAN-231 contract** —
+**`dist/extension/manifest.json`'s DOM selectors and the KAN-231 contract** —
 the pre-flight check confirmed the send button still appears only once text has
 landed, so the reskin did not invalidate the capture.
 
@@ -396,7 +396,7 @@ which is the exact failure mode of a measurement tool reporting no differences.
 ### Not modified: `typeAndSend(opts)` — Phase B found nothing to fix
 
 Recorded because the analysis was done and the answer was negative.
-`extension-cloudflare/prompt-typing.js` is **unchanged**, and the KAN-231
+`dist/extension/prompt-typing.js` is **unchanged**, and the KAN-231
 capture that describes its selectors still holds. The original plan read:
 
 - **State 3** (transcript grew, no request): replace the `countUserQueries` check
@@ -453,7 +453,7 @@ None added. None removed.
 
 The worker exposes one Durable Object class (`GeminiBridgeDO`,
 `cloudflare-worker/src/index.js`) and the extension uses IIFEs with a registry
-`Map` (`extension-cloudflare/model-adapter.js:17`). Everything this plan adds is
+`Map` (`dist/extension/model-adapter.js:17`). Everything this plan adds is
 procedural: four functions in `scripts/analyze-payload-shape.mjs`, five across the
 extension files, one bounded ring buffer on the DO instance.
 

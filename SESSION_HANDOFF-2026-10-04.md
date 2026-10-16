@@ -44,9 +44,9 @@
    - Full 3-day architectural design implemented: Extension DOM probe (`CONVERSATION_STATS`) + Worker DO headroom guard (`ensureConversationHeadroom`).
    - Red Team suite created in `cloudflare-worker/tests/context-rotation.test.mjs` (21 tests).
    - Blue Team implemented:
-     - `extension-cloudflare/protocol-messages.js`: Added `CONVERSATION_STATS` and `CONVERSATION_STATS_RESULT` to `MessageTypes`.
-     - `extension-cloudflare/background.js`: Added message forwarding across active bridge port.
-     - `extension-cloudflare/content.js`: Added `handleConversationStats` reading `Recovery.countModelResponses`, `userQueries`, `isGenerating`, scope, and pathname.
+     - `dist/extension/protocol-messages.js`: Added `CONVERSATION_STATS` and `CONVERSATION_STATS_RESULT` to `MessageTypes`.
+     - `dist/extension/background.js`: Added message forwarding across active bridge port.
+     - `dist/extension/content.js`: Added `handleConversationStats` reading `Recovery.countModelResponses`, `userQueries`, `isGenerating`, scope, and pathname.
      - `cloudflare-worker/src/index.js`: Added `rotationThreshold()`, `isPinnedScope()`, `requestConversationStats()`, `ensureConversationHeadroom()`, constructor initialization, typed turns in-flight tracking, wire order sequencing (`horo_consult` rotates before attaching notebook chip), and `/health` reporting.
      - `cloudflare-worker/wrangler.toml`: Set `CONTEXT_ROTATION_THRESHOLD = "8"` under `[vars]`.
    - Verified 100% Green Phase across repository (694 tests, 684 passed, 0 failed, 10 skipped).

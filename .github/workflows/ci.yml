@@ -225,7 +225,7 @@ jobs:
 
   # ─── Job 5: Build & Package Extension ──────────────────────────
   # RULE: Extension MUST be built via build-extension.py before zipping.
-  # Never zip extension-cloudflare/ directly — it contains __BRIDGE_AUTH_TOKEN__ placeholder.
+  # Never zip dist/extension/ directly — it contains __BRIDGE_AUTH_TOKEN__ placeholder.
   # Load unpacked from dist/extension/ OR download the CI artifact.
   package-extension:
     name: Build & Package Extension
@@ -263,7 +263,7 @@ jobs:
           # each <= 65535, so the 4th slot is the only place a build counter can
           # go. Keep that in mind when reading the schemes below.
           read_manifest_version() {
-            python3 -c "import json; print(json.load(open('extension-cloudflare/manifest.json'))['version'])"
+            python3 -c "import json; print(json.load(open('dist/extension/manifest.json'))['version'])"
           }
 
           # Scheme 1 — an exact tag on this commit wins. This is the release
@@ -428,7 +428,7 @@ jobs:
           echo "### ⚠️ Important" >> $GITHUB_STEP_SUMMARY
           echo "Download from: **Actions → Artifacts → gemini-bridge-extension-v${{ steps.bump-version.outputs.version }}-run${{ github.run_number }}**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**DO NOT** load unpacked from \`extension-cloudflare/\` (contains placeholders)" >> $GITHUB_STEP_SUMMARY
+          echo "**DO NOT** load unpacked from \`dist/extension/\` (contains placeholders)" >> $GITHUB_STEP_SUMMARY
           echo "**DO** load from \`dist/extension/\` after running \`python3 scripts/build-extension.py\`" >> $GITHUB_STEP_SUMMARY
 
   # ─── Job 5b: Comment build result on the Jira ticket ───────────

@@ -34,7 +34,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const NativeRecovery = require('../../extension-cloudflare/native-recovery.js');
+const NativeRecovery = require('../../dist/extension/native-recovery.js');
 
 /**
  * A document whose model-response count is driven by a script, with a virtual

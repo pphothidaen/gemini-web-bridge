@@ -10,7 +10,7 @@
 
 | Token | Where it leaked | Still valid? (audited 2026-09-26) |
 |:--|:--|:--|
-| `BRIDGE_SECRET` (`gemini-bridge-…`) | Committed to `extension-cloudflare/{background,content,options}.js` + `options.html` in commit **`078824b`** ("pre-filled defaults"), removed in **`4f6cced`**. Both commits are ancestors of `main`/`origin/main` of the **public** repo `pphothidaen/gemini-web-bridge`. | Not probed (a WS connect could disturb the live extension session). Assume compromised. |
+| `BRIDGE_SECRET` (`gemini-bridge-…`) | Committed to `dist/extension/{background,content,options}.js` + `options.html` in commit **`078824b`** ("pre-filled defaults"), removed in **`4f6cced`**. Both commits are ancestors of `main`/`origin/main` of the **public** repo `pphothidaen/gemini-web-bridge`. | Not probed (a WS connect could disturb the live extension session). Assume compromised. |
 | `CLIENT_API_KEY` (`hermes-…`) | Same commits; also present in local (gitignored) `.env`, `cloudflare-worker/.env`, `release/gemini-bridge-v4.4.2/`. | **Yes — verified: `GET /v1/models` returned HTTP 200 with the leaked bearer token.** |
 | `CLOUDFLARE_API_TOKEN` | Exposed in the deleted pre-migration repo `taijustarrett417-lgtm`. | Rotate. |
 
@@ -18,7 +18,7 @@ Anyone can still recover both tokens from history:
 
 ```bash
 git log --all -S 'hermes-'
-git show 078824b -- extension-cloudflare/settings.js
+git show 078824b -- dist/extension/settings.js
 ```
 
 ### Exposure was NOT history-only
@@ -32,14 +32,14 @@ in history at all — it was in the current tree:
 |:--|:--|:--|
 | **Committed build archive** | `gemini-bridge-v4.3.6.zip` at the **repo root**, tracked on `main`/`origin/main`, re-committed in `d903ebe` (Sep 25). Contained the live tokens in `settings.js`, `background.js`, `options.js`, `content.js` and `options.html`. One browser download from the repo front page — no git knowledge needed. | Untracked + deleted (`a526180`+), `*.zip` gitignored |
 | **This runbook itself** | `docs/SECURITY_TOKEN_ROTATION.md:112-113` held both tokens **in plaintext at `HEAD`** (`a526180`), greppable by anyone with GitHub code search. | Redacted to `hermes-392e…d0e` / `gemini-bridge-5ee2…1240` |
-| **Committed archive (clean)** | `extension-cloudflare.zip` was also tracked, but contained only `__BRIDGE_SECRET__` / `__CLIENT_API_KEY__` placeholders — a stray artifact, not an exposure. | Untracked |
+| **Committed archive (clean)** | `dist/extension.zip` was also tracked, but contained only `__BRIDGE_SECRET__` / `__CLIENT_API_KEY__` placeholders — a stray artifact, not an exposure. | Untracked |
 
 Why it recurred twice: `release/` and `dist/` were gitignored but the archives
 landed at the **repo root**, where nothing objected. The 16–17 `__MACOSX`
 entries in each blob prove macOS Finder "Compress" rather than
 `scripts/zip-extension.py` (which skips `__MACOSX`). Finder-zip → `git add` →
 committed, with the existing guard test reporting 4/4 green: it only read
-`extension-cloudflare/*.{js,html,json}`, so a compressed blob was invisible to
+`dist/extension/*.{js,html,json}`, so a compressed blob was invisible to
 it, to gitleaks' default config, and to every text grep.
 
 Rotation (not history rewriting) is the actual fix — a rewritten history is not
@@ -130,7 +130,7 @@ curl -s https://prod.gemini-web-bridge.workers.dev/health | head -20
 
 ```bash
 pip install git-filter-repo
-git filter-repo --path-glob 'extension-cloudflare/*' --invert-paths   # not sufficient alone —
+git filter-repo --path-glob 'dist/extension/*' --invert-paths   # not sufficient alone —
 # the tokens also appear in options.html and historical diffs; scrub by pattern.
 # The exact values are redacted here on purpose — a literal token in this file is
 # itself a leak (it happened at a526180). Read the exact values from the

@@ -19,11 +19,11 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const Settings = require('../../extension-cloudflare/settings.js');
-import { computeBackoff as backgroundBackoff } from '../../extension-cloudflare/background.js';
+const Settings = require('../../dist/extension/settings.js');
+import { computeBackoff as backgroundBackoff } from '../../dist/extension/background.js';
 
 const contentSource = fs.readFileSync(
-  new URL('../../extension-cloudflare/content.js', import.meta.url),
+  new URL('../../dist/extension/content.js', import.meta.url),
   'utf8'
 );
 

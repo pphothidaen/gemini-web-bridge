@@ -21,7 +21,7 @@ on:
     branches: [main]
     paths:
       - 'cloudflare-worker/**'
-      - 'extension-cloudflare/**'
+      - 'dist/extension/**'
       - 'scripts/build-extension.py'
   workflow_dispatch:
     inputs:

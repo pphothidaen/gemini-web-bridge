@@ -280,7 +280,7 @@ coding.
 - Release tags must match the worker version: `git tag -a v<version>` on the
   commit that declares it, or `extension-version-line.test.mjs` fails.
 - Every version moves together: `package.json`, `package-lock.json`,
-  `WORKER_VERSION`, `extension-cloudflare/manifest.json`. The manifest moves too
+  `WORKER_VERSION`, `dist/extension/manifest.json`. The manifest moves too
   whenever extension source changes.
 - `cd cloudflare-worker && npm test` must be 0 fail before pushing.
 - CD deploys on push to `main` and waits at the `production` environment gate.

@@ -275,7 +275,7 @@ Defined in `cloudflare-worker/tests/helpers/dom-signal.mjs`:
 ## 7. Deployment & CI/CD Governance
 
 ### 7.1 Single Authority: GitHub Actions CD (`.github/workflows/cd.yml`)
-- Triggered on push to `main` affecting `cloudflare-worker/**` or `extension-cloudflare/**`.
+- Triggered on push to `main` affecting `cloudflare-worker/**` or `dist/extension/**`.
 - Gated by GitHub Environment `production` with required reviewers.
 - Synchronizes secrets from Doppler (`gemini-web-bridge/prd_worker`) and deploys Worker `prod` using `npx wrangler deploy`.
 

@@ -31,7 +31,7 @@
 
 `dist/extension/` and `release/gemini-bridge-vX.Y.Z/` are **gitignored**. Nothing
 in CI rebuilds or freshness-checks them, so they can lag behind
-`extension-cloudflare/` indefinitely while every test still passes.
+`dist/extension/` indefinitely while every test still passes.
 
 Found here: `release/gemini-bridge-v4.4.3/` had been built at 22:24, *before*
 `d342beb` (KAN-155) landed at 01:29. That commit fixed the direct-WS fallback
@@ -49,7 +49,7 @@ python3 scripts/build-extension.py --set-version <v> --create-zip
 # chrome://extensions → Load unpacked → dist/extension
 ```
 Use `--set-version` with the *current* manifest version. `--bump-version`
-rewrites `extension-cloudflare/manifest.json` and breaks
+rewrites `dist/extension/manifest.json` and breaks
 `tests/version-consistency.test.mjs`.
 
 ---
@@ -130,7 +130,7 @@ have reported success while publishing to the account nobody was looking at. It
 is now set explicitly in both `.env` files, with a comment saying why.
 
 **GitHub secrets had to change before the push, not after.** `cd.yml` deploys on
-any push touching `cloudflare-worker/**`, `extension-cloudflare/**` or
+any push touching `cloudflare-worker/**`, `dist/extension/**` or
 `scripts/build-extension.py` — which this migration touches in all three. With
 the old `CLOUDFLARE_ACCOUNT_ID` still in the repository secrets, the first push
 would have deployed a worker named `prod` into the old account. `secrets.CLOUDFLARE_ACCOUNT_ID`

@@ -226,9 +226,9 @@ export function computeBackoff(attempt, base = 1000, max = 30000, rnd = Math.ran
  * what isEvictable() and the 409 guard on the upgrade path actually read).
  *
  * This CANNOT be a shared import. The extension is not bundled: scripts/
- * build-extension.py copies extension-cloudflare/ verbatim into dist/extension/
+ * build-extension.py copies dist/extension/ verbatim into dist/extension/
  * and scripts/zip-extension.py packages that directory, so background.js can
- * only import files that live inside extension-cloudflare/. The worker is built
+ * only import files that live inside dist/extension/. The worker is built
  * by wrangler from cloudflare-worker/src/. There is no common root both builds
  * can reach, so the value is duplicated deliberately and pinned by a test —
  * tests/liveness.test.mjs parses the worker source and fails if the two ever
@@ -492,7 +492,7 @@ export class BridgeSocketManager {
     url.protocol = url.protocol === "http:" || url.protocol === "ws:" ? "ws:" : "wss:";
     url.pathname = "/bridge";
     url.search = "";
-    url.searchParams.set("token", this.settings.bridgeToken);
+    // P0: Token moved from URL query to first message (prevents token leak in logs)
     url.searchParams.set("client", "background_sw");
     if (this.instanceId) {
       url.searchParams.set("instanceId", this.instanceId);

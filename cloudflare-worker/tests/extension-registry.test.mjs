@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const ModelAdapter = require('../../extension-cloudflare/model-adapter.js');
-const { EvidenceRegistry, sanitizeEvidence, sanitizeStructure } = require('../../extension-cloudflare/evidence-registry.js');
+const ModelAdapter = require('../../dist/extension/model-adapter.js');
+const { EvidenceRegistry, sanitizeEvidence, sanitizeStructure } = require('../../dist/extension/evidence-registry.js');
 
 test('evidence sanitizer strips prompts, responses, cookies, and tokens', () => {
   const raw = {

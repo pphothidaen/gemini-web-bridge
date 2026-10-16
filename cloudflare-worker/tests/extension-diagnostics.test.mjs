@@ -5,10 +5,10 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const Settings = require('../../extension-cloudflare/settings.js');
-import { CONFLICT_RETRY_DELAY_MS, CONFLICT_RETRY_JITTER_MS } from '../../extension-cloudflare/background.js';
+const Settings = require('../../dist/extension/settings.js');
+import { CONFLICT_RETRY_DELAY_MS, CONFLICT_RETRY_JITTER_MS } from '../../dist/extension/background.js';
 
-const contentSource = fs.readFileSync(new URL('../../extension-cloudflare/content.js', import.meta.url), 'utf8');
+const contentSource = fs.readFileSync(new URL('../../dist/extension/content.js', import.meta.url), 'utf8');
 const workerSource = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 
 /** The live value the DO evicts on, not a copy. */

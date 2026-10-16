@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { TabCoordinator } = require('../../extension-cloudflare/tab-coordinator.js');
+const { TabCoordinator } = require('../../dist/extension/tab-coordinator.js');
 
 function createMockStorage() {
   const store = {};

@@ -28,7 +28,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const contentSource = fs.readFileSync(
-  new URL('../../extension-cloudflare/content.js', import.meta.url),
+  new URL('../../dist/extension/content.js', import.meta.url),
   'utf8'
 );
 

@@ -10,7 +10,7 @@
 
 ### RT-001: No hardcoded bridge tokens in extension source
 - **Check**: No `gemini-bridge-[0-9a-f]{32}` pattern in any source file or build output
-- **Method**: `grep -r 'gemini-bridge-[0-9a-f]' extension-cloudflare/ dist/extension/ && unzip -l extension-cloudflare.zip | grep -i token`
+- **Method**: `grep -r 'gemini-bridge-[0-9a-f]' dist/extension/ dist/extension/ && unzip -l dist/extension.zip | grep -i token`
 - **Pass criteria**: Zero matches in source; zero in built extension
 - **Automated**: ✅ Yes
 - **Status**: ⬜ Pending

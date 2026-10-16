@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CentralTabCoordinator } from '../../extension-cloudflare/background.js';
+import { CentralTabCoordinator } from '../../dist/extension/background.js';
 
 class MockPort {
   constructor(name, tabId) {

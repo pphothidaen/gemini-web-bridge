@@ -62,7 +62,7 @@ const SEND_BUTTON_FALLBACK = "input-area-v2 button.send-button, input-area-v2 [d
 export const DOM_SIGNALS = [
   {
     id: 'response.generating',
-    file: 'extension-cloudflare/native-recovery.js',
+    file: 'dist/extension/native-recovery.js',
     selector: '[aria-busy="true"]',
     scope: 'newest-response',
     states: { generating: true, settled: false },
@@ -87,7 +87,7 @@ export const DOM_SIGNALS = [
     // A capture of what the element looks like is T3 in KAN-200 and is the
     // one thing here that cannot be transcribed from existing evidence.
     id: 'grounding.source_chip',
-    file: 'extension-cloudflare/notebook-attach.js',
+    file: 'dist/extension/notebook-attach.js',
     // A custom element whose TAG NAME is `source-inline-chip` - not a class.
     selector: 'source-inline-chip',
     scope: 'newest-response',
@@ -114,7 +114,7 @@ export const DOM_SIGNALS = [
     // not a second opinion; it is decoration that made the check look
     // stronger than it was.
     id: 'grounding.cite_marker',
-    file: 'extension-cloudflare/notebook-attach.js',
+    file: 'dist/extension/notebook-attach.js',
     selector: 'text:/\\[cite:\\s*\\d+\\]/',
     scope: 'text-content',
     states: { generating: null, settled: null },
@@ -145,7 +145,7 @@ export const DOM_SIGNALS = [
     // This is KAN-197/198's shape one level up: a proxy read as the state
     // itself. aria-busy proxies "streaming"; the question is "generating".
     id: 'generation.thinking_dots',
-    file: 'extension-cloudflare/native-recovery.js',
+    file: 'dist/extension/native-recovery.js',
     selector: THINKING_DOTS,
     scope: 'document',
     states: { thinking: true, streaming: false, settled: false },
@@ -170,7 +170,7 @@ export const DOM_SIGNALS = [
     // NOT inside any model-response, so a newest-response-scoped query cannot
     // see the generation in progress no matter how good its selector is.
     id: 'generation.pending_request',
-    file: 'extension-cloudflare/native-recovery.js',
+    file: 'dist/extension/native-recovery.js',
     selector: PENDING_REQUEST,
     scope: 'document',
     states: { thinking: true, streaming: false, settled: false },
@@ -188,7 +188,7 @@ export const DOM_SIGNALS = [
   },
   {
     id: 'generation.pending_response',
-    file: 'extension-cloudflare/native-recovery.js',
+    file: 'dist/extension/native-recovery.js',
     selector: PENDING_RESPONSE,
     scope: 'document',
     states: { thinking: true, streaming: false, settled: false },
@@ -208,7 +208,7 @@ export const DOM_SIGNALS = [
     // content, which is the entire reason a send_button_not_found failure is
     // ambiguous between "the selector is stale" and "the text never landed".
     id: 'prompt.editor',
-    file: 'extension-cloudflare/prompt-typing.js',
+    file: 'dist/extension/prompt-typing.js',
     selector: EDITOR,
     scope: 'document',
     states: { empty: true, filled: true },
@@ -225,7 +225,7 @@ export const DOM_SIGNALS = [
   },
   {
     id: 'prompt.rich_textarea',
-    file: 'extension-cloudflare/prompt-typing.js',
+    file: 'dist/extension/prompt-typing.js',
     selector: RICH_TEXTAREA,
     scope: 'document',
     states: { empty: true, filled: true },
@@ -241,7 +241,7 @@ export const DOM_SIGNALS = [
     // The control that decides whether a request is ever sent. This is the
     // selector three live horo_consult calls failed on.
     id: 'prompt.send_button',
-    file: 'extension-cloudflare/prompt-typing.js',
+    file: 'dist/extension/prompt-typing.js',
     selector: SEND_BUTTON,
     scope: 'document',
     states: { empty: false, filled: true },
@@ -264,7 +264,7 @@ export const DOM_SIGNALS = [
     // It matched nothing in any captured state, including the one where the
     // button was present and enabled.
     id: 'prompt.send_button_fallback',
-    file: 'extension-cloudflare/prompt-typing.js',
+    file: 'dist/extension/prompt-typing.js',
     selector: SEND_BUTTON_FALLBACK,
     scope: 'document',
     states: { empty: null, filled: null },
@@ -286,7 +286,7 @@ export const DOM_SIGNALS = [
   },
   {
     id: 'response.spinner',
-    file: 'extension-cloudflare/native-recovery.js',
+    file: 'dist/extension/native-recovery.js',
     selector: SPINNER,
     scope: 'newest-response',
     states: { generating: null, settled: null },
@@ -301,7 +301,7 @@ export const DOM_SIGNALS = [
   },
   {
     id: 'response.stop_button',
-    file: 'extension-cloudflare/native-recovery.js',
+    file: 'dist/extension/native-recovery.js',
     selector: STOP_BTN,
     scope: 'newest-response',
     states: { generating: null, settled: null },
@@ -314,7 +314,7 @@ export const DOM_SIGNALS = [
   },
   {
     id: 'document.lottie',
-    file: 'extension-cloudflare/native-recovery.js',
+    file: 'dist/extension/native-recovery.js',
     selector: LOTTIE,
     scope: 'document',
     states: { generating: null, settled: null },

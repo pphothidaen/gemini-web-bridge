@@ -6,7 +6,9 @@ export function normalizeModels(models) {
     const verification = ['discovered','learning','verified','stale','unsupported'].includes(model.verification) ? model.verification : 'discovered';
     unique.set(model.id, { id: model.id, name: model.name,
       description: typeof model.description === 'string' ? model.description : '',
-      thinking: model.thinking === true, verification,
+      thinking: model.thinking === true,
+      thinkingEffort: typeof model.thinkingEffort === 'string' ? model.thinkingEffort : null,
+      verification,
       mapping_revision: typeof model.mapping_revision === 'string' ? model.mapping_revision : null });
   }
   return [...unique.values()].sort((a,b) => {

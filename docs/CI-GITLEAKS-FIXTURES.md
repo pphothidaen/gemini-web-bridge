@@ -153,18 +153,18 @@ does not report**:
 
 ```
 HANDOFF.md                       x7   rule=curl-auth-header
-extension-cloudflare/background.js    rule=gemini-bridge-auth-token
-extension-cloudflare/content.js   x2   rule=gemini-bridge-auth-token
-extension-cloudflare/options.html      rule=gemini-bridge-auth-token
-extension-cloudflare/options.js   x2   rule=gemini-bridge-auth-token
-extension-cloudflare/settings.js  x2   rule=gemini-bridge-auth-token, hermes-client-api-token
+dist/extension/background.js    rule=gemini-bridge-auth-token
+dist/extension/content.js   x2   rule=gemini-bridge-auth-token
+dist/extension/options.html      rule=gemini-bridge-auth-token
+dist/extension/options.js   x2   rule=gemini-bridge-auth-token
+dist/extension/settings.js  x2   rule=gemini-bridge-auth-token, hermes-client-api-token
 ```
 
 These are all from historical commits — the oldest dated `2026-09-18`. **None of
 the values are present in the working tree any more:**
 
 ```
-$ grep -coE '(hermes|gemini-bridge)-[a-f0-9]{16,}' extension-cloudflare/settings.js
+$ grep -coE '(hermes|gemini-bridge)-[a-f0-9]{16,}' dist/extension/settings.js
 0
 ```
 

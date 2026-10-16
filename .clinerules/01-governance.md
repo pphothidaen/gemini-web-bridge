@@ -10,7 +10,7 @@
 - ห้าม print/log BRIDGE_AUTH_TOKEN, CLIENT_API_KEY, SNlM0e (G1 Zero-Token-Leak)
   - อย่า commit secret ลง `.clinerules/` — ไฟล์นี้อยู่ใน git
   - ดึง secret สดด้วย `doppler secrets get <NAME> --project gemini-web-bridge --config prd`
-- ห้าม TODO/FIXME/HACK/XXX/BLOCKER ใน cloudflare-worker/src/ และ extension-cloudflare/ (G4.1.1)
+- ห้าม TODO/FIXME/HACK/XXX/BLOCKER ใน cloudflare-worker/src/ และ dist/extension/ (G4.1.1)
   - งานค้างให้บันทึกใน PLANNING-HANDOFF.md เท่านั้น
 - ก่อน push: `cd cloudflare-worker && npm test` ต้องผ่าน 0 fail
 - fail-closed เสมอ: gate ที่อ่าน Jira/external oracle ไม่ได้ ต้องไม่ตีความว่า "ผ่าน"

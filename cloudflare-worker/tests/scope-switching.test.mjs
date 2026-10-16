@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { scopeFromPath, scopeToUrl } from '../../extension-cloudflare/protocol-messages.js';
+import { scopeFromPath, scopeToUrl } from '../../dist/extension/protocol-messages.js';
 import * as catalog from '../src/model-catalog.js';
 import { makeCtx } from './helpers/fake-ctx.mjs';
 

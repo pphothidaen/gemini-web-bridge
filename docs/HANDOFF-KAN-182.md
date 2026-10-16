@@ -20,9 +20,9 @@ looking at a live browser, and both contradict what the source implies.
 
 | File | Change |
 |---|---|
-| `extension-cloudflare/notebook-attach.js` | NEW — drives `+ > more uploads > Notebooks > Horo` |
-| `extension-cloudflare/native-recovery.js` | `generatingSignal()` no longer reads the sidenav spinner as "generating" |
-| `extension-cloudflare/{content,background,manifest,protocol-messages}.js` | `ATTACH_NOTEBOOK` wiring |
+| `dist/extension/notebook-attach.js` | NEW — drives `+ > more uploads > Notebooks > Horo` |
+| `dist/extension/native-recovery.js` | `generatingSignal()` no longer reads the sidenav spinner as "generating" |
+| `dist/extension/{content,background,manifest,protocol-messages}.js` | `ATTACH_NOTEBOOK` wiring |
 | `cloudflare-worker/src/index.js` | `runNotebookAttach()`, `notebookGrounding`, `check_bridge_health.notebook` |
 
 **Uncommitted (KAN-182):**
@@ -34,13 +34,13 @@ looking at a live browser, and both contradict what the source implies.
  M cloudflare-worker/tests/mcp-protocol.test.mjs          3 new + 6 grounding stubs
  M cloudflare-worker/tests/sdlc-tool-args.test.mjs         1 grounding stub
  M cloudflare-worker/tests/red-team-adversarial.test.mjs  1 grounding stub
- M extension-cloudflare/background.js      routes GROUNDING_RESULT
- M extension-cloudflare/content.js         handleTypePrompt(), handleCollectAnswer(), handleVerifyGrounding()
- M extension-cloudflare/manifest.json      + prompt-typing.js
- M extension-cloudflare/notebook-attach.js no alreadyAttached; + readGroundingEvidence()
- M extension-cloudflare/protocol-messages.js  TYPE_PROMPT / COLLECT_ANSWER / VERIFY_GROUNDING
+ M dist/extension/background.js      routes GROUNDING_RESULT
+ M dist/extension/content.js         handleTypePrompt(), handleCollectAnswer(), handleVerifyGrounding()
+ M dist/extension/manifest.json      + prompt-typing.js
+ M dist/extension/notebook-attach.js no alreadyAttached; + readGroundingEvidence()
+ M dist/extension/protocol-messages.js  TYPE_PROMPT / COLLECT_ANSWER / VERIFY_GROUNDING
  M docs/HANDOFF-KAN-182.md                 this file
-?? extension-cloudflare/prompt-typing.js   NEW
+?? dist/extension/prompt-typing.js   NEW
 ```
 
 The worker is deployed and the extension is built to
@@ -286,7 +286,7 @@ Both forms were checked so the difference is not mistaken for a result.
   `WORKER_VERSION` in `src/index.js` (plus its informational `// Version:`
   comment), `package.json`, `package-lock.json` (**both** `version` and
   `packages[""].version` — the test asserts both), and
-  `extension-cloudflare/manifest.json`. Add a CHANGELOG entry too.
+  `dist/extension/manifest.json`. Add a CHANGELOG entry too.
   This release is 4.7.0 → **4.7.1** (patch: a correctness fix, not a new
   capability).
 - `python3 scripts/build-extension.py` syncs the built manifest to the source

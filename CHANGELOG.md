@@ -977,7 +977,7 @@ follow-up work; do not assume it is covered.
 - **Extension packaging**: Added `scripts/zip-extension.py` and CI job (`package-extension`) to produce versioned, installable extension zips automatically. Previously, incorrect zip structure (including `node_modules/` or missing `manifest.json`) made Chrome refuse to load the extension.
 
 ### Automation
-- CI: New `package-extension` job zips `extension-cloudflare/`, validates `manifest.json`, and uploads as `gemini-bridge-extension` artifact (90-day retention).
+- CI: New `package-extension` job zips `dist/extension/`, validates `manifest.json`, and uploads as `gemini-bridge-extension` artifact (90-day retention).
 - Git: `release/` added to `.gitignore` (build artifact, not committed).
 - Local build: `python3 scripts/zip-extension.py` produces `release/gemini-bridge-v{X.Y.Z}.zip`.
 

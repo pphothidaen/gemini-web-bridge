@@ -93,7 +93,7 @@ const SCAN_EXTENSIONS = new Set([
   '.md', '.json', '.js', '.mjs', '.sh', '.py', '.yml', '.yaml', '.jsonc', '.html',
 ]);
 const SKIP_DIRECTORIES = new Set([
-  'node_modules', '.git', 'release', 'dist', '.wrangler', '__pycache__', 'artifacts',
+  'node_modules', '.git', 'release', '.wrangler', '__pycache__', 'artifacts',
 ]);
 
 // `--cached --others --exclude-standard` is exactly "what could be committed":
@@ -160,8 +160,8 @@ test('the canonical production host is pinned where the spec says it is', () => 
   // by editing a config file at runtime — it is compiled into settings.js and
   // decides where the WebSocket goes when the user has not overridden it.
   assert.ok(
-    read('extension-cloudflare/content.js').includes(CANONICAL_HOST),
-    `extension-cloudflare/content.js DEFAULT_WORKER_URL must be ${CANONICAL_HOST}`
+    read('dist/extension/content.js').includes(CANONICAL_HOST),
+    `dist/extension/content.js DEFAULT_WORKER_URL must be ${CANONICAL_HOST}`
   );
 
   // Deliberately NOT asserted here: `cloudflare-worker/.env`.
@@ -253,7 +253,7 @@ test('the sweep is not vacuous — it actually reads the files it claims to', ()
     'docs/api-spec.md',
     'IDEA.md',
     'cloudflare-worker/src/index.js',
-    'extension-cloudflare/content.js',
+    'dist/extension/content.js',
   ]) {
     assert.ok(TARGETS.includes(required), `the scan must cover ${required}`);
   }

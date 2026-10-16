@@ -2,7 +2,7 @@
 """Build extension zip locally for manual install.
 
 Packages dist/extension/ — the output of scripts/build-extension.py, with the
-real secrets substituted — and NEVER extension-cloudflare/ (the committed
+real secrets substituted — and NEVER dist/extension/ (the committed
 source, which still contains the __BRIDGE_AUTH_TOKEN__ / __CLIENT_API_KEY__
 placeholders).
 
@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # there is one definition of the directory Chrome's "Load unpacked" points at.
 # Stored relative to the repo root: no developer home path in a log or a doc.
 _EXTENSION_CFG = json.loads((REPO_ROOT / "extension.config.json").read_text())["extension"]
-EXT_DIR = REPO_ROOT / _EXTENSION_CFG["source"]
+EXT_DIR = REPO_ROOT / "dist/extension"
 DIST_DIR = REPO_ROOT / _EXTENSION_CFG["unpacked"]
 RELEASE_DIR = REPO_ROOT / "release"
 
@@ -46,7 +46,7 @@ def main():
     if not DIST_DIR.is_dir():
         print("❌ dist/extension/ not found.")
         print("   Run scripts/build-extension.py first — it substitutes the real")
-        print("   tokens into the placeholders. Zipping extension-cloudflare/")
+        print("   tokens into the placeholders. Zipping dist/extension/")
         print("   instead yields an extension that 401s on every request.")
         sys.exit(1)
 
@@ -124,7 +124,7 @@ def main():
     print("   Placeholders: none (secrets injected)")
     print(f"\nLoad unpacked from: {DIST_DIR}")
     print(f"Or install from: {out_zip}")
-    print("\nDO NOT load unpacked from extension-cloudflare/ — it contains")
+    print("\nDO NOT load unpacked from dist/extension/ — it contains")
     print("placeholders, not secrets.")
 
 

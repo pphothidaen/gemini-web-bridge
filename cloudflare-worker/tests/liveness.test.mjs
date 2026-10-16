@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { STALE_AFTER_MS, PONG_GRACE_MS, isKeepaliveMissed, isEvictable } from '../src/liveness.js';
-import { CLIENT_STALE_SOCKET_IDLE_MS } from '../../extension-cloudflare/background.js';
+import { CLIENT_STALE_SOCKET_IDLE_MS } from '../../dist/extension/background.js';
 
 const NOW = 1_800_000_000_000;
 const OPEN = { readyState: 1 }; // 1 = WebSocket.OPEN

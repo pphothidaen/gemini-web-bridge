@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const Injected = require('../../extension-cloudflare/injected.js');
+const Injected = require('../../dist/extension/injected.js');
 const { STRING_CLASS } = Injected;
 
 import {

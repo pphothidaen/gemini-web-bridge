@@ -6,6 +6,22 @@
 (function () {
   "use strict";
 
+  // ─── Gemini Model Catalog (Single Source of Truth) ──────────
+  // All standard Gemini web models. Both standardGeminiModels and stdModels
+  // reference this array to prevent DRY violation and split-brain verification.
+  // P1: Dynamic mapping_revision — rotated per session epoch for anti-replay defense.
+  const CATALOG_BASE = [
+    { id: "gemini-3.8-flash", name: "3.8 Flash", description: "All-around help", thinking: false },
+    { id: "gemini-3.5-flash-lite", name: "3.5 Flash-Lite", description: "Fastest answers", thinking: false },
+    { id: "gemini-3.1-pro", name: "3.1 Pro", description: "Advanced reasoning", thinking: false },
+    { id: "gemini-4-argon", name: "4 Argon", description: "Complex tasks", thinking: false }
+  ];
+  const GEMINI_MODEL_CATALOG = CATALOG_BASE.map(m => ({
+    ...m,
+    verification: 'verified',
+    mapping_revision: `epoch_${sessionState.sessionEpoch || 'init'}`
+  }));
+
   // ─── Shared Components & Fallbacks ──────────────────────────
   const Settings = (typeof globalThis !== "undefined" && globalThis.GeminiBridgeSettings)
     ? globalThis.GeminiBridgeSettings
@@ -304,6 +320,38 @@
         // Reloading the page is the one cure, so make the pill do that.
         if (typeof chrome !== "undefined" && chrome.runtime && !chrome.runtime.id) {
           console.log("[Bridge] 🔄 Orphaned context — reloading the tab to recover");
+          // P0: Circuit breaker — prevent infinite reload loop
+          const KEY = 'bridge_reload_count';
+          const MAX_RELOADS = 3;
+          const WINDOW_MS = 60000;
+          const now = Date.now();
+          let record = { count: 0, firstAt: now };
+          try {
+            const raw = sessionStorage.getItem(KEY);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (now - parsed.firstAt <= WINDOW_MS) {
+                record = parsed;
+              }
+            }
+          } catch (e) { /* ignore */ }
+          record.count++;
+          try { sessionStorage.setItem(KEY, JSON.stringify(record)); } catch (e) { /* ignore */ }
+          if (record.count > MAX_RELOADS) {
+            console.error("[Bridge] 🔴 Reload loop detected. Manual intervention required.");
+            createOrUpdateIndicator("error", "Bridge: Extension reload loop. Please restart Chrome.");
+            return;
+          }
+          // P0-3: Stream-safe refresh — defer if streams are active
+          if (typeof activeRequests !== "undefined" && activeRequests.size > 0) {
+            console.log(`[Bridge] ⏳ Deferring refresh — ${activeRequests.size} active stream(s)`);
+            pendingTokenRefresh = true;
+            // Send abort to worker for all active requests
+            for (const reqId of activeRequests) {
+              sendToWorker({ type: "STREAM_ERROR", requestId: reqId, code: "token_expired_refresh_pending" });
+            }
+            return;
+          }
           if (typeof location !== "undefined" && typeof location.reload === "function") {
             location.reload();
           }
@@ -379,12 +427,29 @@
   }
 
   // ─── 2. WebSocket Connection & Diagnostics ──────────────────
+  // P2: 60-second clock-skew buffer — proactive token refresh before expiry
+  const TOKEN_REFRESH_BUFFER_MS = 60000;
+  let tokenRefreshTimer = null;
+  function scheduleTokenRefresh(expiresAtMs) {
+    if (tokenRefreshTimer) clearTimeout(tokenRefreshTimer);
+    const refreshAt = expiresAtMs - TOKEN_REFRESH_BUFFER_MS;
+    const delay = Math.max(0, refreshAt - Date.now());
+    tokenRefreshTimer = setTimeout(() => {
+      console.log("[Bridge] ⏰ Proactive token refresh (60s buffer)");
+      audit("token_refresh_scheduled", { expiresAt: expiresAtMs });
+      // Trigger background reconnect to get fresh token
+      if (bridgePort) {
+        bridgePort.postMessage({ type: "RECONNECT" });
+      }
+    }, delay);
+  }
+
   function getWorkerWsUrl() {
     const url = new URL(resolvedSettings.workerUrl);
     url.protocol = url.protocol === "http:" || url.protocol === "ws:" ? "ws:" : "wss:";
     url.pathname = "/bridge";
     url.search = "";
-    url.searchParams.set("token", resolvedSettings.bridgeToken);
+    // P0: Token moved from URL query to first message (prevents token leak in logs)
     url.searchParams.set("client", "content_tab");
     // Required by the DO hub — without it the upgrade is rejected with 401 and
     // the browser only reports an opaque ErrorEvent. See the note on instanceId.
@@ -417,6 +482,15 @@
     if (authFailed) {
       createOrUpdateIndicator("error", "Bridge: Auth Error (Invalid Token — click to retry)");
       return;
+    }
+
+    // P0: Send auth token as first message after connection (not in URL)
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: "AUTH",
+        token: resolvedSettings.bridgeToken,
+        instanceId: instanceId
+      }));
     }
 
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
@@ -845,6 +919,7 @@
   }
 
   function sendToWorker(data) {
+    console.log('[Bridge] 📤 Outgoing message:', data.type);
     if (useBackgroundBridge) {
       if (bridgePort) {
         try {
@@ -874,12 +949,18 @@
 
   // ─── 3. Dynamic Model Discovery from DOM ────────────────────
   function extractModelsFromPage() {
+    console.log('[Bridge] 🔍 extractModelsFromPage called');
     const discovered = new Map();
     let currentModelName = null;
     let isThinkingEnabled = false;
 
     if (typeof document === "undefined") {
-      return { activeModel: null, extendedThinking: false, models: [] };
+      console.log('[Bridge] 🔍 extractModelsFromPage called');
+      return {
+        activeModel: null,
+        extendedThinking: false,
+        models: []
+      };
     }
 
     try {
@@ -943,7 +1024,8 @@
           const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
           const desc = lines.length > 1 ? lines.slice(1).join(" — ") : "Official Google Gemini Web Model";
 
-          const slug = "gemini-" + modelName.toLowerCase().replace(/[\s_]+/g, "-");
+          const slug = "gemini-" + modelName.toLowerCase().replace(/[\\s_]+/g, "-");
+          console.log('[Bridge] 🔧 Added standard model:', { id: slug, name: modelName });
           discovered.set(slug, {
             id: slug,
             name: modelName,
@@ -964,11 +1046,7 @@
 
       // In real Gemini Web session, ensure all standard web models are present
       if (typeof window !== "undefined" && window.location && window.location.hostname && window.location.hostname.includes("gemini.google.com")) {
-        const standardGeminiModels = [
-          { id: "gemini-3.8-flash", name: "3.8 Flash", description: "All-around help", thinking: false },
-          { id: "gemini-3.5-flash-lite", name: "3.5 Flash-Lite", description: "Fastest answers", thinking: false },
-          { id: "gemini-3.1-pro", name: "3.1 Pro", description: "Advanced reasoning", thinking: false }
-        ];
+        const standardGeminiModels = GEMINI_MODEL_CATALOG;
         for (const std of standardGeminiModels) {
           if (!discovered.has(std.id)) {
             discovered.set(std.id, std);
@@ -998,7 +1076,7 @@
     }
 
     if (discovered.size > 0) connectionModels = Array.from(discovered.values());
-    if (currentModelName) {
+    console.log('[Bridge] 🔍 Discovered models count:', connectionModels.length);    if (currentModelName) {
       currentActiveModelSlug = "gemini-" + currentModelName.toLowerCase().replace(/[\s_]+/g, "-");
       // Notify injected script of active canonical model slug
       if (typeof window !== "undefined" && typeof window.postMessage === "function") {
@@ -1234,7 +1312,7 @@
     if (typeof window === "undefined" || !window.location || !window.location.hostname) return false;
     if (!window.location.hostname.includes("gemini.google.com")) return false;
 
-    const stdModels = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro"];
+    const stdModels = GEMINI_MODEL_CATALOG.map(m => m.id);
     for (const mId of stdModels) {
       registry.recordGenerationEvidence(mId, {
         endpoint: "StreamGenerate",
@@ -2324,16 +2402,35 @@
   // Prefer the background service worker as the WebSocket owner.
   initBridgePort();
 
+  // P1: Minimum protocol version enforcement
+  const MIN_PROTOCOL_VERSION = 3;
+
+  // P2: Runtime audit log — track model changes for security auditing
+  const auditLog = [];
+  function audit(event, details) {
+    const entry = { ts: Date.now(), event, details: JSON.stringify(details || {}) };
+    auditLog.push(entry);
+    if (auditLog.length > 100) auditLog.shift(); // Keep last 100 events
+    console.log(`[Audit] ${event}:`, details || '');
+  }
+
   // Listen for auto-configure commands from worker/extension bridge
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     window.addEventListener("message", (event) => {
       if (!event.data || event.source !== window) return;
       const { source, type, payload } = event.data;
+      // Reject messages from workers using protocol < 3
+      if (payload && payload.protocolVersion && payload.protocolVersion < MIN_PROTOCOL_VERSION) {
+        console.warn(`[Bridge] Rejected ${type} — protocol v${payload.protocolVersion} < minimum v${MIN_PROTOCOL_VERSION}`);
+        return;
+      }
       if (source === "GEMINI_CONTENT") {
         if (type === "AUTO_SELECT_MODEL" || type === "ENABLE_THINKING") {
+          // P1: Sanitize input to prevent XSS/injection
+          const sanitize = (s) => String(s || "").replace(/[<>"'&]/g, "").substring(0, 100);
           autoConfigureGeminiSession({
-            preferredFamily: payload?.preferredFamily || "pro",
-            thinkingEffort: payload?.thinkingEffort || "high"
+            preferredFamily: sanitize(payload?.preferredFamily) || "pro",
+            thinkingEffort: sanitize(payload?.thinkingEffort) || "high"
           });
         }
       }

@@ -10,7 +10,7 @@
  * written, and silently wrong the moment the server changed.
  *
  * The two sides cannot share an import: the extension ships as
- * extension-cloudflare/ copied verbatim (scripts/build-extension.py), while
+ * dist/extension/ copied verbatim (scripts/build-extension.py), while
  * the worker is bundled by wrangler from cloudflare-worker/src/. These tests
  * are the seam — they read the worker's constants and fail if the extension
  * drifts from them.
@@ -25,13 +25,13 @@ import {
   CONFLICT_RETRY_DELAY_MS,
   DO_PONG_GRACE_MS,
   DO_STALE_CONNECTION_TIMEOUT_MS,
-} from '../../extension-cloudflare/background.js';
+} from '../../dist/extension/background.js';
 
 const NOW = 1_800_000_000_000;
 const OPEN = { readyState: 1 }; // 1 = WebSocket.OPEN
 
 const workerSource = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
-const extensionSource = fs.readFileSync(new URL('../../extension-cloudflare/background.js', import.meta.url), 'utf8');
+const extensionSource = fs.readFileSync(new URL('../../dist/extension/background.js', import.meta.url), 'utf8');
 
 /** The value the 409 guard actually reads, not a dead duplicate. */
 function workerStaleTimeout() {

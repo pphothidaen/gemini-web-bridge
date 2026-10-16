@@ -19,7 +19,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BridgeSocketManager } from '../../extension-cloudflare/background.js';
+import { BridgeSocketManager } from '../../dist/extension/background.js';
 
 /** Minimal WebSocket stand-in that records construction and stays controllable. */
 class FakeWebSocket {

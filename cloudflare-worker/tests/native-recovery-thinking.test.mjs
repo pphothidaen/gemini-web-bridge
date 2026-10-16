@@ -39,7 +39,7 @@ import { createRequire } from 'node:module';
 import { buildStubFromFixture, REPO_ROOT } from './helpers/dom-signal.mjs';
 
 const require = createRequire(import.meta.url);
-const NativeRecovery = require('../../extension-cloudflare/native-recovery.js');
+const NativeRecovery = require('../../dist/extension/native-recovery.js');
 
 const FIXTURE = JSON.parse(
   fs.readFileSync(join(REPO_ROOT, 'cloudflare-worker', 'tests', 'fixtures', 'prompt-typing.json'), 'utf8')

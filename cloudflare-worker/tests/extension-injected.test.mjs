@@ -1,4 +1,4 @@
-// Unit tests for extension-cloudflare/injected.js (Main World Interceptor & Prompt Typing)
+// Unit tests for dist/extension/injected.js (Main World Interceptor & Prompt Typing)
 //
 // Background: injected.js runs in Chrome's MAIN world to access Quill (__quill)
 // and Angular's internal model, which are invisible to the ISOLATED content script.
@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const Injected = require('../../extension-cloudflare/injected.js');
+const Injected = require('../../dist/extension/injected.js');
 
 test('injected.js exports all essential MAIN-world helpers', () => {
   const expectedContract = {

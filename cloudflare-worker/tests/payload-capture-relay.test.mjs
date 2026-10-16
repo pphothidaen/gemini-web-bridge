@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const Injected = require('../../extension-cloudflare/injected.js');
+const Injected = require('../../dist/extension/injected.js');
 const {
   extractBoundedStructure,
   decodeAndSanitizePayload,
@@ -217,7 +217,7 @@ test('every capture records the build that produced it', () => {
   assert.match(WORKER_SOURCE, /const publicPaths = \["\/", "\/health"\];/);
 
   const content = fs.readFileSync(
-    new URL('../../extension-cloudflare/content.js', import.meta.url).pathname,
+    new URL('../../dist/extension/content.js', import.meta.url).pathname,
     'utf8'
   );
   assert.match(content, /chrome\.runtime\.getManifest\(\)\.version/,
@@ -291,15 +291,15 @@ test('the arm travels BOTH ways, not just the record', () => {
   // Both directions are now asserted, so a future edit to one cannot silently
   // leave the other behind.
   const bg = fs.readFileSync(
-    new URL('../../extension-cloudflare/background.js', import.meta.url).pathname,
+    new URL('../../dist/extension/background.js', import.meta.url).pathname,
     'utf8'
   );
   const content = fs.readFileSync(
-    new URL('../../extension-cloudflare/content.js', import.meta.url).pathname,
+    new URL('../../dist/extension/content.js', import.meta.url).pathname,
     'utf8'
   );
   const injected = fs.readFileSync(
-    new URL('../../extension-cloudflare/injected.js', import.meta.url).pathname,
+    new URL('../../dist/extension/injected.js', import.meta.url).pathname,
     'utf8'
   );
 
@@ -398,7 +398,7 @@ test('PAYLOAD_CAPTURE_ARM applies notebook id hint when notebookId is present', 
 
   // The fix must also be visible in the injected.js source
   const injected = fs.readFileSync(
-    new URL('../../extension-cloudflare/injected.js', import.meta.url).pathname,
+    new URL('../../dist/extension/injected.js', import.meta.url).pathname,
     'utf8'
   );
   assert.match(injected, /PAYLOAD_CAPTURE_ARM[\s\S]{0,400}setNotebookIdHint\(event\.data\.notebookId\)/,

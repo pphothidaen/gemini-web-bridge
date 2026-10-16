@@ -32,7 +32,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const contentSource = fs.readFileSync(
-  new URL('../../extension-cloudflare/content.js', import.meta.url),
+  new URL('../../dist/extension/content.js', import.meta.url),
   'utf8'
 );
 

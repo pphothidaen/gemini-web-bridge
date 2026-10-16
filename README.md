@@ -53,7 +53,7 @@ npx wrangler secret put GEMINI_API_KEY      # Optional: For GCP Hybrid Fallback
 
 1. Open `chrome://extensions/` in Google Chrome.
 2. Enable **Developer mode** (top-right toggle).
-3. Click **Load unpacked** and select `gemini-web-bridge/extension-cloudflare`.
+3. Click **Load unpacked** and select `gemini-web-bridge/dist/extension`.
 4. Open [https://gemini.google.com](https://gemini.google.com) and log in.
 5. Inspect the background console or popup to confirm `Bridge: Connected`.
 
@@ -142,7 +142,7 @@ npx wrangler secret put GEMINI_API_KEY      # ทางเลือก: สำ�
 
 1. เปิด `chrome://extensions/` ใน Google Chrome
 2. เปิดสวิตช์ **Developer mode (โหมดนักพัฒนา)** ที่มุมขวาบน
-3. คลิก **Load unpacked** แล้วเลือกโฟลเดอร์ `gemini-web-bridge/extension-cloudflare`
+3. คลิก **Load unpacked** แล้วเลือกโฟลเดอร์ `gemini-web-bridge/dist/extension`
 4. เปิดหน้าเว็บ [https://gemini.google.com](https://gemini.google.com) และล็อกอินบัญชี Google ให้เรียบร้อย
 5. ตรวจสอบสถานะการเชื่อมต่อที่มุมขวาล่างหรือหน้าต่าง Options จะแสดง `Bridge: Connected`
 
@@ -191,7 +191,7 @@ npx wrangler secret put CLIENT_API_KEY
 
 1. 在 Chrome 中打开 `chrome://extensions/`。
 2. 开启右上角 **开发者模式**。
-3. 点击 **加载已解压的扩展程序**，选择目录 `gemini-web-bridge/extension-cloudflare`。
+3. 点击 **加载已解压的扩展程序**，选择目录 `gemini-web-bridge/dist/extension`。
 4. 访问 [https://gemini.google.com](https://gemini.google.com) 并登录 Google 账号。
 5. 扩展将自动建立与 Edge Worker 的 WSS 连接。
 

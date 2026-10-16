@@ -9,7 +9,7 @@ accumulate more than ~8–9 `model-response` elements.
 
 | Concern | Location | Notes |
 |---|---|---|
-| "responses on screen" (DOM truth) | `extension-cloudflare/native-recovery.js` `countModelResponses()` (L98) and duplicate in `prompt-typing.js` (L111) | `document.querySelectorAll("model-response").length` |
+| "responses on screen" (DOM truth) | `dist/extension/native-recovery.js` `countModelResponses()` (L98) and duplicate in `prompt-typing.js` (L111) | `document.querySelectorAll("model-response").length` |
 | Count before send | `prompt-typing.js` L463 → `TYPE_PROMPT_RESULT.responsesBefore` (content.js L1716-1726) | Accurate, but only known *after* the prompt was sent |
 | Heartbeat | `content.js` `handleCollectAnswer` L1831-1851: `COLLECT_ANSWER_PROGRESS {generating, responses}` every 3 s; final `COLLECT_ANSWER_RESULT {responses}` (L1913) | Relayed by `background.js` L1177 allow-list |
 | Worker-side copy of count | `index.js` `this.lastCollectedResponseCount` — written at L2347 (PROGRESS) and L2370 (RESULT); surfaced as `/health` → `collection.last_progress_responses` (L4459) | **In-memory only**; `0` after DO eviction/restart; never set before the first collection |
@@ -64,7 +64,7 @@ Skip rotation when: `requireGrounding`-less replay-only turns (chat completions 
 
 ## 3. Implementation plan (files / functions)
 
-**Extension (`extension-cloudflare/`)**
+**Extension (`dist/extension/`)**
 1. `protocol-messages.js` `MessageTypes`: add `CONVERSATION_STATS` (worker→ext) and `CONVERSATION_STATS_RESULT` (ext→worker). Update `payload-shape-contract` / message-type enumerations.
 2. `content.js` `handleWorkerMessage` switch (~L669): `case "CONVERSATION_STATS": handleConversationStats(msg)` — leader-tab only, mirrors `handleCollectAnswer` style; reply with `Recovery.countModelResponses(document)`, `countUserQueries`, `Recovery.isGenerating(document)`, `detectScope()`, `location.pathname`.
 3. `background.js`: add `"CONVERSATION_STATS"` to the downward forward case list (L930-940) and `"CONVERSATION_STATS_RESULT"` to the upward allow-list (L1177). *(Both lists were the cause of a past silent-drop bug — see PAYLOAD_CAPTURE_ARM comment.)*

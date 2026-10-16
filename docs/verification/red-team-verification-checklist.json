@@ -8,7 +8,7 @@
       "id": "RT-001",
       "category": "token-exposure",
       "check": "No hardcoded bridge tokens in extension source or build output",
-      "method": "grep -r 'gemini-bridge-[0-9a-f]' extension-cloudflare/ dist/extension/; also search .zip output for token patterns",
+      "method": "grep -r 'gemini-bridge-[0-9a-f]' dist/extension/ dist/extension/; also search .zip output for token patterns",
       "pass_criteria": "Zero matches in source files; zero matches in built extension zip",
       "automated": true
     },

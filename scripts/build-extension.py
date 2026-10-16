@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = REPO_ROOT / "extension-cloudflare"
+SRC_DIR = REPO_ROOT / "dist/extension"
 
 try:
     from dotenv import load_dotenv

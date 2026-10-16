@@ -28,7 +28,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const Injected = require('../../extension-cloudflare/injected.js');
+const Injected = require('../../dist/extension/injected.js');
 const { STRING_CLASS: C, classifyString, extractBoundedStructure, decodeAndSanitizePayload } = Injected;
 
 /** Collect every sanitized-string node in a structure. */
@@ -160,9 +160,9 @@ test('the probe default is off — a debugging aid must not ship enabled', () =>
   // A fresh module instance, so the check cannot be satisfied by a previous
   // test having left the flag in some other state. Dropping the cache entry
   // re-runs the IIFE, which is what resets the flag to its declaration value.
-  const path = require.resolve('../../extension-cloudflare/injected.js');
+  const path = require.resolve('../../dist/extension/injected.js');
   delete require.cache[path];
-  const fresh = require('../../extension-cloudflare/injected.js');
+  const fresh = require('../../dist/extension/injected.js');
   assert.equal(fresh.handleProbeSet({}), false,
     'an invalid toggle returns false, which only holds if the flag is already false on load');
   assert.equal(fresh.classifyString('notebook://x'), fresh.STRING_CLASS.NOTEBOOK_REF,

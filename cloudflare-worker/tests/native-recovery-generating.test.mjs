@@ -38,7 +38,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const NativeRecovery = require('../../extension-cloudflare/native-recovery.js');
+const NativeRecovery = require('../../dist/extension/native-recovery.js');
 
 function node(className, attrs = {}, tag = 'div') {
   return { className, attrs, tag };

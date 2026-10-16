@@ -650,6 +650,8 @@ export const MessageTypes = Object.freeze({
   REFRESH_MODELS: 'REFRESH_MODELS',
   AUTO_SELECT_MODEL: 'AUTO_SELECT_MODEL',
   ENABLE_THINKING: 'ENABLE_THINKING',
+  SET_THINKING_EFFORT: 'SET_THINKING_EFFORT',
+  THINKING_EFFORT_CHANGED: 'THINKING_EFFORT_CHANGED',
 
   // Scope detection
   REQUEST_SCOPE_DETECTION: 'REQUEST_SCOPE_DETECTION',
@@ -1016,6 +1018,34 @@ export function supportsMultiplexedProtocol(protocolVersion) {
 }
 
 /**
+ * Build a SET_THINKING_EFFORT message (server → extension).
+ * @param {string} effort - Thinking effort level: "off" | "low" | "medium" | "high" | "max"
+ * @param {string} requestId - Unique request ID
+ * @returns {Object} SET_THINKING_EFFORT message
+ */
+export function buildSetThinkingEffortMessage(effort, requestId) {
+  return buildMessage(MessageTypes.SET_THINKING_EFFORT, {
+    requestId,
+    effort,
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Build a THINKING_EFFORT_CHANGED message (extension → server).
+ * @param {string} effort - The new thinking effort level
+ * @param {string} requestId - The request ID being confirmed (optional)
+ * @returns {Object} THINKING_EFFORT_CHANGED message
+ */
+export function buildThinkingEffortChangedMessage(effort, requestId = null) {
+  return buildMessage(MessageTypes.THINKING_EFFORT_CHANGED, {
+    effort,
+    requestId,
+    timestamp: Date.now(),
+  });
+}
+
+/**
  * Get protocol compatibility info.
  * @returns {Object} Protocol info
  */
@@ -1029,6 +1059,7 @@ export function getProtocolInfo() {
       scopeSwitchWithoutReconnect: true,
       scopeRouting: true,
       jsonRpcStyle: true,
+      thinkingEffortLevels: ['off', 'low', 'medium', 'high', 'max']
     },
     note: 'Tii/fk are model capabilities, not scopes. They are reported via MODEL_UPDATED.',
   };

@@ -773,7 +773,7 @@
           "cd /Users/kimlenglim/Project/gemini-web-bridge",
           "git status",
           "git diff --stat",
-          "git add cloudflare-worker/src/index.js extension-cloudflare/background.js",
+          "git add cloudflare-worker/src/index.js dist/extension/background.js",
           "git commit -m 'Phase 1-4: Connection singleton guard, instance ID tracking, TTL cleanup, scope-agnostic connection layer'"
         ]
       },
@@ -809,7 +809,7 @@
         "step": 5,
         "action": "Configure extension for staging",
         "action_detail": "Modify the extension's background.js to point to staging URL instead of production",
-        "code_change": "In extension-cloudflare/background.js, change DEFAULT_WORKER_URL to staging URL for testing",
+        "code_change": "In dist/extension/background.js, change DEFAULT_WORKER_URL to staging URL for testing",
         "temporary_change": "const DEFAULT_WORKER_URL = 'https://gemini-web-bridge-staging.pansakorn-pho.workers.dev'",
         "note": "This change is ONLY for testing. Do NOT commit this change to the main branch. Use a separate test branch or local override."
       },
@@ -821,7 +821,7 @@
           "# Use the zip-extension.py script or manual packaging",
           "python3 scripts/zip-extension.py --output /tmp/gemini-bridge-staging-test.zip"
         ],
-        "chrome_load": "chrome://extensions -> Load unpacked -> select extension-cloudflare directory (with modified background.js)"
+        "chrome_load": "chrome://extensions -> Load unpacked -> select dist/extension directory (with modified background.js)"
       },
       {
         "step": 7,
@@ -864,7 +864,7 @@
         "step": 4,
         "action": "Restore extension to production URL",
         "action_detail": "Revert DEFAULT_WORKER_URL in background.js to production URL",
-        "command": "git checkout HEAD -- extension-cloudflare/background.js"
+        "command": "git checkout HEAD -- dist/extension/background.js"
       }
     ],
     "post_deployment_verification": [
@@ -1491,16 +1491,16 @@
         {
           "step": 1,
           "action": "Verify protocol-messages.js version",
-          "check": "Open extension-cloudflare/protocol-messages.js and confirm PROTOCOL_VERSION = 3",
-          "command": "grep 'PROTOCOL_VERSION' /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare/protocol-messages.js",
+          "check": "Open dist/extension/protocol-messages.js and confirm PROTOCOL_VERSION = 3",
+          "command": "grep 'PROTOCOL_VERSION' /Users/kimlenglim/Project/gemini-web-bridge/dist/extension/protocol-messages.js",
           "expected": "export const PROTOCOL_VERSION = 3;",
           "failure_action": "If version is 2, update to 3 and add missing message types (SCOPE_SWITCH, SCOPE_READY, SCOPE_NAVIGATE)"
         },
         {
           "step": 2,
           "action": "Verify ScopeSessionManager is imported in background.js",
-          "check": "Open extension-cloudflare/background.js and confirm ScopeSessionManager import",
-          "command": "grep 'ScopeSessionManager' /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare/background.js",
+          "check": "Open dist/extension/background.js and confirm ScopeSessionManager import",
+          "command": "grep 'ScopeSessionManager' /Users/kimlenglim/Project/gemini-web-bridge/dist/extension/background.js",
           "expected": "import { ... ScopeSessionManager ... } from './protocol-messages.js';",
           "failure_action": "Add ScopeSessionManager to imports from protocol-messages.js"
         },
@@ -1508,7 +1508,7 @@
           "step": 3,
           "action": "Verify BridgeSocketManager initializes ScopeSessionManager",
           "check": "Confirm this.scopeSessionManager = new ScopeSessionManager() in BridgeSocketManager constructor",
-          "command": "grep 'scopeSessionManager' /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare/background.js",
+          "command": "grep 'scopeSessionManager' /Users/kimlenglim/Project/gemini-web-bridge/dist/extension/background.js",
           "expected": "this.scopeSessionManager = new ScopeSessionManager();",
           "failure_action": "Add ScopeSessionManager initialization to BridgeSocketManager constructor"
         },
@@ -1516,7 +1516,7 @@
           "step": 4,
           "action": "Verify SCOPE_SWITCH message handler in background.js",
           "check": "Confirm handleScopeSwitch() method exists and handles MessageTypes.SCOPE_SWITCH",
-          "command": "grep -n 'handleScopeSwitch\\|MessageTypes.SCOPE_SWITCH' /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare/background.js",
+          "command": "grep -n 'handleScopeSwitch\\|MessageTypes.SCOPE_SWITCH' /Users/kimlenglim/Project/gemini-web-bridge/dist/extension/background.js",
           "expected": "handleScopeSwitch method and SCOPE_SWITCH case in handleWorkerMessage switch",
           "failure_action": "Implement handleScopeSwitch() and add SCOPE_SWITCH case to message handler"
         },
@@ -1524,7 +1524,7 @@
           "step": 5,
           "action": "Verify resolvePendingScopes handles multi-scope resolution",
           "check": "Confirm resolvePendingScopes() updates scopeSessionManager and resolves all pending scopes",
-          "command": "grep -n 'resolvePendingScopes' /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare/background.js",
+          "command": "grep -n 'resolvePendingScopes' /Users/kimlenglim/Project/gemini-web-bridge/dist/extension/background.js",
           "expected": "resolvePendingScopes method that calls scopeSessionManager.confirmScope()",
           "failure_action": "Implement resolvePendingScopes with scopeSessionManager integration"
         },
@@ -1550,7 +1550,7 @@
             "Open chrome://extensions",
             "Enable Developer Mode",
             "Remove any previously loaded gemini-web-bridge extension",
-            "Load unpacked: select /Users/kimlenglim/Project/gemini-web-bridge/extension-cloudflare directory",
+            "Load unpacked: select /Users/kimlenglim/Project/gemini-web-bridge/dist/extension directory",
             "OR use the ZIP: chrome://extensions -> Load unpacked -> extract ZIP first"
           ],
           "note": "For staging, modify DEFAULT_WORKER_URL in background.js to staging URL BEFORE loading. Do NOT commit this change."
@@ -1567,7 +1567,7 @@
         {
           "step": 2,
           "action": "Commit Phase 4 changes",
-          "command": "cd /Users/kimlenglim/Project/gemini-web-bridge && git add cloudflare-worker/src/index.js extension-cloudflare/protocol-messages.js extension-cloudflare/background.js && git commit -m 'Phase 4: Multiplexed protocol (v3) + scope router - single WS carries multiple scopes'",
+          "command": "cd /Users/kimlenglim/Project/gemini-web-bridge && git add cloudflare-worker/src/index.js dist/extension/protocol-messages.js dist/extension/background.js && git commit -m 'Phase 4: Multiplexed protocol (v3) + scope router - single WS carries multiple scopes'",
           "verification": "git log --oneline -3 shows Phase 4 commit"
         },
         {
@@ -1800,7 +1800,7 @@
             "action": "Reload extension in Chrome with reverted build",
             "steps": [
               "Remove Phase 4 extension from chrome://extensions",
-              "Load unpacked with reverted extension-cloudflare directory",
+              "Load unpacked with reverted dist/extension directory",
               "Verify console shows '[BridgeSocket] Connected' without protocol errors"
             ]
           },

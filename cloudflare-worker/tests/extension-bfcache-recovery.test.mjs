@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const source = fs.readFileSync(new URL('../../extension-cloudflare/content.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../../dist/extension/content.js', import.meta.url), 'utf8');
 
 /**
  * Sandbox that models the real Chrome behaviour we care about:

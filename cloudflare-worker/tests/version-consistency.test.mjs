@@ -16,7 +16,7 @@ const readText = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
 const pkg = readJson('../package.json');
 const lock = readJson('../package-lock.json');
 const source = readText('../src/index.js');
-const manifest = readJson('../../extension-cloudflare/manifest.json');
+const manifest = readJson('../../dist/extension/manifest.json');
 
 test('version: WORKER_VERSION constant in src/index.js matches package.json', () => {
   const match = source.match(/const WORKER_VERSION = "([^"]+)"/);

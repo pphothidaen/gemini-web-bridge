@@ -37,7 +37,7 @@ test('worker reads the handshake secret from BRIDGE_AUTH_TOKEN, not BRIDGE_SECRE
 });
 
 test('extension ships the __BRIDGE_AUTH_TOKEN__ placeholder, not the old one', () => {
-  const bg = read('extension-cloudflare/background.js');
+  const bg = read('dist/extension/background.js');
 
   assert.match(
     bg,

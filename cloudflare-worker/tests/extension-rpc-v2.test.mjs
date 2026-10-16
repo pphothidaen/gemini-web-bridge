@@ -5,9 +5,9 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const ModelAdapter = require('../../extension-cloudflare/model-adapter.js');
-const { EvidenceRegistry } = require('../../extension-cloudflare/evidence-registry.js');
-const source = fs.readFileSync(new URL('../../extension-cloudflare/content.js', import.meta.url), 'utf8');
+const ModelAdapter = require('../../dist/extension/model-adapter.js');
+const { EvidenceRegistry } = require('../../dist/extension/evidence-registry.js');
+const source = fs.readFileSync(new URL('../../dist/extension/content.js', import.meta.url), 'utf8');
 
 function setupExtensionVm(options = {}) {
   const messages = [];
