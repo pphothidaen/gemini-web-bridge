@@ -166,5 +166,7 @@ test('invalid token halts reconnection until settings change or manual retry', a
 
   // A new socket should now be connected
   assert.equal(sockets.length, 2);
-  assert.ok(sockets[1].url.includes('new-valid-token'));
+  // P0: Token sent as first message, not in URL
+  assert.equal(sockets[1].url.includes('token'), false);
+  assert.equal(sockets[1].url.includes('new-valid-token'), false);
 });

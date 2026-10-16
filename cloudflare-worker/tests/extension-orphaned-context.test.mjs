@@ -46,7 +46,7 @@ function setupVm({ runtime, extraGlobals = {} } = {}) {
     static CONNECTING = 0;
     readyState = 0;
     constructor(url) { this.url = url; sockets.push(this); }
-    send() {}
+    send(raw) { this.lastSent = raw; }
     close(code) { this.readyState = 3; this.onclose?.({ code: code || 1000 }); }
   }
 
@@ -63,7 +63,7 @@ function setupVm({ runtime, extraGlobals = {} } = {}) {
     console: { log() {}, warn() {}, error() {} },
     URL, Map, Array, Boolean,
     document,
-    window: { addEventListener() {}, postMessage() {} },
+    window: { addEventListener() {}, postMessage() {}, location: { hostname: "gemini.google.com", reload() {} }, sessionStorage: { getItem: () => null, setItem: () => {} } },
     WebSocket: WebSocketMock,
     setTimeout: (fn) => { timers.push(fn); return timers.length; },
     clearTimeout() {},
@@ -150,5 +150,16 @@ test('without an extension context the direct WebSocket fallback still works', a
 
   assert.equal(sockets.length, 1,
     'a page without extension APIs keeps the direct WebSocket transport');
-  assert.equal(new URL(sockets[0].url).searchParams.get('token'), 'test-secret');
+  // P0: Token no longer in URL — sent as first WebSocket message
+  const ws = sockets[0];
+  ws.readyState = 1;
+  ws.onopen();
+  // AUTH must be sent before any other messages
+  const sentMessages = [];
+  const origSend = ws.send.bind(ws);
+  ws.send = (raw) => { sentMessages.push(JSON.parse(raw)); };
+  // Re-trigger onopen to capture AUTH
+  ws.onopen();
+  assert.equal(sentMessages[0]?.type, 'AUTH', 'AUTH must be first message');
+  assert.equal(sentMessages[0]?.token, 'test-secret');
 });

@@ -9,18 +9,14 @@
   // ─── Gemini Model Catalog (Single Source of Truth) ──────────
   // All standard Gemini web models. Both standardGeminiModels and stdModels
   // reference this array to prevent DRY violation and split-brain verification.
-  // P1: Dynamic mapping_revision — rotated per session epoch for anti-replay defense.
-  const CATALOG_BASE = [
-    { id: "gemini-3.8-flash", name: "3.8 Flash", description: "All-around help", thinking: false },
-    { id: "gemini-3.5-flash-lite", name: "3.5 Flash-Lite", description: "Fastest answers", thinking: false },
-    { id: "gemini-3.1-pro", name: "3.1 Pro", description: "Advanced reasoning", thinking: false },
-    { id: "gemini-4-argon", name: "4 Argon", description: "Complex tasks", thinking: false }
+  // Note: verification and mapping_revision are set by the evidence registry,
+  // not hardcoded here — this preserves the learning → verified flow.
+  const GEMINI_MODEL_CATALOG = [
+    { id: "gemini-3.8-flash", name: "3.8 Flash", description: "All-around help", thinking: false, verification: 'discovered', mapping_revision: null },
+    { id: "gemini-3.5-flash-lite", name: "3.5 Flash-Lite", description: "Fastest answers", thinking: false, verification: 'discovered', mapping_revision: null },
+    { id: "gemini-3.1-pro", name: "3.1 Pro", description: "Advanced reasoning", thinking: false, verification: 'discovered', mapping_revision: null },
+    { id: "gemini-4-argon", name: "4 Argon", description: "Complex tasks", thinking: false, verification: 'discovered', mapping_revision: null }
   ];
-  const GEMINI_MODEL_CATALOG = CATALOG_BASE.map(m => ({
-    ...m,
-    verification: 'verified',
-    mapping_revision: `epoch_${sessionState.sessionEpoch || 'init'}`
-  }));
 
   // ─── Shared Components & Fallbacks ──────────────────────────
   const Settings = (typeof globalThis !== "undefined" && globalThis.GeminiBridgeSettings)
@@ -484,15 +480,6 @@
       return;
     }
 
-    // P0: Send auth token as first message after connection (not in URL)
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        type: "AUTH",
-        token: resolvedSettings.bridgeToken,
-        instanceId: instanceId
-      }));
-    }
-
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -514,6 +501,14 @@
       reconnectAttempts = 0;
       authFailed = false;
       connectionModels = [];
+
+      // P0: Send auth token as first message (not in URL) — must be sent
+      // BEFORE any MODELS_DISCOVERED or SESSION_READY messages.
+      socket.send(JSON.stringify({
+        type: "AUTH",
+        token: resolvedSettings.bridgeToken,
+        instanceId: instanceId
+      }));
 
       if (sessionState.sessionReady) {
         publishSessionReady();

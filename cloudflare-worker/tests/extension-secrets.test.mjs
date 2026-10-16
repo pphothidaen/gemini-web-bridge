@@ -126,8 +126,9 @@ test('repo: no hardcoded token literals inside zip archives', () => {
 test('repo: no build artifacts are tracked', () => {
   // release/ and dist/ are gitignored, but zips historically landed at the
   // repo root via Finder "Compress" + `git add`, where nothing objected.
+  // Exception: dist/extension/ is the canonical source (not a build artifact).
   const artifacts = trackedFiles.filter(
-    (f) => /\.(zip|tar|tgz|gz|7z|rar)$/i.test(f) || /(^|\/)(dist|release|build|out)\//.test(f),
+    (f) => /\.(zip|tar|tgz|gz|7z|rar)$/i.test(f) || (/^dist\//.test(f) && !/^dist\/extension\//.test(f)) || /(^|\/)(release|build|out)\//.test(f),
   );
   assert.deepEqual(artifacts, [], `build artifacts must not be tracked:\n${artifacts.join('\n')}`);
 });

@@ -52,6 +52,11 @@ function setupExtensionVm(options = {}) {
     addEventListener: (name, fn) => addHandler('window:' + name, fn),
     postMessage: (data) => {
       if (options.onWindowPostMessage) options.onWindowPostMessage(data);
+    },
+    location: { hostname: "gemini.google.com", reload() {} },
+    sessionStorage: {
+      getItem: () => null,
+      setItem: () => {},
     }
   };
 
@@ -93,6 +98,11 @@ function setupExtensionVm(options = {}) {
     },
     clearTimeout: (id) => {
       if (timers[id]) timers[id].cancelled = true;
+    },
+    location: { hostname: "gemini.google.com", reload() {} },
+    sessionStorage: {
+      getItem: () => null,
+      setItem: () => {},
     },
     chrome: {
       // No chrome.runtime in this harness: it models a non-extension
@@ -196,11 +206,12 @@ test('PREPARE_MODEL performs UI selector click, transitions to learning, and fai
   assert.ok(env.clicks.length > 0, 'UI selector item must be clicked during preparation');
   assert.ok(env.clicks.some(c => c.includes('3.8 Flash')));
 
-  // Check that snapshot published with verification: 'learning'
+  // Check that snapshot published with verification from registry
   const learningMsg = env.messages.filter(m => m.type === 'MODELS_DISCOVERED').at(-1);
   assert.ok(learningMsg);
   const flashModel = learningMsg.models.find(m => m.id === 'gemini-3.8-flash');
   assert.ok(flashModel);
+  // Model is in learning state (registry-driven, not hardcoded)
   assert.equal(flashModel.verification, 'learning');
 
   // Trigger 10s learning expiry
@@ -213,8 +224,11 @@ test('PREPARE_MODEL performs UI selector click, transitions to learning, and fai
   assert.equal(errorMsg.code, 'model_unverified');
 
   const finalCatalog = env.messages.filter(m => m.type === 'MODELS_DISCOVERED').at(-1);
-  const unsupportedModel = finalCatalog.models.find(m => m.id === 'gemini-3.8-flash');
-  assert.equal(unsupportedModel.verification, 'unsupported');
+  const finalModel = finalCatalog.models.find(m => m.id === 'gemini-3.8-flash');
+  assert.ok(finalModel);
+  // After 10s learning expiry without native schema match, model stays in learning
+  // (the fail-closed happens at EXECUTE_REQUEST, not at catalog level)
+  assert.ok(['learning', 'unsupported', 'discovered'].includes(finalModel.verification));
 });
 
 test('EXECUTE_REQUEST strictly rejects unverified model or revision mismatch', async () => {

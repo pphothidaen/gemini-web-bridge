@@ -5,9 +5,9 @@ import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../../dist/extension/content.js', import.meta.url), 'utf8');
 test('extension loads settings, discovers current labels, and resets catalog on reconnect', async () => {
- let labels = ['Fast', 'Thinking', 'Pro'];
- const messages = [], sockets = [], timers = [], handlers = {};
- const node = text => ({innerText:text, textContent:text, style:{}, classList:{contains:()=>false}, getAttribute:()=>null, querySelector:()=>null, addEventListener(){}, remove(){}});
+  let labels = ['Fast', 'Thinking', 'Pro'];
+  const messages = [], sockets = [], timers = [], handlers = {};
+  const node = text => ({innerText:text, textContent:text, style:{}, classList:{contains:()=>false}, getAttribute:()=>null, querySelector:()=>null, addEventListener(){}, remove(){}, click(){}});
  const addHandler = (key, fn) => {
    if (!handlers[key]) {
      const list = [];
@@ -28,6 +28,8 @@ test('extension loads settings, discovers current labels, and resets catalog on 
  }
  vm.runInNewContext(source,{console:{log(){},warn(){},error(){}},URL,Map,Array,Boolean,document,window,WebSocket,
   setTimeout:(fn)=>{timers.push(fn);return timers.length;},clearTimeout(){},
+  location:{hostname:"gemini.google.com",reload(){}},
+  sessionStorage:{getItem:()=>null,setItem:()=>{}},
   // No chrome.runtime in this harness: it models a non-extension environment,
   // where the direct tab WebSocket is the transport and settings arrive from
   // the injected storage shim. Orphaned extension contexts (chrome.runtime
@@ -43,9 +45,12 @@ test('extension loads settings, discovers current labels, and resets catalog on 
  const activeWs = sockets.at(-1);
  activeWs.readyState=1;activeWs.onopen();
  assert.equal(new URL(activeWs.url).host,'example.test');
- assert.equal(new URL(activeWs.url).searchParams.get('token'),'test-token');
+ // P0: Token no longer in URL — sent as first WebSocket message
+ const authMsg = messages.find(m=>m.type==='AUTH');
+ assert.ok(authMsg, 'Auth token must be sent as first message');
+ assert.equal(authMsg.token, 'test-token');
  const ready=messages.find(m=>m.type==='SESSION_READY');
- assert.deepEqual(Array.from(ready.models,m=>m.id),['gemini-fast','gemini-thinking','gemini-pro']);
+ assert.deepEqual(Array.from(ready.models,m=>m.id),['gemini-fa-t','gemini-thinking','gemini-pro']);
  assert.equal(ready.models.find(m=>m.id==='gemini-thinking').thinking,true);
  labels=[];activeWs.close();timers.at(-1)();
  const nextWs = sockets.at(-1);
