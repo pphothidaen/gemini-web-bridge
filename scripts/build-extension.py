@@ -312,8 +312,8 @@ def build_extension(
         print(f"\n[DRY RUN] Would build extension v{version} to: {output_dir}")
         return version
 
-    # Clean output dir
-    if output_dir.exists():
+    # Clean output dir — but NOT if output_dir IS the source dir (SRC_DIR)
+    if output_dir.exists() and output_dir.resolve() != SRC_DIR.resolve():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
