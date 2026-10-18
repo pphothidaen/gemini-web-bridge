@@ -515,6 +515,74 @@ test('openPlusMenu does not click an already-open menu, which would close it', (
   assert.equal(NotebookAttach.openPlusMenu({ querySelector: () => null }), false);
 });
 
+test('KAN-213: attach flow succeeds when Notebooks button is directly in "+" menu overlay (no more_uploads button)', async () => {
+  // In newer Gemini UI (KAN-213), the "+" menu opens as a chip grid containing
+  // Notebooks directly, with NO button.more-upload-button[cdkoverlayorigin].
+  // The attach flow must recognize the direct Notebooks entry without failing at more_uploads.
+  const clicks = [];
+  let chipAttached = false;
+  const chipEl = { textContent: 'Horo' };
+  const plusBtn = { click: () => clicks.push('plus'), getAttribute: () => 'false' };
+  const plusIcon = { closest: (sel) => (sel === 'button' ? plusBtn : null) };
+  const overlayPane = { className: 'cdk-overlay-pane' };
+  const notebooksBtn = { click: () => clicks.push('notebooks') };
+  const addBtn = {
+    click: () => {
+      clicks.push('add');
+      chipAttached = true;
+    },
+    hasAttribute: () => false,
+    getAttribute: () => null
+  };
+  const row = {
+    click: () => clicks.push('row'),
+    textContent: 'Horo',
+    closest: (sel) => row
+  };
+  const dialog = {
+    querySelector: (sel) => (sel === NotebookAttach.SELECTORS.addButton ? addBtn : null),
+    querySelectorAll: (sel) => (sel === NotebookAttach.SELECTORS.notebookTitle ? [row] : [])
+  };
+
+  const doc = {
+    hidden: false,
+    querySelector: (sel) => {
+      if (sel === NotebookAttach.SELECTORS.plusButton) return plusIcon;
+      if (sel === NotebookAttach.SELECTORS.overlayPane) return overlayPane;
+      if (sel === NotebookAttach.SELECTORS.moreUploadsButton) return null; // NO more_uploads!
+      if (sel === NotebookAttach.SELECTORS.notebooksButton) return notebooksBtn;
+      if (sel === NotebookAttach.SELECTORS.dialog) return dialog;
+      if (sel === NotebookAttach.SELECTORS.addButton) return addBtn;
+      if (sel === NotebookAttach.SELECTORS.attachedChip) return chipAttached ? chipEl : null;
+      return null;
+    },
+    querySelectorAll: (sel) => {
+      if (sel === NotebookAttach.SELECTORS.attachedChip) return chipAttached ? [chipEl] : [];
+      if (sel === NotebookAttach.SELECTORS.notebookTitle) return [row];
+      return [];
+    }
+  };
+
+  let simulatedTime = 0;
+  const now = () => (simulatedTime += 10);
+
+  const out = await NotebookAttach.attachNotebook({
+    notebookName: 'Horo',
+    doc,
+    log: () => {},
+    sleep: async () => {},
+    now,
+    setT: (fn) => setTimeout(fn, 0),
+    timeoutMs: 2000
+  });
+
+  assert.equal(out.ok, true, `attachNotebook should succeed via direct chip grid, got: ${JSON.stringify(out)}`);
+  assert.ok(clicks.includes('plus'), 'plus button must be clicked');
+  assert.ok(clicks.includes('notebooks'), 'notebooks entry must be clicked directly');
+  assert.ok(clicks.includes('row'), 'notebook row must be clicked');
+  assert.ok(clicks.includes('add'), 'add button must be clicked');
+});
+
 
 // ── Prompt shape: prose, not a spec sheet ─────────────────────────────────
 //

@@ -185,9 +185,14 @@
     return doc.querySelector(SELECTORS.moreUploadsButton);
   }
 
-  /** The "Notebooks" entry inside the more-uploads submenu. */
+  /** The "Notebooks" entry inside the "+" menu panel or more-uploads submenu. */
   function findNotebooksButton(doc = document) {
-    return doc.querySelector(SELECTORS.notebooksButton);
+    return (
+      doc.querySelector(SELECTORS.notebooksButton) ||
+      doc.querySelector('.cdk-overlay-pane [data-test-id="notebooks-import-button"]') ||
+      doc.querySelector('.cdk-overlay-pane button[data-test-id*="notebook"]') ||
+      null
+    );
   }
 
   /**
@@ -336,24 +341,24 @@
       return { ok: false, reason: "menu_pane_timeout", step: "await_pane" };
     }
 
-    // Step 2 — open the "more uploads" submenu.
-    const moreUploads = await waitFor(
-      (d) => findMoreUploadsButton(d),
-      timeoutMs, doc, now, setT
-    );
-    if (!moreUploads) {
-      log(`[attach] step=more_uploads FAILED selector="${SELECTORS.moreUploadsButton}"`);
-      return { ok: false, reason: "more_uploads_not_found", step: "more_uploads" };
+    // Step 2 & 3 — open Notebooks entry (KAN-213).
+    // In newer Gemini UI, the Notebooks entry renders directly in the "+" overlay
+    // panel as part of the chip grid. In legacy UI, "more uploads" must be opened first.
+    let notebooksButton = findNotebooksButton(doc);
+    if (!notebooksButton) {
+      const moreUploads = await waitFor(
+        (d) => findMoreUploadsButton(d),
+        Math.min(timeoutMs, 1000), doc, now, setT
+      );
+      if (moreUploads) {
+        moreUploads.click();
+        log(`[attach] step=more_uploads ok selector="${SELECTORS.moreUploadsButton}"`);
+      }
+      notebooksButton = await waitFor(
+        (d) => findNotebooksButton(d),
+        timeoutMs, doc, now, setT
+      );
     }
-    moreUploads.click();
-    log(`[attach] step=more_uploads ok selector="${SELECTORS.moreUploadsButton}"`);
-
-    // Step 3 — the submenu pane is a NEW overlay, so the Notebooks entry
-    // is only queryable once it exists.
-    const notebooksButton = await waitFor(
-      (d) => findNotebooksButton(d),
-      timeoutMs, doc, now, setT
-    );
     if (!notebooksButton) {
       log(`[attach] step=notebooks FAILED selector="${SELECTORS.notebooksButton}"`);
       return { ok: false, reason: "notebooks_entry_not_found", step: "notebooks" };
