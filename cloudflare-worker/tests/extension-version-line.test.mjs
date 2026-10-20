@@ -148,7 +148,7 @@ function lowestOf(a, b) {
   const line = CI.split('\n').find((l) => l.trim().startsWith('LOWEST=$('));
   assert.ok(line, 'ci.yml must compute LOWEST from BASE3 and MANIFEST');
   const expr = line.trim();
-  return execFileSync('bash', ['-c', `${expr}; printf '%s' "$LOWEST"`], {
+  return execFileSync('bash', ['--noprofile', '--norc', '-c', `${expr}; printf '%s' "$LOWEST"`], {
     encoding: 'utf8',
     env: { ...process.env, BASE3: a, MANIFEST: b },
   });

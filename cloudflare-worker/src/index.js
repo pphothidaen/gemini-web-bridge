@@ -39,7 +39,7 @@ import {
 //   • dist/extension/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.38";
+const WORKER_VERSION = "4.7.39";
 
 // KAN-236 Phase D: how many sanitized payload records to keep.
 //
@@ -3866,9 +3866,18 @@ export class GeminiBridgeDO extends DurableObject {
     }
 
     if (url.pathname === "/bridge/auth-check") {
-      const supplied=request.headers.get("x-bridge-token");
-      return new Response(JSON.stringify({ok:Boolean(BRIDGE_AUTH_TOKEN && supplied===BRIDGE_AUTH_TOKEN),protocolVersion:3,minSupportedVersion:2,maxSupportedVersion:3}),
-        {status:BRIDGE_AUTH_TOKEN && supplied===BRIDGE_AUTH_TOKEN ? 200 : 401,headers:{...corsHeaders,"Content-Type":"application/json","Cache-Control":"no-store"}});
+      const supplied = (request.headers.get("x-bridge-token") || "").trim();
+      const expected = (BRIDGE_AUTH_TOKEN || "").trim();
+      const isOk = Boolean(expected && supplied === expected);
+      return new Response(JSON.stringify({
+        ok: isOk,
+        protocolVersion: 3,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 3
+      }), {
+        status: isOk ? 200 : 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" }
+      });
     }
 
     // ─── Emergency connection reset ───────────────────────────────────────────

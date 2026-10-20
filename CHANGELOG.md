@@ -8,6 +8,21 @@ All notable changes to the Gemini Web-Bridge project.
 > anywhere. Production is `prod.gemini-web-bridge.workers.dev` and has been
 > since commit `fa97a5d` (KAN-157).
 
+## [4.7.39] - 2026-10-20
+
+### Security & Governance
+- **Zero-Token-Leak Enforcement (G1.1.2)**: Verified all extension sources strictly use build-time placeholders (`__BRIDGE_AUTH_TOKEN__`, `__CLIENT_API_KEY__`). WebSocket connection does not transmit tokens via URL query parameters.
+- **Auth-Check Whitespace Normalization**: Trim trailing/leading whitespace in `/bridge/auth-check` to prevent token validation issues.
+- **Dependency Hardening**: Pinned `sharp` to 0.35.5 via npm overrides to resolve CVE-2026-96889.
+
+### Fixed
+- **Subshell Test Isolation**: Run bash with `--noprofile --norc` in version line test suite to prevent shell startup scripts (`.bashrc`) from polluting stdout assertions.
+- **Notebook Attach Grid**: Supported direct chip grid in '+' menu overlay without requiring submenu.
+- **Build Script Directory Cleanup**: Fixed `build-extension.py` deleting canonical source directory before copying.
+
+### Configuration
+- **Wrangler**: Configured multi-session and context rotation variables (`BRIDGE_VERBOSE`, `CONTEXT_ROTATION_THRESHOLD`, `MULTI_SESSION`).
+
 ## [4.7.35] - 2026-10-04
 
 ### Added

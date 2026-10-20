@@ -22,6 +22,7 @@
   // deploy from both places in the same pipeline.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "prod",
+  "account_id": "d91b1a43a188b73be61833adee445111",
   "main": "cloudflare-worker/src/index.js",
   "compatibility_date": "2026-09-12",
   "compatibility_flags": ["nodejs_compat"],
@@ -49,6 +50,12 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["GeminiBridgeDO"] }
   ],
+
+  "vars": {
+    "BRIDGE_VERBOSE": "1",
+    "CONTEXT_ROTATION_THRESHOLD": "8",
+    "MULTI_SESSION": "true"
+  },
 
   // Observability is OFF deliberately. Workers Logs captures and retains an
   // entry per invocation, charged against the same CPU budget that the DO
