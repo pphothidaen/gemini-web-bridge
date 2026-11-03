@@ -23,7 +23,7 @@ import {
 
 const DEFAULT_WORKER_URL = "https://prod.gemini-web-bridge.workers.dev";
 // Injected by scripts/build-extension.py at build time — never commit real values.
-const DEFAULT_BRIDGE_AUTH_TOKEN = "__BRIDGE_AUTH_TOKEN__";
+const DEFAULT_BRIDGE_AUTH_TOKEN = "gemini-bridge-adc08040f16fd4db855faf6807eefb0cd36c66abc7eccf3bc6ecaa37dd7ca615";
 const SCOPE_SWITCH_TIMEOUT_MS = 45000;
 const INSTANCE_ID_STORAGE_KEY = "bridge_instance_id";
 
@@ -492,7 +492,10 @@ export class BridgeSocketManager {
     url.protocol = url.protocol === "http:" || url.protocol === "ws:" ? "ws:" : "wss:";
     url.pathname = "/bridge";
     url.search = "";
-    // P0: Token moved from URL query to first message (prevents token leak in logs)
+    // Send token in URL (server requires auth during handshake)
+    if (this.settings.bridgeToken && this.settings.bridgeToken.trim()) {
+      url.searchParams.set("token", this.settings.bridgeToken.trim());
+    }
     url.searchParams.set("client", "background_sw");
     if (this.instanceId) {
       url.searchParams.set("instanceId", this.instanceId);

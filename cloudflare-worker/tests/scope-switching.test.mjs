@@ -30,6 +30,8 @@ const context = {
 const { GeminiBridgeDO } = vm.runInNewContext(
   source.replace(/import[\s\S]*?from "[^"\n]+";/g, '')
     .replaceAll('export class ', 'class ')
+  .replaceAll('export function ', 'function ')
+  .replaceAll('export const ', 'const ')
     .replace('export default {', 'const entry = {') +
   '\n;({GeminiBridgeDO})',
   context

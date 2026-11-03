@@ -38,6 +38,8 @@ const context = {
 const { ProtocolDecoder } = vm.runInNewContext(
   source.replace(/import[\s\S]*?from "[^"\n]+";/g, '')
     .replaceAll('export class ', 'class ')
+  .replaceAll('export function ', 'function ')
+  .replaceAll('export const ', 'const ')
     .replace('export default {', 'const entry = {') +
   '\n;({ProtocolDecoder})',
   context

@@ -27,7 +27,63 @@ import {
   parseToolCompletion
 } from "./tool-emulator.ts";
 
-// ─── Single Source of Truth for the worker version ───────────────────────────
+// ─── KAN-308: Circuit breaker + header redaction helpers ───
+export class CircuitBreaker {
+  constructor({ failureThreshold = 3, windowMs = 60000, cooldownMs = 30000 } = {}) {
+    this.failureThreshold = failureThreshold;
+    this.windowMs = windowMs;
+    this.cooldownMs = cooldownMs;
+    this.failures = [];
+    this.state = "closed"; // closed | open | half-open
+    this.openedAt = 0;
+  }
+  isOpen() {
+    if (this.state === "open") {
+      if (Date.now() - this.openedAt >= this.cooldownMs) {
+        this.state = "half-open";
+        return false;
+      }
+      return true;
+    }
+    return false;
+  }
+  recordFailure() {
+    const now = Date.now();
+    this.failures = this.failures.filter((t) => now - t < this.windowMs);
+    this.failures.push(now);
+    if (this.failures.length >= this.failureThreshold) {
+      this.state = "open";
+      this.openedAt = now;
+    }
+  }
+  recordSuccess() {
+    this.failures = [];
+    this.state = "closed";
+    this.openedAt = 0;
+  }
+  async execute(fn) {
+    if (this.isOpen()) throw new Error("Circuit breaker open");
+    try {
+      const result = await fn();
+      this.recordSuccess();
+      return result;
+    } catch (err) {
+      this.recordFailure();
+      throw err;
+    }
+  }
+}
+
+export function redactHeaders(headers) {
+  const REDACTED = "[REDACTED]";
+  const sensitive = new Set(["authorization", "x-bridge-token", "bridge-auth-token", "x-api-key", "cookie"]);
+  const out = {};
+  const entries = headers && typeof headers.entries === "function" ? [...headers.entries()] : Object.entries(headers || {});
+  for (const [k, v] of entries) {
+    out[k] = sensitive.has(String(k).toLowerCase()) ? REDACTED : v;
+  }
+  return out;
+}
 // Every user-visible version string (/health, MCP serverInfo, ping) reads this
 // constant, so the surface can never drift the way it did before (hardcoded
 // 4.3.4 in three places while package.json said 4.3.7 and the extension
@@ -499,6 +555,9 @@ export class GeminiBridgeDO extends DurableObject {
     // The attached notebook's id, learned when a scope switch succeeds. Held
     // only to hand the page-side descriptor something to compare against.
     this.currentNotebookId = null;
+    this.circuitBreaker = new CircuitBreaker({ failureThreshold: 3, windowMs: 60000, cooldownMs: 30000 });
+    // Header redaction helper (KAN-308) available as instance method
+    this.redactHeaders = redactHeaders;
     // KAN-236: requestId -> re-arm callback for an in-flight collectTypedAnswer.
     //
     // The extension sends COLLECT_ANSWER_PROGRESS while Gemini is visibly
@@ -3064,7 +3123,7 @@ export class GeminiBridgeDO extends DurableObject {
   }
 
   failure(status, code, message) {
-    return new Response(JSON.stringify({error:{code,message,type:"bridge_error"}}), {status,headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}});
+    return new Response(JSON.stringify({error:{code,message,type:"bridge_error"}}), {status,headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"null"}});
   }
 
   /**
@@ -3571,8 +3630,32 @@ export class GeminiBridgeDO extends DurableObject {
   async handleRequest(request) {
     const url = new URL(request.url);
 
+    // ─── KAN-308: Origin validation (allowlist loopback + configured) ───
+    const MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024; // 4 MiB
+    const requestOrigin = request.headers.get("Origin");
+    const configuredOrigins = (this.env.ALLOWED_ORIGINS || this.env.CORS_ALLOWED_ORIGINS || "")
+      .split(",").map((o) => o.trim()).filter(Boolean);
+    const isLoopbackOrigin = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin || "");
+    const isOriginAllowed = (origin) => !origin || isLoopbackOrigin(origin) || configuredOrigins.includes(origin);
+    if (requestOrigin && !isOriginAllowed(requestOrigin)) {
+      return new Response(JSON.stringify({ error: "Forbidden: Origin not allowed" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    const allowedOrigin = requestOrigin && isOriginAllowed(requestOrigin) ? requestOrigin : (configuredOrigins[0] || "null");
+
+    // ─── KAN-308: Size cap (4 MiB) ───
+    const contentLength = parseInt(request.headers.get("content-length") || "0", 10);
+    if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+      return new Response(JSON.stringify({ error: "Payload Too Large" }), {
+        status: 413,
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": allowedOrigin },
+      });
+    }
+
     const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": allowedOrigin,
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS, DELETE, PUT",
       "Access-Control-Allow-Headers": "*",
       "Access-Control-Expose-Headers": "Mcp-Session-Id, Mcp-Protocol-Version, Content-Type, X-Model-Degraded, X-Requested-Model, X-Resolved-Model",
@@ -3580,6 +3663,9 @@ export class GeminiBridgeDO extends DurableObject {
     };
 
     if (request.method === "OPTIONS") {
+      if (requestOrigin && !isOriginAllowed(requestOrigin)) {
+        return new Response(null, { status: 403 });
+      }
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 

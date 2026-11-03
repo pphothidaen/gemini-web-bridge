@@ -353,3 +353,77 @@ export default {
     GuardrailStats,
   },
 };
+
+// ─── KAN-308: Worker hardening helpers ───
+export const MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024; // 4 MiB
+
+export function isLoopbackOrigin(origin: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin || "");
+}
+
+export function isOriginAllowed(origin: string, configuredOrigins: string[] = []): boolean {
+  if (!origin) return true;
+  return isLoopbackOrigin(origin) || configuredOrigins.includes(origin);
+}
+
+export class CircuitBreaker {
+  failureThreshold = 3;
+  windowMs = 60000;
+  cooldownMs = 30000;
+  failures: number[] = [];
+  state: "closed" | "open" | "half-open" = "closed";
+  openedAt = 0;
+  constructor(opts?: { failureThreshold?: number; windowMs?: number; cooldownMs?: number }) {
+    if (opts?.failureThreshold) this.failureThreshold = opts.failureThreshold;
+    if (opts?.windowMs) this.windowMs = opts.windowMs;
+    if (opts?.cooldownMs) this.cooldownMs = opts.cooldownMs;
+  }
+  isOpen(): boolean {
+    if (this.state === "open") {
+      if (Date.now() - this.openedAt >= this.cooldownMs) {
+        this.state = "half-open";
+        return false;
+      }
+      return true;
+    }
+    return false;
+  }
+  recordFailure(): void {
+    const now = Date.now();
+    this.failures = this.failures.filter((t) => now - t < this.windowMs);
+    this.failures.push(now);
+    if (this.failures.length >= this.failureThreshold) {
+      this.state = "open";
+      this.openedAt = now;
+    }
+  }
+  recordSuccess(): void {
+    this.failures = [];
+    this.state = "closed";
+    this.openedAt = 0;
+  }
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.isOpen()) throw new Error("Circuit breaker open");
+    try {
+      const result = await fn();
+      this.recordSuccess();
+      return result;
+    } catch (err) {
+      this.recordFailure();
+      throw err;
+    }
+  }
+}
+
+export function redactHeaders(headers: Record<string, any> | Headers): Record<string, any> {
+  const REDACTED = "[REDACTED]";
+  const sensitive = new Set(["authorization", "x-bridge-token", "bridge-auth-token", "x-api-key", "cookie"]);
+  const out: Record<string, any> = {};
+  const entries = headers && typeof (headers as any).entries === "function"
+    ? [...(headers as any).entries()]
+    : Object.entries(headers || {});
+  for (const [k, v] of entries) {
+    out[k] = sensitive.has(String(k).toLowerCase()) ? REDACTED : v;
+  }
+  return out;
+}

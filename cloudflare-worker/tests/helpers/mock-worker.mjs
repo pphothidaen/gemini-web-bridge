@@ -31,6 +31,10 @@ const doSource = fs.readFileSync(new URL('../../src/index.js', import.meta.url),
 const doClassSrc = doSource
   .replace(/import[\s\S]*?from "[^"]+";/g, '')
   .replaceAll('export class ', 'class ')
+  .replaceAll('export function ', 'function ')
+  .replaceAll('export const ', 'const ')
+  .replaceAll('export function ', 'function ')
+  .replaceAll('export const ', 'const ')
   .replace('export default {', 'const entry = {');
 
 const workerdCrypto = {

@@ -34,6 +34,8 @@ const doSource = fs.readFileSync(
 const doClassSrc = doSource
   .replace(/import[\s\S]*?from "[^"]+";/g, '')
   .replaceAll('export class ', 'class ')
+  .replaceAll('export function ', 'function ')
+  .replaceAll('export const ', 'const ')
   .replace('export default {', 'const entry = {');
 
 // ─── VM context for DO ────────────────────────────────────────

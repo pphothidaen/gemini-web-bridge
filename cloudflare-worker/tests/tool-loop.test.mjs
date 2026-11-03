@@ -11,7 +11,9 @@ import { makeCtx } from './helpers/fake-ctx.mjs';
 const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 const context = { ...catalog, ...emulator, ...geminiRefusal, ...promptTemplates,
   ...horoPrompts, DurableObject: class {}, crypto, Request, Response, URL, TextEncoderStream, console, setTimeout, clearTimeout, setInterval: () => {} };
-const { GeminiBridgeDO, ProtocolDecoder } = vm.runInNewContext(source.replace(/import[\s\S]*?from "[^"\n]+";/g, '').replaceAll('export class ', 'class ').replace('export default {', 'const entry = {') + '\n;({GeminiBridgeDO, ProtocolDecoder})', context);
+const { GeminiBridgeDO, ProtocolDecoder } = vm.runInNewContext(source.replace(/import[\s\S]*?from "[^"\n]+";/g, '').replaceAll('export class ', 'class ')
+  .replaceAll('export function ', 'function ')
+  .replaceAll('export const ', 'const ').replace('export default {', 'const entry = {') + '\n;({GeminiBridgeDO, ProtocolDecoder})', context);
 const safeTool = emulator.SUPPORTED_TOOLS.read_file;
 const policy = { tools: [safeTool], required: false, parallel: true };
 const call = '<tool_call>{"name":"read_file","arguments":{"file_path":"/workspace/a.js"}}</tool_call>';

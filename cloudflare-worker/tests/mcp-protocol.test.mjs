@@ -38,6 +38,8 @@ const context = {
 const { GeminiBridgeDO } = vm.runInNewContext(
   source.replace(/import[\s\S]*?from "[^"\n]+";/g, '')
     .replaceAll('export class ', 'class ')
+  .replaceAll('export function ', 'function ')
+  .replaceAll('export const ', 'const ')
     .replace('export default {', 'const entry = {') +
   '\n;({GeminiBridgeDO})',
   context
@@ -99,7 +101,7 @@ test('MCP CORS: returns permissive CORS with exposed Mcp-Session-Id and Mcp-Prot
 
   const optionsRes = await b.fetch(new Request('https://test/mcp', { method: 'OPTIONS' }));
   assert.equal(optionsRes.status, 204);
-  assert.equal(optionsRes.headers.get('Access-Control-Allow-Origin'), '*');
+  assert.equal(optionsRes.headers.get('Access-Control-Allow-Origin'), 'null');
   const exposed = optionsRes.headers.get('Access-Control-Expose-Headers');
   assert.ok(exposed.includes('Mcp-Session-Id'));
   assert.ok(exposed.includes('Mcp-Protocol-Version'));
