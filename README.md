@@ -31,6 +31,17 @@ It enables autonomous AI clients and developer tools — **Hermes Agent**, **Cur
 - **Zero-Token-Leak Privacy (G1 Guardrail)** — Google CSRF tokens (`SNlM0e`) remain strictly in volatile browser MAIN-world RAM; credentials are never transmitted over the wire to Cloudflare Workers or external clients.
 - **Strict Fail-Closed Architecture** — Responds with HTTP 503 / 422 immediately if the browser extension disconnects or a model is unverified. Zero mocks in production.
 
+## 🌟 Support & Community
+
+[![GitHub Stars](https://img.shields.io/github/stars/pphothidaen/gemini-web-bridge?style=social)](https://github.com/pphothidaen/gemini-web-bridge/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/pphothidaen/gemini-web-bridge?style=social)](https://github.com/pphothidaen/gemini-web-bridge/network/members)
+[![GitHub Issues](https://img.shields.io/github/issues/pphothidaen/gemini-web-bridge?style=social)](https://github.com/pphothidaen/gemini-web-bridge/issues)
+
+Find **Gemini Web Bridge** useful? Help support and grow the project:
+- **⭐ Star the repo:** Stay updated on model sync improvements and edge runtime patches.
+- **🍴 Fork & Adapt:** Add custom MCP tools or integrate with your own browser-backed LLM workflows.
+- **💬 Contribute:** Spot an edge-case bug or schema change? Open an [Issue](https://github.com/pphothidaen/gemini-web-bridge/issues) or submit a Pull Request.
+
 ### 🚀 Quickstart
 
 #### 1. Deploy the Cloudflare Worker
@@ -291,16 +302,6 @@ Gemini Web Bridge provides a complete suite of remote MCP tools via `POST /mcp` 
   `horo_consult` MCP tool (notebook-grounded consultation): input schema,
   grounding model, fail-closed error matrix, and consumer adapter contract.
 
----
-
-## 🌟 Support & Community
-
-If you find **Gemini Web Bridge** useful for your agentic workflows or developer toolchain:
-
-- **Star the repository:** Keep track of the latest updates, model sync improvements, and edge runtime patches.
-- **Fork the project:** Add custom MCP tools, integrate proprietary enterprise scopes, or adapt it for other browser-backed LLMs.
-- **Contribute & Report:** Found an edge-case disconnect or model schema change? Open an [Issue](https://github.com/pphothidaen/gemini-web-bridge/issues) or submit a Pull Request.
-- 
 ---
 
 ## 📄 License
