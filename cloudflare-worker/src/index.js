@@ -556,6 +556,9 @@ export class GeminiBridgeDO extends DurableObject {
     // only to hand the page-side descriptor something to compare against.
     this.currentNotebookId = null;
     this.circuitBreaker = new CircuitBreaker({ failureThreshold: 3, windowMs: 60000, cooldownMs: 30000 });
+    // Webhook alert cooldown tracking (per event type, 60s minimum between alerts)
+    this._lastDisconnectAlert = 0;
+    this._lastFallbackAlert = 0;
     // Header redaction helper (KAN-308) available as instance method
     this.redactHeaders = redactHeaders;
     // KAN-236: requestId -> re-arm callback for an in-flight collectTypedAnswer.
@@ -2299,6 +2302,18 @@ export class GeminiBridgeDO extends DurableObject {
     while (this.telemetryBuffer.length > TELEMETRY_BUFFER_MAX) {
       this.telemetryBuffer.shift();
     }
+  }
+
+  async notifyEdgeAlert(event, detail) {
+    const webhookUrl = this.env.WEBHOOK_URL || this.env.DISCORD_WEBHOOK_URL || this.env.SLACK_WEBHOOK_URL;
+    if (!webhookUrl) return;
+    const text = `⚠️ **[GeminiBridgeDO]** \`${event}\` — ${detail}`;
+    const body = webhookUrl.includes("discord.com") ? { content: text } : { text };
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => {});
   }
 
   async callGcpGemini(messages, model = "gemini-1.5-flash") {
@@ -4099,6 +4114,14 @@ export class GeminiBridgeDO extends DurableObject {
             const promptTokens = body.messages.reduce((c, m) => c + Math.ceil((m?.content || "").length / 4), 0);
             const gcpText = await this.callGcpGemini(body.messages, body.model || "gemini-1.5-flash");
             corsHeaders["X-Provider"] = "google-cloud-fallback";
+            const now = Date.now();
+            if (!this._lastFallbackAlert || now - this._lastFallbackAlert > 60000) {
+              this._lastFallbackAlert = now;
+              await this.notifyEdgeAlert(
+                "GCP_HYBRID_FALLBACK",
+                `Primary web session unavailable. Routing request via GCP Gemini API fallback.`
+              );
+            }
             const responseObj = {
               id: `chatcmpl-${crypto.randomUUID()}`,
               object: "chat.completion",
@@ -4123,6 +4146,14 @@ export class GeminiBridgeDO extends DurableObject {
         // KAN-182: record the preflight disconnect before failing fast, so
         // /debug/telemetry shows disconnects even when the call never reaches
         // executeThroughExtension or callGcpGemini. No prompt/response content.
+        const now = Date.now();
+        if (!this._lastDisconnectAlert || now - this._lastDisconnectAlert > 60000) {
+          this._lastDisconnectAlert = now;
+          await this.notifyEdgeAlert(
+            "EXTENSION_DISCONNECTED",
+            `Chrome Extension WebSocket closed. Waiting for auto-reconnect.`
+          );
+        }
         this.recordTelemetry({ kind: "preflight", outcome: "error", error: "extension disconnected", messages: body.messages.length });
         return new Response(JSON.stringify({
           error: {

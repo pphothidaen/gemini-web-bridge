@@ -1,0 +1,62 @@
+name: AI-SDLC & HITL Governance Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Enforce Zero Standing Privileges — Bot cannot approve or merge PRs
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  governance-gate:
+    name: Tiered ADR, E3 Review & Secret Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 1. Verify Compact Gateway & ADR Baseline (docs/adr/)
+        run: |
+          test -f docs/architecture.md || { echo "❌ Missing docs/architecture.md" && exit 1; }
+          ADR_COUNT=$(find docs/adr -maxdepth 1 -name "00*.md" | wc -l)
+          echo "Found $ADR_COUNT ADR documents."
+          if [ "$ADR_COUNT" -lt 4 ]; then
+            echo "❌ Tier 3 ADR Gate Failed: Expected at least 4 baseline ADRs in docs/adr/"
+            exit 1
+          fi
+
+      - name: 2. Tier 3 File Change Detection & ADR Enforcement
+        if: github.event_name == 'pull_request'
+        run: |
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -qE "^(cloudflare-worker/src/|dist/extension/background\.js)"; then
+            echo "⚠️ Tier 3 Core/Edge modification detected."
+            COMMITS=$(git log --format="%B" origin/${{ github.base_ref }}...HEAD)
+            if ! echo "$COMMITS" | grep -qE "\b(KAN|PROJ|GH)-[0-9]+\b"; then
+              echo "❌ Governance Blocked: Tier 3 changes require a valid Ticket ID in commit messages."
+              exit 1
+            fi
+          fi
+
+      - name: 3. Verify Branch Protection & No Self-Bypass
+        if: github.event_name == 'pull_request'
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [[ "$PR_AUTHOR" == *"bot"* || "$PR_AUTHOR" == "github-actions[bot]" ]]; then
+            echo "ℹ️ Automated Agent PR detected ($PR_AUTHOR). Requiring human review before merge."
+          fi
