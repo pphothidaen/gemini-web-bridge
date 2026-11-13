@@ -26,6 +26,7 @@ import {
   resolveToolPolicy,
   parseToolCompletion
 } from "./tool-emulator.ts";
+import { getTraceContext, buildTraceparent, exportSpan } from "./telemetry.js";
 
 // ─── KAN-308: Circuit breaker + header redaction helpers ───
 export class CircuitBreaker {
@@ -5636,11 +5637,52 @@ export class GeminiBridgeDO extends DurableObject {
   }
 }
 
-// ─── Root Worker Entrypoint ───
+// ─── Root Worker Entrypoint (KAN-342: OpenTelemetry Tracing) ───
 export default {
   async fetch(request, env, ctx) {
-    const id = env.BRIDGE_DO.idFromName("global-bridge");
-    const stub = env.BRIDGE_DO.get(id);
-    return stub.fetch(request);
+    const startTime = Date.now();
+    const traceCtx = getTraceContext(request);
+    let statusCode = 200;
+    let errorMessage = "";
+
+    // Forward traceparent downstream to Durable Object stub
+    let downstreamRequest = request;
+    if (request?.headers && typeof request.headers.has === "function" && !request.headers.has("traceparent")) {
+      const newHeaders = new Headers(request.headers);
+      newHeaders.set("traceparent", buildTraceparent(traceCtx.traceId, traceCtx.spanId));
+      downstreamRequest = new Request(request, { headers: newHeaders });
+    }
+
+    try {
+      const id = env.BRIDGE_DO.idFromName("global-bridge");
+      const stub = env.BRIDGE_DO.get(id);
+      const response = await stub.fetch(downstreamRequest);
+      statusCode = response.status;
+      return response;
+    } catch (error) {
+      statusCode = 500;
+      errorMessage = error.message;
+      throw error;
+    } finally {
+      const endTime = Date.now();
+      const exportPromise = exportSpan(env, {
+        traceId: traceCtx.traceId,
+        spanId: traceCtx.spanId,
+        parentSpanId: traceCtx.parentSpanId,
+        name: `HTTP ${request.method} ${new URL(request.url).pathname}`,
+        startTime,
+        endTime,
+        statusCode,
+        attributes: {
+          "http.method": request.method,
+          "http.url": request.url,
+          "http.status_code": statusCode,
+          "error.message": errorMessage
+        }
+      });
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil(exportPromise);
+      }
+    }
   }
 };
