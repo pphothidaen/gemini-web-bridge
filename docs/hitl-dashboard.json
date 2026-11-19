@@ -1,0 +1,311 @@
+{
+  "id": null,
+  "uid": "hermes-hitl-governance",
+  "title": "Hermes AI-SDLC HITL Governance",
+  "timezone": "Asia/Bangkok",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "tags": [
+    "hermes",
+    "hitl",
+    "governance",
+    "e3-gate",
+    "sqlite"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "E3 Gate Blocks",
+      "description": "ตรวจจับความพยายาม Self-Bypass หรือข้อผิดพลาดของ Agent (e3_gate_blocked events)",
+      "datasource": "Hermes-SQLite",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": "Hermes-SQLite",
+          "rawSql": "SELECT COUNT(*) AS count FROM review_gate_events WHERE event_type = 'e3_gate_blocked'",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "limitDisplayCount": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds",
+            "thresholds": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Confidence Triggers",
+      "description": "ดูความถี่ที่ Agent ร้องขอความช่วยเหลือจากมนุษย์ (confidence_gate_triggered events)",
+      "datasource": "Hermes-SQLite",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": "Hermes-SQLite",
+          "rawSql": "SELECT COUNT(*) AS count FROM review_gate_events WHERE event_type = 'confidence_gate_triggered'",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "limitDisplayCount": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds",
+            "thresholds": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "piechart",
+      "title": "Approval Ratio (Allow vs Deny)",
+      "description": "สัดส่วนการอนุมัติ (Allow) vs ถูกตีตก (Deny) จาก HITL Decision Gate",
+      "datasource": "Hermes-SQLite",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": "Hermes-SQLite",
+          "rawSql": "SELECT decision AS decision, COUNT(*) AS count FROM review_gate_events WHERE decision IS NOT NULL GROUP BY decision",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "displayMode": "auto",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "reduceOptions": {
+          "values": true,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "combineOthers": {
+          "threshold": 0,
+          "label": "อื่นๆ"
+        },
+        "displayLabels": [
+          "value"
+        ],
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "values": [
+            "current"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds",
+            "thresholds": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Recent Audit Trail",
+      "description": "แง้มดูเหตุผลการบล็อก 10 รายการล่าสุดเพื่อใช้วิเคราะห์",
+      "datasource": "Hermes-SQLite",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 26,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": "Hermes-SQLite",
+          "rawSql": "SELECT timestamp, ticket_id, event_type, decision, reason FROM review_gate_events ORDER BY timestamp DESC LIMIT 10",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "field": "timestamp",
+            "dir": "desc"
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "links": []
+        },
+        "overrides": [
+          {
+            "field": "timestamp",
+            "type": "time"
+          },
+          {
+            "field": "decision",
+            "type": "text",
+            "mappings": [
+              {
+                "type": "value",
+                "options": {
+                  "0": {
+                    "text": "✅ Allow",
+                    "color": "green"
+                  },
+                  "1": {
+                    "text": "🚫 Deny",
+                    "color": "red"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "field": "event_type",
+            "type": "text",
+            "mappings": [
+              {
+                "type": "value",
+                "options": {
+                  "e3_gate_blocked": {
+                    "text": "🚨 E3 Gate Blocked",
+                    "color": "red"
+                  },
+                  "confidence_gate_triggered": {
+                    "text": "⚠️ Confidence Triggered",
+                    "color": "orange"
+                  },
+                  "gate_block": {
+                    "text": "🛑 Gate Blocked",
+                    "color": "red"
+                  },
+                  "gate_allow": {
+                    "text": "✅ Gate Allowed",
+                    "color": "green"
+                  },
+                  "review_approved": {
+                    "text": "✅ Review Approved",
+                    "color": "green"
+                  },
+                  "review_init": {
+                    "text": "🆕 Review Init",
+                    "color": "blue"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  }
+}
