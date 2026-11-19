@@ -315,7 +315,7 @@ test('OPTIONS request returns CORS headers', { skip }, async () => {
   const res = await fetch(`${WORKER_URL}/v1/chat/completions`, {
     method: 'OPTIONS',
     headers: {
-      'Origin': 'chrome-extension://test',
+      'Origin': 'http://localhost:3000',
       'Access-Control-Request-Method': 'POST',
       'Access-Control-Request-Headers': 'Content-Type,Authorization',
     },

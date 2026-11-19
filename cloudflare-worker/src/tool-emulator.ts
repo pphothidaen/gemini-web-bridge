@@ -259,7 +259,12 @@ export function parseToolCompletion(text: string, policy: Policy) {
     finishReason: calls.length ? "tool_calls" : "stop" };
 }
 
-export function createToolCallTransformer(id: string, model: string, policy: Policy): TransformStream<string, string> {
+export function createToolCallTransformer(
+  id: string,
+  model: string,
+  policy: Policy,
+  options?: { promptTokens?: number; includeUsage?: boolean }
+): TransformStream<string, string> {
   let text = "";
   return new TransformStream({
     transform(chunk) { text += chunk; },
@@ -274,6 +279,20 @@ export function createToolCallTransformer(id: string, model: string, policy: Pol
         if (message.content) emit({ content: message.content });
         message.tool_calls?.forEach((call: any, index: number) => emit({ tool_calls: [{ ...call, index }] }));
         emit({}, finishReason);
+
+        if (options?.includeUsage) {
+          const compTokens = Math.ceil(text.length / 4);
+          const pTokens = options.promptTokens || 0;
+          controller.enqueue(`data: ${JSON.stringify({
+            id, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model,
+            choices: [],
+            usage: {
+              prompt_tokens: pTokens,
+              completion_tokens: compTokens,
+              total_tokens: pTokens + compTokens
+            }
+          })}\n\n`);
+        }
       } catch (err: any) {
         controller.enqueue(`data: ${JSON.stringify({ error: { message: err.message, type: "server_error", code: "invalid_tool_response" } })}\n\n`);
       }

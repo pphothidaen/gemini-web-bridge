@@ -26,6 +26,7 @@ import {
   resolveToolPolicy,
   parseToolCompletion
 } from "./tool-emulator.ts";
+import { getTraceContext, buildTraceparent, exportSpan } from "./telemetry.js";
 
 // ─── KAN-308: Circuit breaker + header redaction helpers ───
 export class CircuitBreaker {
@@ -4312,6 +4313,24 @@ export class GeminiBridgeDO extends DurableObject {
                 }
               }, upstreamModel, { thinkingEffort });
               sse(chunkFrame({}, "stop"));
+
+              // KAN-347: Emit usage frame at the end of SSE streams when stream_options.include_usage is requested
+              if (body.stream_options?.include_usage === true) {
+                const completionTokens = Math.ceil((lastEmitted || "").length / 4);
+                sse({
+                  id: requestId,
+                  object: "chat.completion.chunk",
+                  created: Math.floor(Date.now() / 1000),
+                  model: rawModel,
+                  choices: [],
+                  usage: {
+                    prompt_tokens: promptTokens,
+                    completion_tokens: completionTokens,
+                    total_tokens: promptTokens + completionTokens
+                  }
+                });
+              }
+
               writer.write(encoder.encode("data: [DONE]\n\n"));
               await writer.close();
             } catch (error) {
@@ -4337,7 +4356,11 @@ export class GeminiBridgeDO extends DurableObject {
           });
         }
 
-        const toolTransformer = createToolCallTransformer(requestId, rawModel, policy);
+        const shouldEmitToolUsage = body.stream_options?.include_usage === true;
+        const toolTransformer = createToolCallTransformer(requestId, rawModel, policy, {
+          promptTokens,
+          includeUsage: shouldEmitToolUsage
+        });
         const transformerWriter = toolTransformer.writable.getWriter();
         const readable = toolTransformer.readable.pipeThrough(new TextEncoderStream());
 
@@ -5636,11 +5659,52 @@ export class GeminiBridgeDO extends DurableObject {
   }
 }
 
-// ─── Root Worker Entrypoint ───
+// ─── Root Worker Entrypoint (KAN-342: OpenTelemetry Tracing) ───
 export default {
   async fetch(request, env, ctx) {
-    const id = env.BRIDGE_DO.idFromName("global-bridge");
-    const stub = env.BRIDGE_DO.get(id);
-    return stub.fetch(request);
+    const startTime = Date.now();
+    const traceCtx = getTraceContext(request);
+    let statusCode = 200;
+    let errorMessage = "";
+
+    // Forward traceparent downstream to Durable Object stub
+    let downstreamRequest = request;
+    if (request?.headers && typeof request.headers.has === "function" && !request.headers.has("traceparent")) {
+      const newHeaders = new Headers(request.headers);
+      newHeaders.set("traceparent", buildTraceparent(traceCtx.traceId, traceCtx.spanId));
+      downstreamRequest = new Request(request, { headers: newHeaders });
+    }
+
+    try {
+      const id = env.BRIDGE_DO.idFromName("global-bridge");
+      const stub = env.BRIDGE_DO.get(id);
+      const response = await stub.fetch(downstreamRequest);
+      statusCode = response.status;
+      return response;
+    } catch (error) {
+      statusCode = 500;
+      errorMessage = error.message;
+      throw error;
+    } finally {
+      const endTime = Date.now();
+      const exportPromise = exportSpan(env, {
+        traceId: traceCtx.traceId,
+        spanId: traceCtx.spanId,
+        parentSpanId: traceCtx.parentSpanId,
+        name: `HTTP ${request.method} ${new URL(request.url).pathname}`,
+        startTime,
+        endTime,
+        statusCode,
+        attributes: {
+          "http.method": request.method,
+          "http.url": request.url,
+          "http.status_code": statusCode,
+          "error.message": errorMessage
+        }
+      });
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil(exportPromise);
+      }
+    }
   }
 };

@@ -52,3 +52,4 @@ cloudflare-worker/wrangler.pid
 cloudflare-worker/wrangler_0.pid
 *.pid
 
+.worktrees/
