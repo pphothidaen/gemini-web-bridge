@@ -459,7 +459,24 @@
 
     // Phase 1: generation should start. If the spinner never appears the click
     // did not take, and waiting out the full timeout would just burn it.
-    const started = await waitFor(() => generatingSignal(doc).active, Math.min(5000, timeoutMs), doc, now, setT);
+    // For regenerate-in-place, the response is cleared first (becomes empty or
+    // shows "Gemini says:" placeholder) before standard generating signals appear.
+    // Detect this cleared state as evidence that regeneration has started.
+    const phase1TimeoutMs = Math.min(5000, timeoutMs);
+    const response = lastModelResponse(doc);
+    const started = await waitFor(() => {
+      // Standard generating signals (spinner, stop button, aria-busy, thinking dots)
+      if (generatingSignal(doc).active) return true;
+      // Regenerate-specific: response element exists but has been cleared to
+      // empty or placeholder — this means the click took and regeneration began.
+      if (response) {
+        const currentText = (response.innerText || "").trim();
+        if (!currentText || isPlaceholderOnly(currentText)) {
+          return true;
+        }
+      }
+      return false;
+    }, phase1TimeoutMs, doc, now, setT);
     const signal = generatingSignal(doc).source;
     let waitedOnSpinner = false;
     if (started) {
