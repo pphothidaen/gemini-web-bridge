@@ -92,7 +92,7 @@ test('every job is on the same runner major (KAN-228)', () => {
   assert.deepEqual(report.majors, ['26']);
 });
 
-test('all 13 declarations are accounted for (KAN-228)', () => {
+test('all 14 declarations are accounted for (KAN-228)', () => {
   // Counts the declarations rather than trusting that a regex found
   // the right ones. If a future workflow is added and lands on a
   // floating label, `floating` catches it; this catches the case where
@@ -100,9 +100,9 @@ test('all 13 declarations are accounted for (KAN-228)', () => {
   const all = collectRunnerImages();
   assert.equal(
     all.length,
-    13,
-    `expected 13 runs-on: declarations, found ${all.length}. ci.yml has 8, ` +
-      'cd.yml 2, cd-watchdog.yml 1, keepalive-probe.yml 1, token-rotation.yml 1. ' +
+    14,
+    `expected 14 runs-on: declarations, found ${all.length}. ci.yml has 8, ` +
+      'cd.yml 2, cd-watchdog.yml 1, keepalive-probe.yml 1, token-rotation.yml 1, hitl-pr-gate.yml 1. ' +
       'A count change means a job was added or removed - update this test ' +
       'in the same commit.'
   );

@@ -4313,6 +4313,24 @@ export class GeminiBridgeDO extends DurableObject {
                 }
               }, upstreamModel, { thinkingEffort });
               sse(chunkFrame({}, "stop"));
+
+              // KAN-347: Emit usage frame at the end of SSE streams when stream_options.include_usage is requested
+              if (body.stream_options?.include_usage === true) {
+                const completionTokens = Math.ceil((lastEmitted || "").length / 4);
+                sse({
+                  id: requestId,
+                  object: "chat.completion.chunk",
+                  created: Math.floor(Date.now() / 1000),
+                  model: rawModel,
+                  choices: [],
+                  usage: {
+                    prompt_tokens: promptTokens,
+                    completion_tokens: completionTokens,
+                    total_tokens: promptTokens + completionTokens
+                  }
+                });
+              }
+
               writer.write(encoder.encode("data: [DONE]\n\n"));
               await writer.close();
             } catch (error) {
@@ -4338,7 +4356,11 @@ export class GeminiBridgeDO extends DurableObject {
           });
         }
 
-        const toolTransformer = createToolCallTransformer(requestId, rawModel, policy);
+        const shouldEmitToolUsage = body.stream_options?.include_usage === true;
+        const toolTransformer = createToolCallTransformer(requestId, rawModel, policy, {
+          promptTokens,
+          includeUsage: shouldEmitToolUsage
+        });
         const transformerWriter = toolTransformer.writable.getWriter();
         const readable = toolTransformer.readable.pipeThrough(new TextEncoderStream());
 

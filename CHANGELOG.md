@@ -8,6 +8,12 @@ All notable changes to the Gemini Web-Bridge project.
 > anywhere. Production is `prod.gemini-web-bridge.workers.dev` and has been
 > since commit `fa97a5d` (KAN-157).
 
+## [Unreleased]
+
+### Added & Improved
+- **SSE Stream Options (KAN-347)**: Emitted usage frame at the end of SSE streams when `stream_options.include_usage: true` is requested.
+- **V8 OpenTelemetry Tracing (KAN-342)**: Added native OpenTelemetry edge tracing in cloudflare-worker.
+
 ## [4.7.39] - 2026-10-20
 
 ### Security & Governance

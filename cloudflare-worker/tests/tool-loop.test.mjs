@@ -105,6 +105,28 @@ test('HTTP streaming and JSON both return tool calls', async () => {
     }
   }
 });
+test('KAN-347: HTTP streaming emits usage frame when stream_options.include_usage is true', async () => {
+  const response = await bridge().fetch(new Request('https://test/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer test' },
+    body: JSON.stringify({
+      messages: [{ role: 'user', content: 'read a.js' }],
+      tools: [safeTool],
+      stream: true,
+      stream_options: { include_usage: true }
+    })
+  }));
+  assert.equal(response.status, 200);
+  const text = await response.text();
+  const chunks = text.split('\n\n').filter(s => s.startsWith('data: {')).map(s => JSON.parse(s.slice(6)));
+  const usageChunk = chunks.find(c => c.usage);
+  assert.ok(usageChunk, 'Usage frame must be emitted in SSE stream');
+  assert.equal(usageChunk.choices.length, 0);
+  assert.ok(typeof usageChunk.usage.prompt_tokens === 'number');
+  assert.ok(typeof usageChunk.usage.completion_tokens === 'number');
+  assert.ok(typeof usageChunk.usage.total_tokens === 'number');
+  assert.match(text, /data: \[DONE\]/);
+});
 test('missing websocket credentials are rejected', async () => {
   assert.equal((await bridge().fetch(new Request('https://test/bridge'))).status,401);
 });
