@@ -11,8 +11,15 @@ All notable changes to the Gemini Web-Bridge project.
 ## [Unreleased]
 
 ### Added & Improved
+- **AI-SDLC & HITL Governance Gate (KAN-313)**: Activated Tier 3 file change detection and ADR existence verification in `hitl-pr-gate.yml`. Enforced Zero Standing Privileges and Branch Protection preventing automated bot direct pushes and self-approvals.
+- **Jira CI Build Sync (KAN-313)**: Automated posting of extension build status, artifacts, commit link, and run URL using rich Atlassian Document Format (ADF) payloads.
 - **SSE Stream Options (KAN-347)**: Emitted usage frame at the end of SSE streams when `stream_options.include_usage: true` is requested.
 - **V8 OpenTelemetry Tracing (KAN-342)**: Added native OpenTelemetry edge tracing in cloudflare-worker.
+
+### Security & Governance
+- **Redteam Token Validation (KAN-313)**: Activated token verification on CI across PRs and branches with whitespace stripping and fallback secret resolution.
+- **Dependency Hardening**: Upgraded `wrangler` to `^4.165.0`, `miniflare` to `5.20261118.0-beta`, and resolved high-severity advisories by updating `undici` to `7.30.1`. Synchronized Node.js engine constraint to `>=22.12.0`.
+- **Workflow Validator Hardening**: Enhanced `scripts/validate-workflows.py` to detect unquoted YAML tag directives (`!`) and accurately parse multiline block scalars without consuming sibling step keys.
 
 ## [4.7.39] - 2026-10-20
 
