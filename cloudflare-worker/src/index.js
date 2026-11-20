@@ -181,6 +181,100 @@ function vlog(...args) {
 }
 
 /**
+ * Normalizes a Gemini-native part (text, functionCall, functionResponse, inlineData) into string representation.
+ */
+function extractGeminiPartText(part) {
+  if (part == null) return "";
+  if (typeof part === "string") return part;
+  if (typeof part === "object") {
+    if (typeof part.text === "string") return part.text;
+    if (part.functionCall) {
+      return `<tool_call>\n${JSON.stringify({ name: part.functionCall.name, arguments: part.functionCall.args || {} })}\n</tool_call>`;
+    }
+    if (part.functionResponse) {
+      return JSON.stringify(part.functionResponse.response ?? part.functionResponse);
+    }
+    if (part.inlineData) {
+      return `[Inline Media: ${part.inlineData.mimeType || "media"}]`;
+    }
+    return JSON.stringify(part);
+  }
+  return String(part);
+}
+
+/**
+ * Normalizes Gemini-native request contents/messages into internal messages format (KAN-351).
+ */
+export function extractGeminiNativeMessages(body) {
+  let messages = [];
+
+  // 1. System instruction (systemInstruction or system_instruction)
+  const sysInst = body?.systemInstruction ?? body?.system_instruction;
+  if (sysInst) {
+    let sysText = "";
+    if (typeof sysInst === "string") {
+      sysText = sysInst;
+    } else if (Array.isArray(sysInst)) {
+      sysText = sysInst.map(extractGeminiPartText).filter(Boolean).join("\n");
+    } else if (typeof sysInst === "object") {
+      if (Array.isArray(sysInst.parts)) {
+        sysText = sysInst.parts.map(extractGeminiPartText).filter(Boolean).join("\n");
+      } else if (sysInst.parts != null) {
+        sysText = extractGeminiPartText(sysInst.parts);
+      } else if (typeof sysInst.text === "string") {
+        sysText = sysInst.text;
+      } else if (typeof sysInst.content === "string") {
+        sysText = sysInst.content;
+      }
+    }
+    if (sysText && sysText.trim()) {
+      messages.push({ role: "system", content: sysText.trim() });
+    }
+  }
+
+  // 2. Contents or Messages
+  let rawContents = body?.contents;
+  if (rawContents && typeof rawContents === "object" && !Array.isArray(rawContents)) {
+    // Single Content object e.g. { role: "user", parts: [...] } or { parts: [...] }
+    rawContents = [rawContents];
+  }
+
+  if (Array.isArray(rawContents)) {
+    for (const c of rawContents) {
+      if (!c) continue;
+      if (typeof c === "string") {
+        if (c.trim()) messages.push({ role: "user", content: c.trim() });
+        continue;
+      }
+      const role = (c.role === "model" || c.role === "assistant") ? "assistant" : "user";
+      let content = "";
+      if (Array.isArray(c.parts)) {
+        content = c.parts.map(extractGeminiPartText).filter(Boolean).join("\n");
+      } else if (c.parts != null) {
+        content = extractGeminiPartText(c.parts);
+      } else if (typeof c.text === "string") {
+        content = c.text;
+      } else if (typeof c.content === "string") {
+        content = c.content;
+      }
+      messages.push({ role, content });
+    }
+  } else if (typeof rawContents === "string" && rawContents.trim()) {
+    messages.push({ role: "user", content: rawContents.trim() });
+  } else if (Array.isArray(body?.messages)) {
+    for (const m of body.messages) {
+      if (!m) continue;
+      messages.push({
+        role: m.role || "user",
+        content: typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "")
+      });
+    }
+  }
+
+  return messages;
+}
+
+/**
  * Constant-time comparison for secrets and API keys to prevent timing attacks.
  */
 function constantTimeEqual(a, b) {
@@ -3106,8 +3200,20 @@ export class GeminiBridgeDO extends DurableObject {
     });
   }
 
+  isGeminiNativeEnabled() {
+    const val = this.env?.GEMINI_NATIVE_ENABLED;
+    if (val === undefined || val === null) return true;
+    if (typeof val === "boolean") return val;
+    const str = String(val).trim().toLowerCase();
+    return str !== "false" && str !== "0" && str !== "no" && str !== "off" && str !== "";
+  }
+
   async fetch(request) {
-    if (new URL(request.url).pathname !== "/v1/chat/completions" || request.method !== "POST") return this.handleRequest(request);
+    const pathname = new URL(request.url).pathname;
+    const { rest: apiPath } = resolveApiVersion(pathname);
+    const isChatPath = apiPath === "/chat/completions";
+    const isNativeChatPath = apiPath === "/gemini/chat/completions" && this.isGeminiNativeEnabled();
+    if ((!isChatPath && !isNativeChatPath) || request.method !== "POST") return this.handleRequest(request);
     if (this.requestBusy) {
       if (this.pendingRequests.length >= 10) return this.failure(429, "queue_full", "Browser request queue is full");
       const queueWaitMs = Number(this.env.QUEUE_TIMEOUT_MS) > 0 ? Number(this.env.QUEUE_TIMEOUT_MS) : 180000;
@@ -4023,6 +4129,18 @@ export class GeminiBridgeDO extends DurableObject {
       }), { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
+    // ─── Gemini-Native routes feature flag gate (KAN-351) ───
+    const isGeminiNativePath = apiPath.startsWith("/gemini/");
+    if (isGeminiNativePath && !this.isGeminiNativeEnabled()) {
+      return new Response(JSON.stringify({
+        error: {
+          message: "Gemini native routes are disabled",
+          type: "invalid_request_error",
+          code: "gemini_native_disabled"
+        }
+      }), { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     // ─── Public Paths vs Authenticated Paths ───
     // /artifacts/{key} is public: the 32-hex unguessable key IS the credential.
     //
@@ -4054,6 +4172,35 @@ export class GeminiBridgeDO extends DurableObject {
     // ─── Public Artifact Download: /artifacts/{key} ───
     if (isArtifactPath && request.method === "GET") {
       return this.serveArtifact(url, corsHeaders);
+    }
+
+    // ─── Gemini-Native API: /vN/gemini/models (KAN-351) ───
+    if (apiPath === "/gemini/models" && request.method === "GET") {
+      const nativeModels = [
+        {
+          id: "gemini-3.5-flash-lite",
+          object: "model",
+          owned_by: "google",
+          capabilities: {
+            grounding: true
+          }
+        },
+        {
+          id: "gemini-3.1-pro-preview",
+          object: "model",
+          owned_by: "google",
+          capabilities: {
+            grounding: true
+          }
+        }
+      ];
+      return new Response(JSON.stringify({
+        object: "list",
+        data: nativeModels
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" }
+      });
     }
 
     // ─── OpenAI-Compatible API: /vN/models (and the unversioned /models alias) ───
@@ -4408,6 +4555,451 @@ export class GeminiBridgeDO extends DurableObject {
             total_tokens: promptTokens + completionTokens
           }
         }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json", "Mcp-Session-Id": clientSessionId }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({
+          error: { message: err.message, type: "server_error", code: err.code || "execution_failed" }
+        }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+    }
+
+    // ─── Gemini-Native API: /vN/gemini/chat/completions (KAN-351) ───
+    if (apiPath === "/gemini/chat/completions" && request.method === "POST") {
+      let body;
+      try {
+        body = await request.json();
+      } catch (e) {
+        return new Response(JSON.stringify({
+          error: { message: "Malformed JSON body", type: "invalid_request_error", code: "bad_json" }
+        }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      let messages = extractGeminiNativeMessages(body);
+
+      // Validate request shape BEFORE extension-readiness gate
+      if (!body || !messages.length) {
+        return new Response(JSON.stringify({
+          error: { message: "contents or messages must be a non-empty array", type: "invalid_request_error" }
+        }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      const rawTools = body?.tools;
+      if (rawTools !== undefined && !Array.isArray(rawTools)) {
+        return new Response(JSON.stringify({
+          error: { message: "tools must be an array", type: "invalid_request_error" }
+        }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      const toolsList = Array.isArray(rawTools) ? rawTools : [];
+      let hasGoogleSearch = false;
+      const functionTools = [];
+
+      for (const t of toolsList) {
+        if (!t) continue;
+        if (t.google_search !== undefined || t.googleSearch !== undefined ||
+            t.google_search_retrieval !== undefined || t.googleSearchRetrieval !== undefined) {
+          hasGoogleSearch = true;
+          continue;
+        }
+        const decls = t.functionDeclarations || t.function_declarations;
+        if (Array.isArray(decls)) {
+          for (const d of decls) {
+            if (d && typeof d.name === "string") {
+              functionTools.push({
+                type: "function",
+                function: {
+                  name: d.name,
+                  description: d.description || "",
+                  parameters: d.parameters || { type: "object", properties: {} }
+                }
+              });
+            }
+          }
+        } else if (t.type === "function" || t.function) {
+          functionTools.push(t);
+        }
+      }
+
+      let policy = null;
+      if (functionTools.length > 0) {
+        try {
+          policy = resolveToolPolicy(request, { ...body, tools: functionTools });
+          if (policy?.error) {
+            return new Response(JSON.stringify({ error: { message: policy.error, type: "invalid_request_error" } }),
+              { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+          }
+        } catch (err) {
+          return new Response(JSON.stringify({ error: { message: err.message, type: "invalid_request_error" } }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+        const tools = policy.tools;
+        if (tools.length > 0) {
+          const toolPrompt = buildToolSystemPrompt(tools) + (policy.required ? "\nYou must call an allowed tool this turn." : "") + (!policy.parallel ? "\nCall at most one tool this turn." : "");
+          if (!messages || messages.length === 0) {
+            messages = [{ role: "system", content: toolPrompt }];
+          } else if (messages[0].role === "system") {
+            messages[0].content = `${messages[0].content}\n\n${toolPrompt}`;
+          } else {
+            messages.unshift({ role: "system", content: toolPrompt });
+          }
+        }
+      }
+
+      if (hasGoogleSearch) {
+        const searchDirective = "[Search Grounding: Google Search is enabled for this turn. Retrieve and cite up-to-date web facts if needed.]";
+        if (messages.length > 0 && messages[0].role === "system") {
+          messages[0].content = `${messages[0].content}\n${searchDirective}`;
+        } else {
+          messages.unshift({ role: "system", content: searchDirective });
+        }
+      }
+
+      // Check extension connection status
+      if (!this.isExtensionReady() || this.protocolVersion < 2 || this.protocolVersion > 3) {
+        const reconnected = await this.waitForExtension();
+        if (!reconnected) {
+          if (this.env.GEMINI_API_KEY && body?.stream !== true && Array.isArray(messages)) {
+            try {
+              const promptTokens = messages.reduce((c, m) => c + Math.ceil((m?.content || "").length / 4), 0);
+              const gcpText = await this.callGcpGemini(messages, body.model || "gemini-1.5-flash");
+              corsHeaders["X-Provider"] = "google-cloud-fallback";
+              const now = Date.now();
+              if (!this._lastFallbackAlert || now - this._lastFallbackAlert > 60000) {
+                this._lastFallbackAlert = now;
+                await this.notifyEdgeAlert(
+                  "GCP_HYBRID_FALLBACK",
+                  `Primary web session unavailable. Routing request via GCP Gemini API fallback.`
+                );
+              }
+              const responseObj = {
+                id: `chatcmpl-${crypto.randomUUID()}`,
+                object: "chat.completion",
+                created: Math.floor(Date.now() / 1000),
+                model: body.model || "gemini-1.5-flash",
+                choices: [{
+                  index: 0,
+                  message: { role: "assistant", content: gcpText },
+                  finish_reason: "stop"
+                }],
+                candidates: [{
+                  content: {
+                    role: "model",
+                    parts: [{ text: gcpText }]
+                  },
+                  finishReason: "STOP",
+                  ...(hasGoogleSearch ? {
+                    groundingMetadata: {
+                      webSearchQueries: [],
+                      searchEntryPoint: { renderedContent: "" }
+                    }
+                  } : {})
+                }],
+                usage: {
+                  prompt_tokens: promptTokens,
+                  completion_tokens: Math.ceil(gcpText.length / 4),
+                  total_tokens: promptTokens + Math.ceil(gcpText.length / 4)
+                }
+              };
+              if (hasGoogleSearch) {
+                responseObj.grounding_metadata = { search_grounding: true, web_search_queries: [] };
+              }
+              return new Response(JSON.stringify(responseObj), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+            } catch (gcpErr) {
+              console.error("[Bridge DO] GCP fallback error:", gcpErr);
+            }
+          }
+          const now = Date.now();
+          if (!this._lastDisconnectAlert || now - this._lastDisconnectAlert > 60000) {
+            this._lastDisconnectAlert = now;
+            await this.notifyEdgeAlert(
+              "EXTENSION_DISCONNECTED",
+              `Chrome Extension WebSocket closed. Waiting for auto-reconnect.`
+            );
+          }
+          this.recordTelemetry({ kind: "gemini_preflight", outcome: "error", error: "extension disconnected", messages: messages.length });
+          return new Response(JSON.stringify({
+            error: {
+              message: "Gemini Web-Bridge: Chrome Extension is not connected. Please ensure Google Chrome is open with an active gemini.google.com session and the extension is loaded.",
+              type: "service_unavailable",
+              code: "extension_disconnected"
+            }
+          }), { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+      }
+
+      const requestId = `chatcmpl-${crypto.randomUUID()}`;
+
+      // Conversation Scope
+      const scopeInput = body.bridge_scope ?? body.scope ?? request.headers.get("x-bridge-scope");
+      if (scopeInput) {
+        const targetScope = this.resolveScopeInput(scopeInput);
+        if (!targetScope) {
+          return this.failure(400, "invalid_scope",
+            `Unrecognized bridge scope '${scopeInput}'. Use "app", "app:<conversationId>", "notebook:<notebookId>", or a gemini.google.com URL/path.`);
+        }
+        if (this.currentScope !== targetScope) {
+          try {
+            const ready = await this.prepareScope(targetScope);
+            this.currentScope = ready.scope || targetScope;
+            const scopeErr = this.addScopeFailClosed(targetScope);
+            if (scopeErr) {
+              return this.failure(422, scopeErr.code, scopeErr.message);
+            }
+          } catch (error) {
+            return this.failure(error.code === "extension_disconnected" ? 503 : 422, error.code || "scope_switch_failed", error.message);
+          }
+        }
+        corsHeaders["X-Bridge-Scope"] = targetScope;
+      }
+
+      // Context Rotation headroom
+      await this.ensureConversationHeadroom({ requestId, explicitScope: scopeInput });
+
+      const requestedModel = body?.model;
+      if (this.protocolVersion < 2 || this.protocolVersion > 3) return this.failure(503,"extension_upgrade_required",`Protocol v${this.protocolVersion || 0} unsupported. Min: 2, Max: 3. Reload the extension.`);
+
+      let rawModel = !requestedModel || requestedModel === "gemini-web"
+        ? recommendedModel(this.dynamicModels) : requestedModel;
+      if (!rawModel && (!requestedModel || requestedModel === "gemini-web")) {
+        rawModel = this.dynamicModels[0]?.id;
+      }
+      // If requested model is a native model (e.g. gemini-3.5-flash-lite), alias to browser model if not in catalog
+      if (rawModel && !this.dynamicModels.some(m => m.id === rawModel)) {
+        const fallback = recommendedModel(this.dynamicModels) || this.dynamicModels[0]?.id;
+        if (fallback) rawModel = fallback;
+      }
+      if (!rawModel) return this.failure(422,"model_unverified","No verified default model is available");
+      if (!this.dynamicModels.some(m=>m.id===rawModel)) return this.failure(404,"model_not_available","Requested model is absent from the current browser catalog");
+
+      try {
+        const prepared = await this.prepareModel(rawModel);
+        if (prepared.model !== rawModel || !prepared.mappingRevision) return this.failure(422,"model_unverified","Model preparation did not verify requested model");
+      } catch(error) {
+        const fallback = this.enforcementMode === "permissive" ? recommendedModel(this.dynamicModels) : null;
+        if(!fallback || fallback===rawModel) return this.failure(error.code === "extension_disconnected" ? 503 : 422,error.code || "model_unverified",error.message);
+        rawModel = fallback;
+        try { const prepared = await this.prepareModel(rawModel); if(prepared.model!==rawModel || !prepared.mappingRevision) throw new Error("Fallback mapping unverified"); }
+        catch(error) {return this.failure(422,"model_unverified",error.message);}
+      }
+
+      const upstreamModel = rawModel;
+      corsHeaders["X-Resolved-Model"] = rawModel;
+      if(requestedModel) corsHeaders["X-Requested-Model"] = requestedModel;
+      if(requestedModel && !["gemini-web","gemini-web-thinking",rawModel].includes(requestedModel)) corsHeaders["X-Model-Degraded"] = "true";
+      const isStream = body?.stream === true;
+
+      // Parse thinking/effort options
+      let thinkingEffort = null;
+      if (body.thinking === true && !thinkingEffort) thinkingEffort = "high";
+      else if (body.thinking === false) thinkingEffort = "off";
+      if (body.thinking_effort && !thinkingEffort) thinkingEffort = body.thinking_effort;
+      if (body.effort && !thinkingEffort) thinkingEffort = body.effort;
+      if (body.reasoning_effort && !thinkingEffort) {
+        const map = { low: "low", medium: "medium", high: "high" };
+        thinkingEffort = map[body.reasoning_effort] || "medium";
+      }
+      if (body.options?.thinking?.effort && !thinkingEffort) {
+        thinkingEffort = body.options.thinking.effort;
+      }
+      if (thinkingEffort) {
+        thinkingEffort = thinkingEffort.toLowerCase();
+        const validEfforts = ["off", "low", "medium", "high", "max"];
+        if (!validEfforts.includes(thinkingEffort)) {
+          thinkingEffort = "high";
+        }
+      }
+
+      const promptTokens = messages.reduce((c, m) => c + Math.ceil((m.content || "").length / 4), 0);
+
+      // SSE Streaming
+      if (isStream) {
+        if (!functionTools.length) {
+          const encoder = new TextEncoder();
+          const { readable, writable } = new TransformStream();
+          const writer = writable.getWriter();
+          const sse = (obj) => writer.write(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+          const chunkFrame = (delta, finish_reason = null) => ({
+            id: requestId, object: "chat.completion.chunk",
+            created: Math.floor(Date.now() / 1000), model: requestedModel || rawModel,
+            choices: [{ index: 0, delta, finish_reason }],
+            candidates: [{
+              content: {
+                role: "model",
+                parts: delta.content ? [{ text: delta.content }] : []
+              },
+              finishReason: finish_reason ? finish_reason.toUpperCase() : null,
+              ...(hasGoogleSearch ? {
+                groundingMetadata: {
+                  webSearchQueries: [],
+                  searchEntryPoint: { renderedContent: "" }
+                }
+              } : {})
+            }]
+          });
+
+          (async () => {
+            let lastEmitted = "";
+            try {
+              sse(chunkFrame({ role: "assistant" }));
+              await this.executeThroughExtension(messages, (cumulative) => {
+                if (typeof cumulative === "string" && cumulative.startsWith(lastEmitted) && cumulative.length > lastEmitted.length) {
+                  const delta = cumulative.slice(lastEmitted.length);
+                  lastEmitted = cumulative;
+                  sse(chunkFrame({ content: delta }));
+                } else if (typeof cumulative === "string") {
+                  lastEmitted = cumulative;
+                }
+              }, upstreamModel, { thinkingEffort });
+              sse(chunkFrame({}, "stop"));
+
+              if (body.stream_options?.include_usage === true) {
+                const completionTokens = Math.ceil((lastEmitted || "").length / 4);
+                sse({
+                  id: requestId,
+                  object: "chat.completion.chunk",
+                  created: Math.floor(Date.now() / 1000),
+                  model: requestedModel || rawModel,
+                  choices: [],
+                  usage: {
+                    prompt_tokens: promptTokens,
+                    completion_tokens: completionTokens,
+                    total_tokens: promptTokens + completionTokens
+                  }
+                });
+              }
+
+              writer.write(encoder.encode("data: [DONE]\n\n"));
+              await writer.close();
+            } catch (error) {
+              try {
+                sse({ error: { message: error.message, type: "server_error", code: error.code || "execution_failed" } });
+                writer.write(encoder.encode("data: [DONE]\n\n"));
+                await writer.close();
+              } catch (e) {
+                await writer.abort(error).catch(() => {});
+              }
+            }
+          })();
+
+          return new Response(readable, {
+            status: 200,
+            headers: {
+              ...corsHeaders,
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              "Mcp-Session-Id": clientSessionId
+            }
+          });
+        }
+
+        const shouldEmitToolUsage = body.stream_options?.include_usage === true;
+        const toolTransformer = createToolCallTransformer(requestId, requestedModel || rawModel, policy, {
+          promptTokens,
+          includeUsage: shouldEmitToolUsage
+        });
+        const transformerWriter = toolTransformer.writable.getWriter();
+        const readable = toolTransformer.readable.pipeThrough(new TextEncoderStream());
+
+        let fullText;
+        try { fullText = await this.executeThroughExtension(messages, null, upstreamModel, { thinkingEffort }); }
+        catch(error) { return this.failure(503, error.code || "execution_failed", error.message); }
+        try { parseToolCompletion(fullText, policy); }
+        catch(error) { return this.failure(422, "invalid_tool_completion", error.message); }
+        (async () => {
+          try { await transformerWriter.write(fullText); await transformerWriter.close(); }
+          catch(error) { await transformerWriter.abort(error).catch(() => {}); }
+        })();
+
+        return new Response(readable, {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Mcp-Session-Id": clientSessionId
+          }
+        });
+      }
+
+      // Non-streaming JSON Response
+      try {
+        const fullResponse = await this.executeThroughExtension(messages, null, upstreamModel, { thinkingEffort });
+        const completionTokens = Math.ceil(fullResponse.length / 4);
+
+        let choiceMessage = { role: "assistant", content: fullResponse };
+        let finishReason = "stop";
+        if (functionTools.length > 0 && policy) {
+          const parsed = parseToolCompletion(fullResponse, policy);
+          choiceMessage = parsed.message;
+          finishReason = parsed.finishReason;
+        }
+
+        const candidateParts = [];
+        if (choiceMessage.tool_calls && choiceMessage.tool_calls.length > 0) {
+          for (const tc of choiceMessage.tool_calls) {
+            let args = {};
+            try { args = JSON.parse(tc.function.arguments); } catch { args = { raw: tc.function.arguments }; }
+            candidateParts.push({
+              functionCall: {
+                name: tc.function.name,
+                args
+              }
+            });
+          }
+        }
+        if (choiceMessage.content) {
+          candidateParts.unshift({ text: choiceMessage.content });
+        }
+        if (candidateParts.length === 0) {
+          candidateParts.push({ text: "" });
+        }
+
+        const candidateFinishReason = (choiceMessage.tool_calls && choiceMessage.tool_calls.length > 0)
+          ? "TOOL_CALLS"
+          : "STOP";
+
+        const responseObj = {
+          id: requestId,
+          object: "chat.completion",
+          created: Math.floor(Date.now() / 1000),
+          model: requestedModel || rawModel,
+          choices: [{
+            index: 0,
+            message: choiceMessage,
+            finish_reason: finishReason
+          }],
+          candidates: [{
+            content: {
+              role: "model",
+              parts: candidateParts
+            },
+            finishReason: candidateFinishReason,
+            ...(hasGoogleSearch ? {
+              groundingMetadata: {
+                webSearchQueries: [],
+                searchEntryPoint: { renderedContent: "" }
+              }
+            } : {})
+          }],
+          usage: {
+            prompt_tokens: promptTokens,
+            completion_tokens: completionTokens,
+            total_tokens: promptTokens + completionTokens
+          }
+        };
+
+        if (hasGoogleSearch) {
+          responseObj.grounding_metadata = {
+            search_grounding: true,
+            web_search_queries: []
+          };
+        }
+
+        return new Response(JSON.stringify(responseObj), {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json", "Mcp-Session-Id": clientSessionId }
         });

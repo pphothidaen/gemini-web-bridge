@@ -55,7 +55,8 @@
     "BRIDGE_VERBOSE": "1",
     "CONTEXT_ROTATION_THRESHOLD": "8",
     "MULTI_SESSION": "true",
-    "OTEL_SERVICE_NAME": "gemini-web-bridge"
+    "OTEL_SERVICE_NAME": "gemini-web-bridge",
+    "GEMINI_NATIVE_ENABLED": "true"
   },
 
   // Observability is OFF deliberately. Workers Logs captures and retains an

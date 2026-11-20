@@ -76,11 +76,26 @@ class MockResponse {
   constructor(body = null, init = {}) {
     this.body = body;
     this.status = init.status ?? 200;
-    this.headers = init.headers || {};
+    this.headers = new Headers(init.headers || {});
     this.webSocket = init.webSocket ?? null;
     this.ok = this.status >= 200 && this.status < 300;
   }
-  async text() { return this.body == null ? '' : String(this.body); }
+  async text() {
+    if (this.body == null) return '';
+    if (typeof this.body === 'string') return this.body;
+    if (this.body && typeof this.body.getReader === 'function') {
+      const reader = this.body.getReader();
+      const decoder = new TextDecoder();
+      let result = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        result += typeof value === 'string' ? value : decoder.decode(value, { stream: true });
+      }
+      return result;
+    }
+    return String(this.body);
+  }
   async json() { return JSON.parse(await this.text()); }
 }
 
@@ -97,6 +112,7 @@ function loadDO() {
     crypto: workerdCrypto,
     Response: MockResponse,
     Request,
+    Headers,
     URL,
     TextEncoder,
     TextDecoder,
@@ -118,7 +134,7 @@ export function createMockWorker(options = {}) {
   const BRIDGE_AUTH_TOKEN = options.BRIDGE_AUTH_TOKEN ?? 'mock-bridge-secret-0123456789abcdef';
   const CLIENT_API_KEY = options.CLIENT_API_KEY ?? 'mock-client-key-0123456789abcdef';
   const GeminiBridgeDO = loadDO();
-  const bridge = new GeminiBridgeDO(makeCtx(), { BRIDGE_AUTH_TOKEN, CLIENT_API_KEY });
+  const bridge = new GeminiBridgeDO(makeCtx(), { BRIDGE_AUTH_TOKEN, CLIENT_API_KEY, ...(options.env || {}) });
 
   let delayMs = options.delayMs ?? Number(process.env.TEST_MOCK_DELAY_MS ?? 0);
 

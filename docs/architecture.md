@@ -229,6 +229,8 @@ graph TD
 | 0002 | `docs/adr/0002-multi-session-load-balancing.md` | การกระจายโหลดหลาย Session (BridgeRouterDO) | ✅ สร้างแล้ว |
 | 0003 | `docs/adr/0003-context-persistence-vector-memory.md` | Context Persistence: D1 + Vectorize | ✅ สร้างแล้ว |
 | 0004 | `docs/adr/0004-session-health-auto-recovery.md` | Heartbeat & Auto-reconnect ของ Chrome Extension | ✅ สร้างแล้ว |
+| 0005 | `docs/adr/0005-native-v8-opentelemetry-edge-tracing.md` | Zero-Dependency Native V8 OpenTelemetry Distributed Tracing | ✅ สร้างแล้ว |
+| 0006 | `docs/adr/0006-gemini-native-routes-search-grounding.md` | Gemini Native Endpoints & Search Grounding (/v1/gemini/*) | ✅ สร้างแล้ว |
 
 ---
 
