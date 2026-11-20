@@ -10,6 +10,8 @@ All notable changes to the Gemini Web-Bridge project.
 
 ## [Unreleased]
 
+## [4.7.40] - 2026-11-20
+
 ### Added & Improved
 - **AI-SDLC & HITL Governance Gate (KAN-313)**: Activated Tier 3 file change detection and ADR existence verification in `hitl-pr-gate.yml`. Enforced Zero Standing Privileges and Branch Protection preventing automated bot direct pushes and self-approvals.
 - **Jira CI Build Sync (KAN-313)**: Automated posting of extension build status, artifacts, commit link, and run URL using rich Atlassian Document Format (ADF) payloads.

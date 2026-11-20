@@ -96,7 +96,7 @@ export function redactHeaders(headers) {
 //   • dist/extension/manifest.json
 //
 // tests/version-consistency.test.mjs fails the build if any of them drift.
-const WORKER_VERSION = "4.7.39";
+const WORKER_VERSION = "4.7.40";
 
 // KAN-236 Phase D: how many sanitized payload records to keep.
 //
