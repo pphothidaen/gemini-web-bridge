@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -134,7 +136,7 @@ test('redteam-token-test is active on CI with !cancelled() and without main-only
   const redteamJob = CI_CONTENT.split('redteam-token-test:')[1] || '';
   assert.match(
     redteamJob,
-    /if:\s*(\${{\s*)?!cancelled\(\)(\s*}})?/,
+    /if:\s*(\${{\s*!cancelled\(\)\s*}}|['"]!cancelled\(\)['"])/,
     'redteam-token-test must have if: ${{ !cancelled() }} to run across all CI events'
   );
   assert.doesNotMatch(
@@ -270,6 +272,43 @@ test('validate-workflows.py detects unquoted ! in workflow if-conditions', () =>
     /cond\.startswith\(["']!["']\)/,
     'validate-workflows.py must check for unquoted !'
   );
+
+  const runValidator = (content) => {
+    const tmpFile = path.join(os.tmpdir(), `test-workflow-${Date.now()}-${Math.random().toString(36).slice(2)}.yml`);
+    try {
+      fs.writeFileSync(tmpFile, content, 'utf8');
+      const res = spawnSync('python3', [scriptPath, tmpFile], { encoding: 'utf8' });
+      return { status: res.status, stdout: res.stdout, stderr: res.stderr };
+    } finally {
+      if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+    }
+  };
+
+  // Rejects unquoted exclamation at start of if-condition
+  const badBare = runValidator('jobs:\n  t:\n    runs-on: ubuntu-26.04\n    if: !cancelled()\n    steps:\n      - run: echo 1\n');
+  assert.equal(badBare.status, 1, 'must fail on bare if: !cancelled()');
+  assert.match(badBare.stdout, /starts with unquoted `!`/, 'must report unquoted exclamation error');
+
+  const badStep = runValidator('jobs:\n  t:\n    runs-on: ubuntu-26.04\n    steps:\n      - if: !cancelled()\n        run: echo 1\n');
+  assert.equal(badStep.status, 1, 'must fail on step - if: !cancelled()');
+
+  const badMultiline = runValidator('jobs:\n  t:\n    runs-on: ubuntu-26.04\n    if:\n      !cancelled()\n    steps:\n      - run: echo 1\n');
+  assert.equal(badMultiline.status, 1, 'must fail on multiline if: !cancelled()');
+
+  // Accepts wrapped and quoted valid forms
+  const goodWrapped = runValidator('jobs:\n  t:\n    runs-on: ubuntu-26.04\n    if: ${{ !cancelled() }}\n    steps:\n      - run: echo 1\n');
+  assert.equal(goodWrapped.status, 0, 'must pass on if: ${{ !cancelled() }}');
+
+  const goodQuoted = runValidator('jobs:\n  t:\n    runs-on: ubuntu-26.04\n    if: \'!cancelled()\'\n    steps:\n      - run: echo 1\n');
+  assert.equal(goodQuoted.status, 0, 'must pass on if: \'!cancelled()\'');
+
+  // Folded block scalar is valid string in YAML
+  const goodFolded = runValidator('jobs:\n  t:\n    runs-on: ubuntu-26.04\n    if: >-\n      !cancelled()\n    steps:\n      - run: echo 1\n');
+  assert.equal(goodFolded.status, 0, 'must pass on if: >- !cancelled()');
+
+  // Sibling step env with secrets does not trigger false positive on folded step condition
+  const goodStepFoldedWithEnv = runValidator('jobs:\n  t:\n    runs-on: ubuntu-26.04\n    steps:\n      - if: >-\n          always()\n        name: step1\n        env:\n          TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        run: echo 1\n');
+  assert.equal(goodStepFoldedWithEnv.status, 0, 'step folded if must not falsely consume sibling env secrets');
 });
 
 

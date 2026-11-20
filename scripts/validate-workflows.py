@@ -75,13 +75,13 @@ def check(path):
         # with `secrets`, so strip an optional leading dash before matching.
         body = stripped[1:].strip() if stripped.startswith("- ") else stripped
         if body.startswith("if:"):
-            cond = body[3:].strip()
-            # Only a folded/multi-line scalar (`>-`, `|`, `>`) continues onto
-            # following lines. A plain scalar is complete on its own, and
-            # scanning past it would read the step's own `env:`/`run:` keys
-            # and flag their (entirely legal) `secrets.` references.
-            if cond in (">-", ">", "|", "|-"):
-                base = indent_of(line)
+            raw_cond = body[3:].strip()
+            # If the remainder on the `if:` line is a comment, treat condition as starting on next line.
+            cond = "" if raw_cond.startswith("#") else raw_cond
+            # Strip inline comment after folded scalar indicator if present (e.g. `if: >- # comment`)
+            indicator = cond.split("#")[0].strip() if "#" in cond else cond
+            if indicator in (">-", ">", "|", "|-"):
+                base = line.find("if:")
                 j = i
                 while j < len(lines):
                     nxt = lines[j].strip()
@@ -93,7 +93,7 @@ def check(path):
                     cond += " " + nxt
                     j += 1
             elif not cond:
-                base = indent_of(line)
+                base = line.find("if:")
                 j = i
                 while j < len(lines):
                     nxt = lines[j].strip()
@@ -102,8 +102,8 @@ def check(path):
                         continue
                     if indent_of(lines[j]) <= base:
                         break
-                    cond = nxt
-                    break
+                    cond += (" " if cond else "") + nxt
+                    j += 1
             if cond.startswith("!"):
                 problems.append(
                     "line %d: `if:` starts with unquoted `!` (%s) — YAML treats "
