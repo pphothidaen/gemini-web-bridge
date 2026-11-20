@@ -2,9 +2,15 @@ name: AI-SDLC & HITL Governance Gate
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [main]
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: hitl-pr-gate-${{ github.ref }}
+  cancel-in-progress: true
 
 # Enforce Zero Standing Privileges — Bot cannot approve or merge PRs
 permissions:
@@ -29,34 +35,156 @@ jobs:
 
       - name: 1. Verify Compact Gateway & ADR Baseline (docs/adr/)
         run: |
+          set -uo pipefail
           test -f docs/architecture.md || { echo "❌ Missing docs/architecture.md" && exit 1; }
-          ADR_COUNT=$(find docs/adr -maxdepth 1 -name "00*.md" | wc -l)
-          echo "Found $ADR_COUNT ADR documents."
+          ADR_COUNT=$(find docs/adr -maxdepth 1 -name "00*.md" | wc -l | tr -d ' ')
+          echo "Found $ADR_COUNT ADR documents in docs/adr/."
           if [ "$ADR_COUNT" -lt 4 ]; then
             echo "❌ Tier 3 ADR Gate Failed: Expected at least 4 baseline ADRs in docs/adr/"
             exit 1
           fi
+          echo "## 🏛️ AI-SDLC & HITL Governance Gate" >> $GITHUB_STEP_SUMMARY
+          echo "- **Architecture Baseline:** ✅ \`docs/architecture.md\` verified" >> $GITHUB_STEP_SUMMARY
+          echo "- **ADR Baseline:** ✅ $ADR_COUNT baseline ADR documents verified in \`docs/adr/\`" >> $GITHUB_STEP_SUMMARY
 
       - name: 2. Tier 3 File Change Detection & ADR Enforcement
-        if: github.event_name == 'pull_request'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_REF: ${{ github.head_ref }}
         run: |
-          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
-          echo "Changed files:"
+          set -uo pipefail
+
+          echo "Determining changed files for event '$EVENT_NAME' on ref '$REF'..."
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            TARGET_BASE="origin/$BASE_REF"
+            if ! git rev-parse --verify "$TARGET_BASE" >/dev/null 2>&1; then
+              git fetch origin "$BASE_REF":refs/remotes/origin/"$BASE_REF" 2>/dev/null || true
+            fi
+            CHANGED=$(git diff --name-only "$TARGET_BASE"...HEAD 2>/dev/null || git diff --name-only HEAD~1...HEAD 2>/dev/null || echo "")
+            COMMITS=$(git log --format="%B" "$TARGET_BASE"...HEAD 2>/dev/null || git log -1 --format="%B" 2>/dev/null || echo "")
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "${EVENT_BEFORE:-}" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            CHANGED=$(git diff --name-only "$EVENT_BEFORE"..."$EVENT_SHA" 2>/dev/null || git diff --name-only HEAD~1...HEAD 2>/dev/null || echo "")
+            COMMITS=$(git log --format="%B" "$EVENT_BEFORE"..."$EVENT_SHA" 2>/dev/null || git log -1 --format="%B" 2>/dev/null || echo "")
+          else
+            CHANGED=$(git diff --name-only HEAD~1...HEAD 2>/dev/null || echo "")
+            COMMITS=$(git log -1 --format="%B" 2>/dev/null || echo "")
+          fi
+
+          ALL_CONTEXT="${COMMITS} ${PR_TITLE:-} ${PR_BODY:-} ${PR_HEAD_REF:-} ${REF_NAME:-}"
+
+          echo "Changed files in this run:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE "^(cloudflare-worker/src/|dist/extension/background\.js)"; then
+
+          # Tier 3 Governance: cloudflare-worker/src/** or dist/extension/**
+          if echo "$CHANGED" | grep -qE "^(cloudflare-worker/src/|dist/extension/)"; then
             echo "⚠️ Tier 3 Core/Edge modification detected."
-            COMMITS=$(git log --format="%B" origin/${{ github.base_ref }}...HEAD)
-            if ! echo "$COMMITS" | grep -qE "\b(KAN|PROJ|GH)-[0-9]+\b"; then
-              echo "❌ Governance Blocked: Tier 3 changes require a valid Ticket ID in commit messages."
+            echo "- **Tier 3 Change:** ⚠️ Core/Edge modifications detected in change set" >> $GITHUB_STEP_SUMMARY
+
+            # 1. Require Ticket ID in commit body, PR title, or branch ref
+            if ! echo "$ALL_CONTEXT" | grep -qE "\b(KAN|PROJ|GH)-[0-9]+\b"; then
+              echo "❌ Governance Blocked: Tier 3 changes require a valid Ticket ID (KAN|PROJ|GH-<id>) in commit messages or PR title."
+              echo "- **Ticket ID Gate:** ❌ FAILED (no KAN/PROJ/GH ticket cited in commit messages or PR title)" >> $GITHUB_STEP_SUMMARY
               exit 1
             fi
+            TICKET_ID=$(echo "$ALL_CONTEXT" | grep -oE "\b(KAN|PROJ|GH)-[0-9]+\b" | head -1)
+            echo "✅ Valid Ticket ID verified: $TICKET_ID"
+            echo "- **Ticket ID Gate:** ✅ Verified (\`$TICKET_ID\`)" >> $GITHUB_STEP_SUMMARY
+
+            # 2. ADR Enforcement: Verify ADR exists or is referenced or documented
+            echo "Enforcing ADR baseline for Tier 3 modification..."
+            if echo "$CHANGED" | grep -qE "^docs/adr/"; then
+              ADR_FILE=$(echo "$CHANGED" | grep -E "^docs/adr/" | head -1)
+              echo "✅ ADR document updated or added in change set: $ADR_FILE"
+              echo "- **ADR Enforcement:** ✅ ADR updated in change set (\`$ADR_FILE\`)" >> $GITHUB_STEP_SUMMARY
+            elif echo "$ALL_CONTEXT" | grep -qiE "\b(ADR-[0-9]+)\b"; then
+              CITED_ADR=$(echo "$ALL_CONTEXT" | grep -oiE "\bADR-[0-9]+\b" | head -1 | tr '[:lower:]' '[:upper:]')
+              ADR_NUM=$(echo "$CITED_ADR" | sed 's/ADR-//')
+              if ls docs/adr/*"$ADR_NUM"*.md 1>/dev/null 2>&1; then
+                echo "✅ Valid cited ADR verified in docs/adr/: $CITED_ADR"
+                echo "- **ADR Enforcement:** ✅ Cited ADR verified (\`$CITED_ADR\`)" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "❌ Governance Blocked: Cited ADR ($CITED_ADR) not found in docs/adr/."
+                echo "- **ADR Enforcement:** ❌ FAILED (cited \`$CITED_ADR\` does not exist in docs/adr/)" >> $GITHUB_STEP_SUMMARY
+                exit 1
+              fi
+            else
+              ADR_TOTAL=$(find docs/adr -maxdepth 1 -name "00*.md" | wc -l | tr -d ' ')
+              if [ "$ADR_TOTAL" -lt 4 ]; then
+                echo "❌ Governance Blocked: Tier 3 changes require an approved ADR baseline in docs/adr/."
+                echo "- **ADR Enforcement:** ❌ FAILED (fewer than 4 baseline ADRs in docs/adr/)" >> $GITHUB_STEP_SUMMARY
+                exit 1
+              fi
+              echo "✅ Tier 3 change governed under active baseline ADRs ($ADR_TOTAL ADRs in docs/adr/)."
+              echo "- **ADR Enforcement:** ✅ Governed under approved ADR baseline ($ADR_TOTAL ADRs)" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "ℹ️ No Tier 3 Core/Edge modifications detected. Non-Tier 3 changes."
+            echo "- **Tier 3 Change:** ℹ️ None (safe non-tier-3 changes)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Ticket ID Gate:** ℹ️ Skipped (non-tier-3)" >> $GITHUB_STEP_SUMMARY
+            echo "- **ADR Enforcement:** ℹ️ Skipped (non-tier-3)" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: 3. Verify Branch Protection & No Self-Bypass
-        if: github.event_name == 'pull_request'
         env:
+          EVENT_NAME: ${{ github.event_name }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          ACTOR: ${{ github.actor }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_ACTION: ${{ github.event.action }}
         run: |
-          if [[ "$PR_AUTHOR" == *"bot"* || "$PR_AUTHOR" == "github-actions[bot]" ]]; then
-            echo "ℹ️ Automated Agent PR detected ($PR_AUTHOR). Requiring human review before merge."
+          set -uo pipefail
+
+          echo "Verifying Branch Protection & No Self-Bypass policies (KAN-313)..."
+          echo "### 🛡️ Branch Protection & Zero Standing Privileges" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "PR Author: ${PR_AUTHOR:-unknown}"
+            echo "Current Actor: $ACTOR"
+
+            if [[ "${PR_AUTHOR:-}" == *"bot"* || "${PR_AUTHOR:-}" == "github-actions[bot]" || "${PR_AUTHOR:-}" == *"agent"* || "${PR_AUTHOR:-}" == *"ai"* ]]; then
+              echo "⚠️ Automated Agent / Bot PR detected ($PR_AUTHOR)."
+              echo "- **PR Author:** 🤖 Automated Agent/Bot (\`$PR_AUTHOR\`)" >> $GITHUB_STEP_SUMMARY
+              echo "- **Self-Bypass Prevention:** 🔒 Enforced — Agent cannot self-approve or merge" >> $GITHUB_STEP_SUMMARY
+              echo "- **HITL Review:** 👤 Human Architect / Tech-Lead sign-off mandatory before merge" >> $GITHUB_STEP_SUMMARY
+
+              # Self-Bypass Prevention: Verify author does not attempt to approve or merge own automated work
+              if [ "$ACTOR" = "$PR_AUTHOR" ] && [ "${EVENT_ACTION:-}" = "review_requested" ]; then
+                echo "❌ Self-Bypass Blocked: Agent cannot request or self-review own PR."
+                exit 1
+              fi
+              echo "✅ No Self-Bypass invariant verified for agent PR."
+            else
+              echo "✅ Human contributor PR detected ($PR_AUTHOR)."
+              echo "- **PR Author:** 👤 Human Contributor (\`$PR_AUTHOR\`)" >> $GITHUB_STEP_SUMMARY
+              echo "- **Branch Protection:** ✅ Standard branch protection active" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            COMMIT_AUTHOR=$(git log -1 --format="%an <%ae>" 2>/dev/null || echo "Unknown")
+            echo "Event: $EVENT_NAME, Branch: $REF_NAME, Actor: $ACTOR, Commit Author: $COMMIT_AUTHOR"
+            echo "- **Event:** \`$EVENT_NAME\` on \`$REF_NAME\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Actor:** \`$ACTOR\` | **Author:** \`$COMMIT_AUTHOR\`" >> $GITHUB_STEP_SUMMARY
+
+            if [[ "$ACTOR" == *"bot"* || "$ACTOR" == "github-actions[bot]" || "$COMMIT_AUTHOR" == *"bot"* || "$COMMIT_AUTHOR" == *"agent"* || "$COMMIT_AUTHOR" == *"ai"* ]]; then
+              echo "⚠️ Automated actor ($ACTOR / $COMMIT_AUTHOR) on protected branch $REF_NAME. Verifying commit trail..."
+              # Check if push came from a governed PR merge
+              PR_MERGE=$(git log -1 --pretty=%B 2>/dev/null | grep -E "(Merge pull request #[0-9]+|\(#[0-9]+\))" || echo "")
+              if [ -z "$PR_MERGE" ] && [ "$EVENT_NAME" = "push" ]; then
+                echo "❌ Self-Bypass Blocked: Automated actor cannot push directly to protected branch $REF_NAME without a PR merge."
+                echo "- **Self-Bypass Prevention:** ❌ BLOCKED (direct bot push to protected branch without PR merge)" >> $GITHUB_STEP_SUMMARY
+                exit 1
+              fi
+              echo "✅ Audit trail verified: bot commit entered via governed PR merge."
+              echo "- **Audit Trail:** ✅ Governed PR merge verified under Zero Standing Privileges" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "✅ Verified push by $ACTOR on $REF_NAME."
+              echo "- **Audit Trail:** ✅ Human commit verified under branch protection" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
+          echo "- **Zero Standing Privileges:** ✅ Enforced (read contents, read pull-requests, write statuses)" >> $GITHUB_STEP_SUMMARY

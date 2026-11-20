@@ -248,8 +248,8 @@ jobs:
       - name: Resolve worker secrets
         env:
           DOPPLER_SERVICE_TOKEN: ${{ secrets.DOPPLER_SERVICE_TOKEN }}
-          GH_BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
-          GH_CLIENT_TOKEN: ${{ secrets.CLIENT_API_KEY }}
+          GH_BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN || secrets.BRIDGE_SECRET || secrets.BRIDGE_TOKEN }}
+          GH_CLIENT_TOKEN: ${{ secrets.CLIENT_API_KEY || secrets.CLIENT_API_TOKEN || secrets.CLIENT_TOKEN }}
         run: |
           set -euo pipefail
           if [ "${{ inputs.skip_doppler }}" = "true" ] || [ -z "$DOPPLER_SERVICE_TOKEN" ]; then

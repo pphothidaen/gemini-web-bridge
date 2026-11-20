@@ -8,7 +8,7 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
   workflow_dispatch:
 
 # Never let two runs of this workflow overlap on the same ref.
@@ -465,10 +465,10 @@ jobs:
     runs-on: ubuntu-26.04
     needs: [package-extension]
     if: >-
-      github.ref == 'refs/heads/main' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch') &&
       github.event_name != 'pull_request'
     env:
-      JIRA_CI_TOKEN: ${{ secrets.JIRA_CI_TOKEN }}
+      JIRA_CI_TOKEN: ${{ secrets.JIRA_CI_TOKEN || secrets.JIRA_API_TOKEN || secrets.JIRA_TOKEN }}
     steps:
       # checkout is REQUIRED: the ticket key is read from the commit subject
       # with `git log`, and without a checkout the runner has no .git, so that
@@ -479,93 +479,131 @@ jobs:
           fetch-depth: 1
 
       - name: Comment on the ticket named in the commit subject
-        if: ${{ env.JIRA_CI_TOKEN != '' }}
         env:
           VERSION: ${{ needs.package-extension.outputs.extension-version }}
           ARTIFACT: gemini-bridge-extension-v${{ needs.package-extension.outputs.extension-version }}-run${{ github.run_number }}
           COMMIT_SHA: ${{ github.sha }}
-          JIRA_BASE: ${{ vars.JIRA_BASE_URL || 'https://pansakorn.atlassian.net' }}
-          JIRA_EMAIL: ${{ vars.JIRA_ACCOUNT_EMAIL }}
+          JIRA_BASE: ${{ vars.JIRA_BASE_URL || secrets.JIRA_BASE_URL || 'https://pansakorn.atlassian.net' }}
+          JIRA_EMAIL: ${{ vars.JIRA_ACCOUNT_EMAIL || vars.JIRA_EMAIL || secrets.JIRA_ACCOUNT_EMAIL || secrets.JIRA_EMAIL }}
         run: |
           set -uo pipefail
           set +x
 
-          # The governance hook enforces `^KAN-<id>` on the subject, so the
-          # ticket key is recoverable from the commit message. PR merges and
-          # squash commits keep the original subject, which is why this reads
-          # the subject rather than the branch name.
-          #
-          # `|| true` because this job promises never to fail the build: the
-          # extension is already built and uploaded by this point, and a red X
-          # would misreport that. Without it, any unexpected error here — a
-          # missing .git, a transient DNS failure — fails the job and with it
-          # the whole run.
-          SUBJECT=$(git log -1 --pretty=%s 2>/dev/null || echo "")
-          KEY=$(printf '%s' "$SUBJECT" | grep -oE '^KAN-[0-9]+' | head -1 || true)
-
-          if [ -z "$KEY" ]; then
-            echo "::notice::No KAN-<id> in commit subject ('$SUBJECT'); nothing to sync."
+          # Opt-in and never fatal: if no token is configured, skip gracefully.
+          if [ -z "$JIRA_CI_TOKEN" ]; then
+            echo "::notice::JIRA_CI_TOKEN is not set; Jira comment skipped."
             exit 0
           fi
           if [ -z "$JIRA_EMAIL" ]; then
-            echo "::warning::vars.JIRA_ACCOUNT_EMAIL is not set; cannot authenticate to Jira."
+            echo "::warning::vars.JIRA_ACCOUNT_EMAIL / JIRA_EMAIL is not set; cannot authenticate to Jira."
             echo "  Set it with: gh variable set JIRA_ACCOUNT_EMAIL --repo pphothidaen/gemini-web-bridge"
             exit 0
           fi
 
+          # The governance hook enforces `KAN-<id>` on commits.
+          # Full message (%B) covers standard commits, PR merges, squashes, and bracketed formats.
+          SUBJECT=$(git log -1 --pretty=%B 2>/dev/null || echo "")
+          KEY=$(printf '%s' "$SUBJECT" | grep -ioE 'KAN-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+
+          # Fallback to branch ref name (e.g. feature/KAN-123-title) if commit body lacks ticket key
+          if [ -z "$KEY" ]; then
+            REF_SOURCE="${GITHUB_HEAD_REF:-} ${GITHUB_REF_NAME:-}"
+            KEY=$(printf '%s' "$REF_SOURCE" | grep -ioE 'KAN-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+          fi
+
+          if [ -z "$KEY" ]; then
+            echo "::notice::No KAN-<id> found in commit message or branch; nothing to sync."
+            exit 0
+          fi
+
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          VERSION="${VERSION:-unknown}"
+          ARTIFACT="${ARTIFACT:-gemini-bridge-extension}"
 
-          # The comment text is assembled by jq below, not here.
-
-          # Jira Cloud v3 needs Atlassian Document Format, wrapped in a "body"
-          # Two steps, deliberately.
-          #
-          # 1. Build the comment text with jq -nr. Interpolation happens in a
-          #    string context, so there are no nested parens to misbalance.
-          #    A single combined object literal with the concatenation inline
-          #    is a jq compile error ("unexpected INVALID_CHARACTER") — it
-          #    parses as a filter and dies before writing anything, which
-          #    surfaces as an empty file and Jira's "No content to map to
-          #    Object due to end of input".
-          # 2. Wrap that text in the ADF "body" envelope Jira Cloud v3
-          #    requires. A bare ADF document is rejected with HTTP 400
-          #    "Comment body can not be empty!", which reads like an auth
-          #    problem and is not.
-          #
-          # Verified live: this exact pair returns 201 and produces the
-          # expected comment text.
-          TXT=$(jq -nr --arg v "$VERSION" --arg a "$ARTIFACT" --arg s "${COMMIT_SHA:0:7}" \
-            --arg sha "$COMMIT_SHA" --arg run "$RUN_URL" --arg srv "$GITHUB_SERVER_URL" \
-            '"Extension build **\($v)** finished.\n\n- Artifact: `\($a)`\n- Commit: [`\($s)`](\($srv)/commit/\($sha))\n- Run: [\($run)](\($run))"')
-          jq -n --arg t "$TXT" \
-            '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$t}]}]}}' > /tmp/adf.json
+          # Jira Cloud v3 requires Atlassian Document Format (ADF) inside a "body" object.
+          # Assembled with jq to guarantee valid JSON and proper mark/list structure.
+          jq -n \
+            --arg v "$VERSION" \
+            --arg a "$ARTIFACT" \
+            --arg s "${COMMIT_SHA:0:7}" \
+            --arg sha "$COMMIT_SHA" \
+            --arg run "$RUN_URL" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg srv "$GITHUB_SERVER_URL" \
+            '{
+              body: {
+                type: "doc",
+                version: 1,
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [
+                      { type: "text", text: "Extension build " },
+                      { type: "text", text: $v, marks: [{ type: "strong" }] },
+                      { type: "text", text: " finished." }
+                    ]
+                  },
+                  {
+                    type: "bulletList",
+                    content: [
+                      {
+                        type: "listItem",
+                        content: [
+                          {
+                            type: "paragraph",
+                            content: [
+                              { type: "text", text: "Artifact: " },
+                              { type: "text", text: $a, marks: [{ type: "code" }] }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        type: "listItem",
+                        content: [
+                          {
+                            type: "paragraph",
+                            content: [
+                              { type: "text", text: "Commit: " },
+                              {
+                                type: "text",
+                                text: $s,
+                                marks: [
+                                  { type: "link", attrs: { href: "\($srv)/\($repo)/commit/\($sha)" } },
+                                  { type: "code" }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        type: "listItem",
+                        content: [
+                          {
+                            type: "paragraph",
+                            content: [
+                              { type: "text", text: "Run: " },
+                              {
+                                type: "text",
+                                text: $run,
+                                marks: [
+                                  { type: "link", attrs: { href: $run } }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }' > /tmp/adf.json
 
           # `|| echo 000` appends to whatever curl already printed, so a curl
           # that fails after writing its own %{http_code} yields "000000" and
           # matches no case. Use a separate variable and normalise instead.
-          #
-          # --max-time and --retry matter here: GitHub-hosted runners
-          # occasionally drop an outbound connection mid-send, which surfaces
-          # as curl (43) "Failed sending HTTP POST request" while the very
-          # same host answers a GET with 200. That is a transport failure, not
-          # a Jira or credential problem, and retrying is the correct
-          # response. Without it the step reported HTTP 000 and gave up.
-          # -u, not a hand-built Authorization header. The hand-built form
-          # produced an Atlassian `http1.codec_error` (HTTP 400, an HTML page
-          # rather than JSON) on the runner while working locally, so the
-          # difference was in the header bytes. curl's -u builds and encodes
-          # the credential itself, so the whole class of shell-level quoting
-          # or encoding mistakes disappears.
-          #
-          # --http1.1 is required, not a preference: the same request over
-          # HTTP/2 fails on the runner with curl (43) "Failed sending HTTP POST
-          # request" (HTTP 000), while forced to HTTP/1.1 it returns a real
-          # status. A GET to the same host returns 200 either way, so the
-          # host, TLS and credentials are fine and the fault is specific to
-          # that connection's HTTP/2 framing.
-          #
-          # --retry covers the same class of transient drop; --max-time stops
-          # a hung connection from stalling the job.
           HTTP=$(curl -sS -o /tmp/jira.out -w '%{http_code}' \
             --http1.1 --max-time 30 --retry 3 --retry-delay 2 --retry-connrefused \
             -X POST "$JIRA_BASE/rest/api/3/issue/$KEY/comment" \
@@ -576,12 +614,6 @@ jobs:
 
           # Never fail the build on a Jira problem: the extension is already
           # built and uploaded, and a red X here would misreport that.
-          #
-          # Note 404 is ambiguous by design on Jira's side: it means "issue does
-          # not exist OR you cannot see it", and an invalid token gets the same
-          # answer. Confirmed against the live API. So the message lists both
-          # causes instead of asserting the first one, which is what sent me
-          # looking for a missing ticket when the real problem was a bad token.
           case "$HTTP" in
             201|200) echo "✅ Commented on $KEY" ;;
             400) echo "::warning::Jira rejected the payload (HTTP 400). bytes=$(wc -c < /tmp/adf.json 2>/dev/null || echo NA) body=$(head -c 250 /tmp/adf.json 2>/dev/null | tr '\n' ' ') | response=$(head -c 250 /tmp/jira.out 2>/dev/null | tr '\n' ' ')" ;;
@@ -590,12 +622,6 @@ jobs:
             *)  echo "::warning::Jira comment failed (HTTP $HTTP). curl: $(head -c 200 /tmp/curl.err 2>/dev/null | tr '\n' ' ') | response: $(head -c 300 /tmp/jira.out 2>/dev/null | tr '\n' ' ')" ;;
           esac
 
-          # Explicit success. A step's exit status is the status of its LAST
-          # command, and the `case` above is the last one — so a head that
-          # found nothing to read, or a jq/printf that failed upstream, left a
-          # non-zero status here and failed the job despite the warnings
-          # above. This is the actual "never fail the build" enforcement;
-          # the `|| true` guards merely make the noise legible.
           exit 0
 
   # ─── Job 6: Redteam — Token Validation ────────────────────────
@@ -619,14 +645,14 @@ jobs:
     name: Redteam — Token Validation
     runs-on: ubuntu-26.04
     needs: [security-scan]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: !cancelled()
     steps:
       - name: Token validation (auth-only probes, no hardcoded secrets)
         env:
-          OLD_CLIENT_TOKEN: ${{ secrets.OLD_CLIENT_API_KEY }}
-          CURRENT_CLIENT_TOKEN: ${{ secrets.CLIENT_API_KEY }}
-          OLD_BRIDGE_AUTH_TOKEN: ${{ secrets.OLD_BRIDGE_AUTH_TOKEN }}
-          CURRENT_BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN }}
+          OLD_CLIENT_TOKEN: ${{ secrets.OLD_CLIENT_API_KEY || secrets.OLD_CLIENT_TOKEN || secrets.OLD_CLIENT_API_TOKEN }}
+          CURRENT_CLIENT_TOKEN: ${{ secrets.CLIENT_API_KEY || secrets.CLIENT_API_TOKEN || secrets.CLIENT_TOKEN }}
+          OLD_BRIDGE_AUTH_TOKEN: ${{ secrets.OLD_BRIDGE_AUTH_TOKEN || secrets.OLD_BRIDGE_TOKEN || secrets.OLD_BRIDGE_SECRET }}
+          CURRENT_BRIDGE_AUTH_TOKEN: ${{ secrets.BRIDGE_AUTH_TOKEN || secrets.BRIDGE_SECRET || secrets.BRIDGE_TOKEN }}
           BASE_URL: ${{ vars.PROD_BASE_URL || 'https://prod.gemini-web-bridge.workers.dev' }}
         run: |
           echo "## 🔴 Redteam — Token Validation" >> $GITHUB_STEP_SUMMARY
@@ -653,10 +679,16 @@ jobs:
             echo "${code:-000} $rc"
           }
 
-          # assert_valid <label> <url> <header-line> — token must authenticate.
+          # assert_valid <label> <url> <header-line> [token] — token must authenticate.
+          # Strips header prefix, optional 'Bearer ' and all spaces if token not passed directly.
           assert_valid() {
-            local label="$1" url="$2" header="$3" code rc
-            if [ -z "${header##*: }" ] || [ -z "$header" ]; then
+            local label="$1" url="$2" header="$3" tok="${4:-}" code rc
+            if [ -z "$tok" ]; then
+              tok="${header#*: }"
+              tok="${tok#Bearer }"
+              tok="${tok// /}"
+            fi
+            if [ -z "$tok" ] || [ -z "$header" ]; then
               echo "⚠️ $label: not configured — skipping" >> $GITHUB_STEP_SUMMARY
               return 0
             fi
@@ -677,10 +709,16 @@ jobs:
             return 1
           }
 
-          # assert_revoked <label> <url> <header-line> — token must be rejected.
+          # assert_revoked <label> <url> <header-line> [token] — token must be rejected.
+          # Strips header prefix, optional 'Bearer ' and all spaces if token not passed directly.
           assert_revoked() {
-            local label="$1" url="$2" header="$3" code rc
-            if [ -z "${header##*: }" ] || [ -z "$header" ]; then
+            local label="$1" url="$2" header="$3" tok="${4:-}" code rc
+            if [ -z "$tok" ]; then
+              tok="${header#*: }"
+              tok="${tok#Bearer }"
+              tok="${tok// /}"
+            fi
+            if [ -z "$tok" ] || [ -z "$header" ]; then
               echo "ℹ️ $label: not configured — skipping" >> $GITHUB_STEP_SUMMARY
               return 0
             fi
@@ -711,13 +749,13 @@ jobs:
           }
 
           # Live credentials must work.
-          run_check assert_valid "Current CLIENT_API_KEY"  "$BASE_URL/v1/models"         "Authorization: Bearer $CURRENT_CLIENT_TOKEN"
-          run_check assert_valid "Current BRIDGE_AUTH_TOKEN" "$BASE_URL/bridge/auth-check" "x-bridge-token: $CURRENT_BRIDGE_AUTH_TOKEN"
+          run_check assert_valid "Current CLIENT_API_KEY"  "$BASE_URL/v1/models"         "Authorization: Bearer $CURRENT_CLIENT_TOKEN" "$CURRENT_CLIENT_TOKEN"
+          run_check assert_valid "Current BRIDGE_AUTH_TOKEN" "$BASE_URL/bridge/auth-check" "x-bridge-token: $CURRENT_BRIDGE_AUTH_TOKEN" "$CURRENT_BRIDGE_AUTH_TOKEN"
 
           # Retired credentials must NOT work. These are the assertions that
           # went red on 3e46a0f: both tokens were still live in production.
-          run_check assert_revoked "Old CLIENT_API_KEY"  "$BASE_URL/v1/models"         "Authorization: Bearer $OLD_CLIENT_TOKEN"
-          run_check assert_revoked "Old BRIDGE_AUTH_TOKEN" "$BASE_URL/bridge/auth-check" "x-bridge-token: $OLD_BRIDGE_AUTH_TOKEN"
+          run_check assert_revoked "Old CLIENT_API_KEY"  "$BASE_URL/v1/models"         "Authorization: Bearer $OLD_CLIENT_TOKEN" "$OLD_CLIENT_TOKEN"
+          run_check assert_revoked "Old BRIDGE_AUTH_TOKEN" "$BASE_URL/bridge/auth-check" "x-bridge-token: $OLD_BRIDGE_AUTH_TOKEN" "$OLD_BRIDGE_AUTH_TOKEN"
 
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "$TRANSIENT" = "1" ]; then

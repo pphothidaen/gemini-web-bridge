@@ -149,9 +149,9 @@ jobs:
         # one Jira comment, not one per 30-minute check.
         if: always() && steps.scan.outputs.count != '0'
         env:
-          JIRA_CI_TOKEN: ${{ secrets.JIRA_CI_TOKEN }}
-          JIRA_BASE: ${{ vars.JIRA_BASE_URL || 'https://pansakorn.atlassian.net' }}
-          JIRA_EMAIL: ${{ vars.JIRA_ACCOUNT_EMAIL }}
+          JIRA_CI_TOKEN: ${{ secrets.JIRA_CI_TOKEN || secrets.JIRA_API_TOKEN || secrets.JIRA_TOKEN }}
+          JIRA_BASE: ${{ vars.JIRA_BASE_URL || secrets.JIRA_BASE_URL || 'https://pansakorn.atlassian.net' }}
+          JIRA_EMAIL: ${{ vars.JIRA_ACCOUNT_EMAIL || vars.JIRA_EMAIL || secrets.JIRA_ACCOUNT_EMAIL || secrets.JIRA_EMAIL }}
           STALLS_FILE: ${{ steps.scan.outputs.stalls_file }}
         run: |
           set -uo pipefail
@@ -159,6 +159,10 @@ jobs:
 
           if [ -z "$JIRA_CI_TOKEN" ]; then
             echo "::notice::JIRA_CI_TOKEN not set; Jira alert skipped (GitHub issue still filed)."
+            exit 0
+          fi
+          if [ -z "$JIRA_EMAIL" ]; then
+            echo "::notice::JIRA_ACCOUNT_EMAIL / JIRA_EMAIL not set; Jira alert skipped (GitHub issue still filed)."
             exit 0
           fi
 
@@ -173,8 +177,8 @@ jobs:
               *"$run_url"*) echo "run $id already alerted; skipping Jira"; continue ;;
             esac
 
-            SUBJECT=$(git log -1 --pretty=%s "$sha" 2>/dev/null || echo "")
-            KEY=$(printf '%s' "$SUBJECT" | grep -oE '^KAN-[0-9]+' | head -1 || true)
+            SUBJECT=$(git log -1 --pretty=%B "$sha" 2>/dev/null || echo "")
+            KEY=$(printf '%s' "$SUBJECT" | grep -ioE 'KAN-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
             if [ -z "$KEY" ]; then
               echo "::notice::No KAN-<id> in subject of $sha ('$SUBJECT'); no Jira ticket to alert."
               continue

@@ -33,10 +33,12 @@ Exit 0 = all good, 1 = at least one problem found.
 import sys
 
 DEFAULT_FILES = [
-    ".github/workflows/ci.yml",
+    ".github/workflows/cd-watchdog.yml",
     ".github/workflows/cd.yml",
-    ".github/workflows/token-rotation.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/hitl-pr-gate.yml",
     ".github/workflows/keepalive-probe.yml",
+    ".github/workflows/token-rotation.yml",
 ]
 
 # Contexts that may not appear inside an `if:` condition.
