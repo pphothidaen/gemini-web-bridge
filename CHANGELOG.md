@@ -10,6 +10,14 @@ All notable changes to the Gemini Web-Bridge project.
 
 ## [Unreleased]
 
+### Added & Improved
+- **Gemini Native Routes & Google Search Grounding (KAN-351, ADR-0006)**:
+  - Added native Gemini API endpoints `/v1/gemini/chat/completions` (POST) and `/v1/gemini/models` (GET) on Cloudflare Edge Worker.
+  - Implemented Google Search Grounding tool support via `tools: [{"google_search": {}}]`, native `contents` input, and function declarations.
+  - Added dual compatibility response formatting: responses return both OpenAI-compatible `choices` array and Gemini Native `candidates` structure.
+  - Added edge feature flag `GEMINI_NATIVE_ENABLED` ("true" by default in `wrangler.toml` and `wrangler.jsonc`) with fail-closed HTTP 404 enforcement when disabled.
+  - Added comprehensive test suite with 26 unit and integration test assertions covering auth, route dispatching, tool forwarding, and SSE streaming.
+
 ## [4.7.40] - 2026-11-20
 
 ### Added & Improved

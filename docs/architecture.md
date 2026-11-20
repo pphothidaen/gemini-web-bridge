@@ -1,6 +1,6 @@
 # Gemini Web Bridge — System Architecture (Mermaid Diagrams)
 
-> เอกสารนี้รวมแผนภาพสถาปัตยกรรมทั้งหมดของระบบ Gemini Web Bridge (v4.2.0) เขียนด้วย **Mermaid.js** รองรับการเรนเดอร์บน GitHub ฟรี ไม่ต้องติดตั้งเครื่องมือเพิ่ม
+> เอกสารนี้รวมแผนภาพสถาปัตยกรรมทั้งหมดของระบบ Gemini Web Bridge (v4.7.40) เขียนด้วย **Mermaid.js** รองรับการเรนเดอร์บน GitHub ฟรี ไม่ต้องติดตั้งเครื่องมือเพิ่ม
 >
 > spec รายละเอียดดูที่ `ARCHITECTURE.md`
 
@@ -19,7 +19,7 @@ graph TB
     end
 
     subgraph Edge["Cloudflare Edge"]
-        F[Cloudflare Worker<br/>gemini-web-bridge<br/>/v1 | /mcp | /bridge]
+        F[Cloudflare Worker<br/>gemini-web-bridge<br/>/v1 | /v1/gemini | /mcp | /bridge]
     end
 
     subgraph DO["Cloudflare Durable Objects"]
@@ -83,6 +83,29 @@ sequenceDiagram
     Worker-->>Client: SSE Response<br/>text/event-stream
 
     note over Client,Gemini: Idle timeout 60s<br/>Disconnect grace ~15s<br/>Zero mocks — fail-closed if Ext offline
+```
+
+### 2.1 Gemini Native Routes & Search Grounding Flow (`/v1/gemini/*`)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as AI Client / Agent
+    participant Worker as Cloudflare Worker (/v1/gemini/*)
+    participant DO as GeminiBridgeDO
+    participant Ext as Chrome Extension
+    participant Gemini as Gemini Web / Grounding
+
+    Client->>Worker: POST /v1/gemini/chat/completions<br/>tools: [{"google_search": {}}]
+    Worker->>DO: Native RPC Payload<br/>(Grounding Tool Active)
+    DO->>Ext: WSS EXECUTE_REQUEST (Grounded)
+    Ext->>Gemini: Inject prompt + Search Grounding
+    Gemini-->>Ext: Grounded Response Stream + Citations
+    Ext-->>DO: Forward chunks with citation metadata
+    DO-->>Worker: Dual format stream (choices + candidates)
+    Worker-->>Client: Dual format response<br/>(OpenAI choices + Gemini candidates)
+
+    note over Client,Gemini: Supports tools: [{"google_search": {}}]<br/>Feature flag: GEMINI_NATIVE_ENABLED<br/>Returns candidates & choices simultaneously
 ```
 
 ---

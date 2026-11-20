@@ -79,3 +79,17 @@ Other providers retain their normal capability discovery. This does not disable
 Gemini's own thinking in the browser and does not change the profile-wide effort
 setting used by other providers. Restart the Hermes backend to load Python edits.
 These are local Hermes source changes; an upstream update may replace them.
+
+## Gemini Native Routes & Search Grounding
+
+Cloudflare Worker v4.7.40+ exposes native Gemini routes alongside the OpenAI-compatible endpoints:
+
+- `GET /v1/gemini/models`: Lists dynamic browser-discovered models advertising `grounding: true` capabilities.
+- `POST /v1/gemini/chat/completions`: Supports native Gemini requests with `contents`, `tools: [{"google_search": {}}]`, and function calling declarations.
+
+Responses from `/v1/gemini/chat/completions` include dual serialization formats:
+- OpenAI compatibility: `choices[0].message.content`
+- Gemini native compatibility: `candidates[0].content.parts[0].text` and `candidates[0].grounding_metadata`
+
+### Feature flag
+The Gemini native routes are guarded by the `GEMINI_NATIVE_ENABLED` environment variable (set to `"true"` in `wrangler.toml` and `wrangler.jsonc`). When disabled, requests return HTTP 404 immediately (fail-closed).

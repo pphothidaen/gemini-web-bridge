@@ -6,7 +6,7 @@
 [![Chrome Extension](https://img.shields.io/badge/Chrome-Extension%20MV3%20Protocol%20v2-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2024--11--05-8A2BE2)](https://modelcontextprotocol.io/)
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991?logo=openai&logoColor=white)](https://platform.openai.com/docs/api-reference)
-[![Tests Passing](https://img.shields.io/badge/tests-95%2F95%20passing-brightgreen.svg)](cloudflare-worker/tests/)
+[![Tests Passing](https://img.shields.io/badge/tests-809%2F809%20passing-brightgreen.svg)](cloudflare-worker/tests/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 [English](#-english) | [ภาษาไทย](#-ภาษาไทย) | [简体中文](#-简体中文)
@@ -17,14 +17,15 @@
 
 ## 🌐 English
 
-**Gemini Web Bridge (v4.4.3)** is an Enterprise-grade Edge AI Gateway and Chrome Extension that bridges live, authenticated [Google Gemini](https://gemini.google.com) web sessions into an **OpenAI-Compatible REST API** (with real SSE streaming & tool emulation) and a **Remote MCP Server**, powered by **Cloudflare Durable Objects**.
+**Gemini Web Bridge (v4.7.40)** is an Enterprise-grade Edge AI Gateway and Chrome Extension that bridges live, authenticated [Google Gemini](https://gemini.google.com) web sessions into an **OpenAI-Compatible REST API** (with real SSE streaming & tool emulation), a **Gemini-Native API with Google Search Grounding** (`/v1/gemini/*`), and a **Remote MCP Server**, powered by **Cloudflare Durable Objects**.
 
 It enables autonomous AI clients and developer tools — **Hermes Agent**, **Cursor**, **Cline**, **Claude Code**, and Python/TypeScript SDKs — to harness Gemini's Deep Thinking models and execute Agentic Tool Loops directly over authenticated web sessions without artificial mocks or canned responses.
 
 ### ✨ Key Features
 
 - **Cloudflare Durable Objects Hub (`GeminiBridgeDO`)** — Stateful in-memory Edge coordinator synchronizing browser WebSockets and external REST/MCP requests with FIFO concurrency control (concurrency = 1, queue depth = 10).
-- **Dynamic Browser Model Sync** — Real-time model catalog synchronization (`/v1/models`) detecting live Gemini UI model tiers with verification lifecycle tracking (`discovered` → `learning` → `verified`).
+- **Gemini-Native API & Google Search Grounding (`/v1/gemini/*`)** — Native Gemini endpoint (`/v1/gemini/chat/completions`) supporting raw `contents` and real-time Google Search Grounding (`tools: [{"google_search": {}}]`), with dual-compatibility response serialization (`choices` and `candidates`) and fail-closed feature flag control (`GEMINI_NATIVE_ENABLED`).
+- **Dynamic Browser Model Sync** — Real-time model catalog synchronization (`/v1/models` and `/v1/gemini/models`) detecting live Gemini UI model tiers with verification lifecycle tracking (`discovered` → `learning` → `verified`).
 - **Real SSE Streaming & Idle Timeout** — Immediate token chunk dispatching with an idle-based 60-second timeout, preventing long-thought dropouts.
 - **Disconnect Grace Period (~15s)** — Connection buffering in Durable Objects ensuring network hiccups or browser tab backgrounding do not abort in-flight generations.
 - **Conversation Scopes (Gemini App + NotebookLM)** — Seamless context routing between standard chat (`https://gemini.google.com/app/<id>`) and document-grounded NotebookLM notebooks (`https://gemini.google.com/notebook/<id>`) via the `set_bridge_scope` MCP tool.
@@ -113,18 +114,32 @@ for chunk in response:
     print(chunk.choices[0].delta.content or "", end="")
 ```
 
+**Google Search Grounding (cURL / Native API):**
+
+```bash
+curl -X POST https://prod.gemini-web-bridge.workers.dev/v1/gemini/chat/completions \
+  -H "Authorization: Bearer YOUR_CLIENT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash",
+    "contents": [{"role": "user", "parts": [{"text": "What are the latest developments in AI today?"}]}],
+    "tools": [{"google_search": {}}]
+  }'
+```
+
 ---
 
 ## 🌐 ภาษาไทย
 
-**Gemini Web Bridge (v4.4.3)** คือ Edge AI Gateway และ Chrome Extension ระดับโปรดักชัน ที่ทำหน้าที่เป็นสะพานเชื่อมต่อเซสชันเว็บจริงของ [Google Gemini](https://gemini.google.com) เข้าสู่ **OpenAI-Compatible REST API** (รองรับ Real SSE Streaming & Tool Emulation) และ **Remote MCP Server** ผ่านขุมพลัง **Cloudflare Durable Objects**
+**Gemini Web Bridge (v4.7.40)** คือ Edge AI Gateway และ Chrome Extension ระดับโปรดักชัน ที่ทำหน้าที่เป็นสะพานเชื่อมต่อเซสชันเว็บจริงของ [Google Gemini](https://gemini.google.com) เข้าสู่ **OpenAI-Compatible REST API** (รองรับ Real SSE Streaming & Tool Emulation), **Gemini-Native API with Google Search Grounding** (`/v1/gemini/*`) และ **Remote MCP Server** ผ่านขุมพลัง **Cloudflare Durable Objects**
 
 ระบบนี้ออกแบบมาเพื่อให้นักพัฒนาและ AI Agent ภายนอก เช่น **Hermes Agent**, **Cursor**, **Cline**, **Claude Code** สามารถดึงศักยภาพโมเดล Deep Thinking และรัน Agentic Tool Loops บนเบราว์เซอร์จริงได้อย่างเต็มประสิทธิภาพ โดยไม่มีการจำลองคำตอบหลอก (Zero Mocks)
 
 ### ✨ จุดเด่นที่สำคัญ
 
 - **ศูนย์กลาง Cloudflare Durable Objects (`GeminiBridgeDO`)** — ซิงโครไนซ์การทำงานระหว่าง WebSocket จากเบราว์เซอร์และ REST/MCP API บน Cloudflare Edge พร้อมระบบคิวงาน FIFO (Concurrency = 1, Max Waiters = 10)
-- **Dynamic Browser Model Sync** — สแกนและตรวจจับรายชื่อโมเดลจริงจากหน้าเว็บ Gemini (`/v1/models`) แบบเรียลไทม์ พร้อมระบบตรวจสอบความถูกต้องของโครงสร้าง Payload (`discovered` → `learning` → `verified`)
+- **Gemini-Native API & Google Search Grounding (`/v1/gemini/*`)** — เอนด์พอยต์มาตรฐานเนทีฟของ Gemini รองรับการค้นหาข้อมูลสดด้วย Google Search Grounding (`tools: [{"google_search": {}}]`) พร้อมคืนผลลัพธ์แบบ Dual-Format (ทั้ง OpenAI `choices` และ Gemini `candidates`) ควบคุมด้วย Feature Flag `GEMINI_NATIVE_ENABLED`
+- **Dynamic Browser Model Sync** — สแกนและตรวจจับรายชื่อโมเดลจริงจากหน้าเว็บ Gemini (`/v1/models` และ `/v1/gemini/models`) แบบเรียลไทม์ พร้อมระบบตรวจสอบความถูกต้องของโครงสร้าง Payload (`discovered` → `learning` → `verified`)
 - **Real SSE Streaming & Idle Timeout** — ส่งต่อโทเค็นคำตอบออกทันทีแบบ Chunk-by-Chunk ควบคู่กับ Idle Timeout 60 วินาที ป้องกันการตัดสายระหว่างที่โมเดลกำลังใช้ความคิดเชิงลึก (Deep Thinking)
 - **Disconnect Grace Period (~15 วินาที)** — ระบบบัฟเฟอร์การเชื่อมต่อใน Durable Objects หากเครือข่ายกระตุกหรือ Chrome สลับแท็บไปเบื้องหลัง การสร้างคำตอบจะไม่ถูกยกเลิกกะทันหัน
 - **Conversation Scopes (Gemini App + NotebookLM)** — สลับบริบทการสนทนาระหว่างแชตทั่วไป (`https://gemini.google.com/app/<id>`) และคลังเอกสารเฉพาะทางบน NotebookLM (`https://gemini.google.com/notebook/<id>`) ผ่าน MCP Tool `set_bridge_scope`
@@ -167,14 +182,15 @@ curl -s https://prod.gemini-web-bridge.workers.dev/health | jq .
 
 ## 🌐 简体中文
 
-**Gemini Web Bridge (v4.4.3)** 是一个企业级 Edge AI 网关和 Chrome 扩展程序。它基于 **Cloudflare Durable Objects** 构建，将真实的、已认证的 [Google Gemini](https://gemini.google.com) 网页会话桥接为 **兼容 OpenAI 的 REST API**（支持真正的 SSE 流式传输和工具仿真）以及 **远程 MCP 服务器**。
+**Gemini Web Bridge (v4.7.40)** 是一个企业级 Edge AI 网关和 Chrome 扩展程序。它基于 **Cloudflare Durable Objects** 构建，将真实的、已认证的 [Google Gemini](https://gemini.google.com) 网页会话桥接为 **兼容 OpenAI 的 REST API**（支持真正的 SSE 流式传输和工具仿真）、**原生 Gemini API 与 Google 搜索 Grounding** (`/v1/gemini/*`) 以及 **远程 MCP 服务器**。
 
 它支持外部 AI Agent 与开发工具（如 **Hermes Agent**、**Cursor**、**Cline**、**Claude Code**、Python/TS SDK）直接在真实网页会话上调用 Deep Thinking 深度思考模型并执行自主工具循环（Agentic Tool Loops），杜绝任何伪造或 Mock 数据。
 
 ### ✨ 核心亮点
 
 - **Cloudflare Durable Objects 状态中枢 (`GeminiBridgeDO`)** — 在 Edge 内存中无缝融合浏览器 WebSocket 与客户端 HTTP/REST 请求，具备 FIFO 队列机制与并发隔离保护。
-- **浏览器模型动态同步** — 实时同步 Gemini 网页端可用的最新模型目录（`/v1/models`），并严格追踪模型验证状态生命周期（`discovered` → `learning` → `verified`）。
+- **Gemini 原生路由与 Google Search Grounding (`/v1/gemini/*`)** — 原生 Gemini 协议端点 (`/v1/gemini/chat/completions`)，支持原生 `contents` 及 Google 实时搜索 Grounding (`tools: [{"google_search": {}}]`)，提供双兼容响应格式（同时输出 `choices` 和 `candidates`），由 `GEMINI_NATIVE_ENABLED` 边缘特性开关安全把控。
+- **浏览器模型动态同步** — 实时同步 Gemini 网页端可用的最新模型目录（`/v1/models` 与 `/v1/gemini/models`），并严格追踪模型验证状态生命周期（`discovered` → `learning` → `verified`）。
 - **真正的 SSE 流式输出与空闲超时** — Token 块即时分发，配备基于 60 秒空闲的超时控制，适应复杂思维推理任务。
 - **断线宽限期保护机制 (~15 秒)** — Durable Objects 提供短时重连缓冲，在网络波动或浏览器标签页休眠时保护处理中的请求不被中断。
 - **对话作用域管理 (Gemini App 与 NotebookLM)** — 通过 MCP 工具 `set_bridge_scope` 支持在普通聊天与知识库 NotebookLM（`/notebook/<id>`）之间自由切换，精准把控上下文。
@@ -236,23 +252,23 @@ Gemini Web Bridge provides a complete suite of remote MCP tools via `POST /mcp` 
                                             │ HTTPS (Bearer Auth: CLIENT_API_KEY)
                                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.4.3)              │
+│                    Cloudflare Worker Edge Tier (gemini-web-bridge v4.7.40)             │
 │                                                                                        │
 │   ┌────────────────────────────────────────────────────────────────────────────────┐   │
 │   │                         Edge Routing & Security Middleware                     │   │
 │   │   • Bearer Token Authentication Validator                                      │   │
 │   │   • Strict Fail-Fast Policy (503 on Offline, 422 on Unverified, Zero Mocks)    │   │
 │   │   • Permissive CORS with Mcp-Session-Id and Mcp-Protocol-Version Headers       │   │
-│   └──────┬────────────────────────┬────────────────────────┬───────────────────────┘   │
-│          │                        │                        │                           │
-│          ▼                        ▼                        ▼                           │
-│   ┌──────────────┐         ┌──────────────┐         ┌──────────────┐                   │
-│   │ OpenAI REST  │         │  Remote MCP  │         │  Status API  │                   │
-│   │ /v1/*        │         │  /mcp        │         │  /health     │                   │
-│   └──────┬───────┘         └──────┬───────┘         └──────┬───────┘                   │
-│          │                        │                        │                           │
-│          └────────────────────────┼────────────────────────┘                           │
-│                                   ▼                                                    │
+│   └──────┬────────────────────┬────────────────────┬───────────────────┬───────────┘   │
+│          │                    │                    │                   │               │
+│          ▼                    ▼                    ▼                   ▼               │
+│   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐    ┌──────────────┐       │
+│   │ OpenAI REST  │     │ Gemini API   │     │  Remote MCP  │    │  Status API  │       │
+│   │ /v1/*        │     │ /v1/gemini/* │     │  /mcp        │    │  /health     │       │
+│   └──────┬───────┘     └──────┬───────┘     └──────┬───────┘    └──────┬───────┘       │
+│          │                    │                    │                   │               │
+│          └────────────────────┴────────────────────┼───────────────────┘               │
+│                                                    ▼                                   │
 │   ┌────────────────────────────────────────────────────────────────────────────────┐   │
 │   │                 GeminiBridgeDO (Stateful Durable Object Instance)              │   │
 │   │   • Global Singleton (`idFromName("global-bridge")`)                           │   │

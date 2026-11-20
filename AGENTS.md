@@ -12,6 +12,8 @@
 - **ADR-0002 (Multi-Session Load Balancing):** `docs/adr/0002-multi-session-load-balancing.md`
 - **ADR-0003 (Context Persistence D1/Vectorize):** `docs/adr/0003-context-persistence-vector-memory.md`
 - **ADR-0004 (Session Health Recovery):** `docs/adr/0004-session-health-auto-recovery.md`
+- **ADR-0005 (V8 OpenTelemetry Tracing):** `docs/adr/0005-native-v8-opentelemetry-edge-tracing.md`
+- **ADR-0006 (Gemini Native & Search Grounding):** `docs/adr/0006-gemini-native-routes-search-grounding.md`
 
 ## 3. HITL Governance (Local + CI)
 - **E3 Decision Gate:** `~/.hermes/scripts/cross_functional_review.py`
@@ -32,6 +34,6 @@
 
 ## 5. Quick Reference
 - **Read:** `docs/architecture.md` before any architecture change
-- **ADR Check:** `find docs/adr -maxdepth 1 -name "00*.md"` (expect ≥ 4)
+- **ADR Check:** `find docs/adr -maxdepth 1 -name "00*.md"` (expect ≥ 6)
 - **HITL Test:** `python3 ~/.hermes/scripts/cross_functional_review.py --help`
 - **Webhook Test:** `HERMES_WEBHOOK_URL=<url> python3 ~/.hermes/scripts/notify_webhook.py`

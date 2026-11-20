@@ -15,7 +15,8 @@
     จะโดน Cloudflare Error 1010 (403) — ไม่ใช่ auth error
 - **Canonical production host: `https://prod.gemini-web-bridge.workers.dev`**
   - ยืนยันจาก: wrangler.jsonc `name = "prod"`, CI/CD/keepalive-probe ทั้งหมด,
-    และ live /health → version 4.7.18 + extension CONNECTED_AND_READY
+    และ live /health → version 4.7.40 + extension CONNECTED_AND_READY
+  - มี Gemini-native endpoints `/v1/gemini/chat/completions` และ `/v1/gemini/models` (Search Grounding) รองรับควบคู่กับ `/v1/*` และ `/mcp`
   - **`https://gemini-web-bridge.pansakorn-pho.workers.dev` เป็น host เก่า (ก่อน migration
     KAN-157 / fa97a5d)** — ยังตอบ 200 และยังมี 9 tools แต่เป็น v4.4.3 ที่ค้างและ
     extension DISCONNECTED อยู่ มันถูกทิ้งไว้เป็น rollback target

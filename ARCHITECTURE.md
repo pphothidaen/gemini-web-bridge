@@ -6,7 +6,7 @@
 
 ## 1. System Architecture Overview
 
-Gemini Web Bridge (v4.2.0) เป็นระบบ **Edge-to-Browser Gateway** ที่ผสานการทำงานระหว่าง AI Clients ภายนอก (Hermes Agent, Cursor, Cline, Claude Code, Python SDK) เข้ากับ Google Gemini Web Session จริง ผ่านสถาปัตยกรรม **Cloudflare Durable Objects**
+Gemini Web Bridge (v4.7.40) เป็นระบบ **Edge-to-Browser Gateway** ที่ผสานการทำงานระหว่าง AI Clients ภายนอก (Hermes Agent, Cursor, Cline, Claude Code, Python SDK) เข้ากับ Google Gemini Web Session จริง ผ่านสถาปัตยกรรม **Cloudflare Durable Objects**
 
 ```text
                                   ┌──────────────────────────────────────────────┐
@@ -23,27 +23,28 @@ Gemini Web Bridge (v4.2.0) เป็นระบบ **Edge-to-Browser Gateway** 
 │   │   • Bearer Token Authentication (CLIENT_API_KEY)                                                     │   │
 │   │   • Strict Fail-Fast Validation (No mock / canned responses)                                         │   │
 │   │   • CORS Headers (Access-Control-Allow-*)                                                            │   │
-│   └───────────────────┬──────────────────────────────────┬──────────────────────────────────┬────────────┘   │
-│                       │                                  │                                  │                │
-│                       ▼                                  ▼                                  ▼                │
-│     ┌───────────────────────────────────┐ ┌─────────────────────────────┐ ┌────────────────────────────────┐ │
-│     │   OpenAI REST API (/v1/*)         │ │   Remote MCP (/mcp)         │ │   WebSocket Hub (/bridge)      │ │
-│     │   • /v1/models (GET)              │ │   • JSON-RPC 2.0 Handler    │ │   • Dedicated-Tab WebSocket    │ │
-│     │   • /v1/chat/completions (POST)   │ │   • Mcp-Session-Id Tracker  │ │   • Protocol v2 Validation     │ │
-│     │   • Multi-turn Message Aggregator │ │   • SDLC Tools Registry     │ │   • PING/PONG Keepalive (15s)  │ │
-│     │   • SSE Stream Transformer        │ │   • Tools Call Dispatcher   │ │   • Bi-directional Message Bus │ │
-│     └─────────────────┬─────────────────┘ └──────────────┬──────────────┘ └────────────────┬───────────────┘ │
-│                       │                                  │                                 │                 │
-│                       └─────────────────┬────────────────┘                                 │                 │
-│                                         ▼                                                  │                 │
-│                       ┌──────────────────────────────────────────────────┐                 │                 │
-│                       │        Durable Object: GeminiBridgeDO            │                 │                 │
-│                       │   • In-Memory RAM Coordination (WSS ↔ HTTP)      │◀────────────────┘                 │
-│                       │   • Dynamic Model Catalog & Revision Tracking    │                                   │
-│                       │   • Tool Emulation Engine (OpenAI Tools)         │                                   │
-│                       │   • FIFO Request Queue (Max 10, 60s deadline)    │                                   │
-│                       │   • Strict Fail-Fast: 503 on Disconnect          │                                   │
-│                       └──────────────────────────────────────────────────┘                                   │
+│   └──────┬───────────────────────────────┬──────────────────────────────────┬────────────────────────────┘   │
+│          │                               │                                  │                                │
+│          ▼                               ▼                                  ▼                                ▼
+│ ┌─────────────────────────────┐ ┌─────────────────────────────────┐ ┌─────────────────────────────┐ ┌────────────────────────────────┐
+│ │ OpenAI REST API (/v1/*)     │ │ Gemini Native (/v1/gemini/*)    │ │ Remote MCP (/mcp)           │ │ WebSocket Hub (/bridge)        │
+│ │ • /v1/models (GET)          │ │ • /v1/gemini/models (GET)       │ │ • JSON-RPC 2.0 Handler      │ │ • Dedicated-Tab WebSocket      │
+│ │ • /v1/chat/completions      │ │ • /v1/gemini/chat/completions   │ │ • Mcp-Session-Id Tracker    │ │ • Protocol v2 Validation       │
+│ │ • Multi-turn Aggregator     │ │ • Google Search Grounding       │ │ • SDLC Tools Registry       │ │ • PING/PONG Keepalive (15s)    │
+│ │ • SSE Stream Transformer    │ │ • Dual Choices / Candidates     │ │ • Tools Call Dispatcher     │ │ • Bi-directional Message Bus   │
+│ └──────────────┬──────────────┘ └────────────────┬────────────────┘ └──────────────┬──────────────┘ └────────────────┬───────────────┘
+│                │                                 │                                 │                                 │
+│                └─────────────────────────────────┴────────┬────────────────────────┘                                 │
+│                                                           ▼                                                          │
+│                                 ┌──────────────────────────────────────────────────┐                                 │
+│                                 │        Durable Object: GeminiBridgeDO            │                                 │
+│                                 │   • In-Memory RAM Coordination (WSS ↔ HTTP)      │◀────────────────────────────────┘
+│                                 │   • Dynamic Model Catalog & Revision Tracking    │
+│                                 │   • Tool Emulation Engine (OpenAI Tools)         │
+│                                 │   • Native Search Grounding RPC Forwarder        │
+│                                 │   • FIFO Request Queue (Max 10, 60s deadline)    │
+│                                 │   • Strict Fail-Fast: 503 on Disconnect          │
+│                                 └──────────────────────────────────────────────────┘                                   │
 └─────────────────────────────────────────────────┬────────────────────────────────────────────────────────────┘
                                                   │
                                                   │ WebSocket Secure (WSS Protocol v2)
@@ -83,11 +84,12 @@ Gemini Web Bridge (v4.2.0) เป็นระบบ **Edge-to-Browser Gateway** 
 ระบบแบ่งขอบเขตความปลอดภัยออกเป็น 3 ระดับอย่างเข้มงวด:
 
 ### 2.1 Client-to-Edge Boundary (HTTPS)
-- **Authentication**: ทุกคำขอที่ส่งไปยัง `/v1/*` และ `/mcp` ต้องแนบ Header:
+- **Authentication**: ทุกคำขอที่ส่งไปยัง `/v1/*`, `/v1/gemini/*` และ `/mcp` ต้องแนบ Header:
   ```http
   Authorization: Bearer <CLIENT_API_KEY>
   ```
-- **Public Exceptions**: มีเพียง `/` (Health Dashboard) เท่านั้นที่เปิดสาธารณะ ส่วน `/bridge` บังคับใช้ Protocol v2 Bridge Secret Verification
+- **Feature Flag**: เส้นทาง `/v1/gemini/*` ถูกควบคุมด้วย `GEMINI_NATIVE_ENABLED` (ค่าเริ่มต้น: `"true"`) หากปิดใช้งานจะตอบกลับด้วย `404 Not Found` ทันที (fail-closed)
+- **Public Exceptions**: มีเพียง `/` (Health Dashboard) และ `/health` เท่านั้นที่เปิดสาธารณะ ส่วน `/bridge` บังคับใช้ Protocol v2 Bridge Secret Verification
 - **Transport**: บังคับใช้ TLS/HTTPS 100% ผ่าน Cloudflare Edge พร้อม Cache-Control `no-store` สำหรับ dynamic endpoints
 
 ### 2.2 Edge-to-Browser Boundary (WSS Protocol v2)
@@ -169,6 +171,23 @@ Gemini Browser Tab           Extension (content.js)       GeminiBridgeDO (Edge) 
         │                            │                            │    default_recommended │
 ```
 
+### 3.4 Gemini Native & Google Search Grounding (`/v1/gemini/chat/completions`)
+
+```text
+Client (Native / Agent)      GeminiBridgeDO (Edge)        Extension (content.js)     Gemini Web Backend
+        │                            │                            │                        │
+        │─── POST /gemini/chat/──────▶                            │                        │
+        │    completions             │                            │                        │
+        │    tools: [{google_search}]│─── EXECUTE_REQUEST ───────▶│─── Native RPC with ───▶│
+        │                            │    (Search Grounding)      │    Search Tool Active  │
+        │                            │                            │◀── Grounded Chunks ────│
+        │                            │◀── STREAM_CHUNK ───────────│    (with citations)    │
+        │◀── Dual-Format Response ───│                            │                        │
+        │    {choices: [...],        │ (choices + candidates)     │                        │
+        │     candidates: [...]}     │                            │                        │
+        │◀── data: [DONE] ───────────│                            │                        │
+```
+
 ---
 
 ## 4. Execution, Queueing & Strict Fail-Fast Policy
@@ -217,6 +236,28 @@ Google Gemini Web UI ใช้ Batched RPC Payload บนเส้นทาง `
   - `innerData[1][0]`: Conversation ID (สำหรับต่อบทสนทนา)
   - `innerData[1][1]`: Response ID
   - `innerData[4][0][0]`: Choice ID
+
+### 5.3 Gemini Native Serialization & Search Grounding Protocol
+
+อ้างอิง ADR-0006 (`docs/adr/0006-gemini-native-routes-search-grounding.md`) และ KAN-351:
+
+- **Endpoint Paths**:
+  - `GET /v1/gemini/models`: คืน Model Catalog พร้อมคุณสมบัติ Search Grounding (`grounding: true`)
+  - `POST /v1/gemini/chat/completions`: รองรับ Payload แบบ Native:
+    ```json
+    {
+      "model": "gemini-2.5-flash",
+      "contents": [{ "role": "user", "parts": [{ "text": "Query" }] }],
+      "tools": [{ "google_search": {} }]
+    }
+    ```
+- **Dual Compatibility Serialization**:
+  ระบบแปลงผลลัพธ์ให้อยู่ใน 2 รูปแบบพร้อมกันเพื่อรองรับทั้ง OpenAI Clients และ Gemini-native Clients:
+  1. `choices[0].message.content` (OpenAI format)
+  2. `candidates[0].content.parts[0].text` (Gemini Native format)
+  3. `candidates[0].grounding_metadata` (Search Grounding web search queries & citations)
+- **Feature Flag Control**:
+  ควบคุมการเปิดปิดผ่าน `env.GEMINI_NATIVE_ENABLED` (ค่าเริ่มต้น: `"true"`) โดยปฏิเสธทันทีด้วย HTTP 404 เมื่อปิดใช้งาน
 
 ---
 
