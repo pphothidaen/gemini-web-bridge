@@ -406,3 +406,14 @@ Mutation B แดงแค่ 1 เป็นหลักฐานว่าสอ
 version ใดกำลังจะถูกถอด พร้อมเหตุผล กฎคือ **ยังไม่มีกำหนด sunset ใด ๆ
 จนกว่าจะมี ticket ที่ระบุวัน** — การประกาศ deprecation โดยไม่มีวันถอด
 ทำให้ client หยุดอัปเดตโดยไม่มีแรงกดดันที่จะบังคับให้รีบ
+
+---
+
+## 15. Health Probes, Models & Gemini-Native Endpoints (`/health` vs `/v1/models` vs `/v1/gemini/models`)
+
+| Endpoint | Authentication | Purpose & Response Scope |
+| :--- | :--- | :--- |
+| **`GET /health`** | Public (Unauthenticated) | Edge-to-DO connection liveness probe, queue state, extension connection status (`extension_status`), active model name, health metrics (`consecutive_errors`), and advertised `api_versions`. |
+| **`GET /v1/models`** | Bearer Token (`CLIENT_API_KEY`) | OpenAI-compatible model catalog discovery. Returns model objects with `status` (`ready` \| `discovering` \| `disconnected`), `catalog_revision`, and `browser_active_model`. |
+| **`GET /v1/gemini/models`** | Bearer Token (`CLIENT_API_KEY`) | Gemini-native model discovery. Returns models with first-class Search Grounding metadata (`capabilities: { grounding: true }`) for agents and clients requiring verified web grounding. |
+| **`POST /v1/gemini/chat/completions`** | Bearer Token (`CLIENT_API_KEY`) | Dual-compatible generation endpoint supporting Gemini-native `contents` array/object, `systemInstruction`, and `tools: [{"google_search": {}}]`. Returns both OpenAI `choices` and Gemini `candidates` with preserved `grounding_metadata`. Controlled via `GEMINI_NATIVE_ENABLED` feature flag. |

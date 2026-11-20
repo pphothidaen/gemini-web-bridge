@@ -11,6 +11,19 @@ All notable changes to the Gemini Web-Bridge project.
 ## [Unreleased]
 
 ### Added & Improved
+- **Extension Gemini Native Message Handler (KAN-352, ADR-0006)**:
+  - Added `GEMINI_NATIVE_REQUEST` and `GEMINI_NATIVE_RESPONSE` protocol message types in `dist/extension/protocol-messages.js` along with envelope builder helpers (`buildGeminiNativeRequestMessage`, `buildGeminiNativeResponseMessage`, `extractGroundingMetadata`).
+  - Implemented `handleGeminiNativeRequest` in `dist/extension/background.js` forwarding native Gemini payload directly to `https://de.aipass.net/api/gemini/chat` (version pinned via `X-API-Version: v1beta`).
+  - Supported response passthrough returning `grounding_metadata` / `groundingMetadata` 100% intact with zero OpenAI format translation.
+  - Enforced G1 Zero-Token-Leak guardrails: credentials, tokens, or SNlM0e are strictly stripped and never logged or leaked.
+  - Added `https://de.aipass.net/*` to extension `manifest.json` host_permissions.
+  - Supported `aipassEndpoint` and `aipassToken` settings in `BridgeSocketManager` and `chrome.storage.sync`.
+- **Integration Testing & Verification (KAN-355)**:
+  - Added comprehensive test suite in `cloudflare-worker/tests/gemini-native-extension.test.mjs` (20 new tests, total 829 tests passing).
+  - Verified end-to-end integration between Cloudflare Worker DO and Extension handlers for native streaming and search grounding.
+  - Verified feature flag graceful rollback, quota exhaustion (429), auth error (401), and disconnected fail-closed (503).
+- **Release & Documentation (KAN-356)**:
+  - Updated architecture specs, ADR-0006 related files, and CHANGELOG records.
 - **Gemini Native Routes & Google Search Grounding (KAN-351, ADR-0006)**:
   - Added native Gemini API endpoints `/v1/gemini/chat/completions` (POST) and `/v1/gemini/models` (GET) on Cloudflare Edge Worker.
   - Implemented Google Search Grounding tool support via `tools: [{"google_search": {}}]`, native `contents` input, and function declarations.

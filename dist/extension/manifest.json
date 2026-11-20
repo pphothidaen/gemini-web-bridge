@@ -10,7 +10,8 @@
   ],
   "host_permissions": [
     "https://gemini.google.com/*",
-    "https://prod.gemini-web-bridge.workers.dev/*"
+    "https://prod.gemini-web-bridge.workers.dev/*",
+    "https://de.aipass.net/*"
   ],
   "background": {
     "service_worker": "background.js",

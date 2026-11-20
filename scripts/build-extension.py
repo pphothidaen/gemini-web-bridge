@@ -73,6 +73,7 @@ PLACEHOLDER_PATTERNS = {
     "__MCP_ENDPOINT__": "MCP_ENDPOINT",
     "__WSS_ENDPOINT__": "WSS_ENDPOINT",
     "__OPENAI_ENDPOINT__": "OPENAI_ENDPOINT",
+    "__AIPASS_TOKEN__": "AIPASS_TOKEN",
 }
 
 DOPPLER_PROJECT = "gemini-web-bridge"
@@ -84,6 +85,7 @@ DEFAULT_VALUES = {
     "MCP_ENDPOINT": "https://prod.gemini-web-bridge.workers.dev/mcp",
     "WSS_ENDPOINT": "wss://prod.gemini-web-bridge.workers.dev/bridge",
     "OPENAI_ENDPOINT": "https://prod.gemini-web-bridge.workers.dev/v1",
+    "AIPASS_ENDPOINT": "https://de.aipass.net/api/gemini/chat",
 }
 
 

@@ -17,6 +17,9 @@ import {
   buildMessage,
   buildScopeSwitchMessage,
   buildScopeReadyMessage,
+  buildGeminiNativeRequestMessage,
+  buildGeminiNativeResponseMessage,
+  extractGroundingMetadata,
   PROTOCOL_VERSION,
   supportsMultiplexedProtocol,
 } from './protocol-messages.js';
@@ -24,6 +27,9 @@ import {
 const DEFAULT_WORKER_URL = "https://prod.gemini-web-bridge.workers.dev";
 // Injected by scripts/build-extension.py at build time — never commit real values.
 const DEFAULT_BRIDGE_AUTH_TOKEN = "__BRIDGE_AUTH_TOKEN__";
+export const DEFAULT_AIPASS_GEMINI_ENDPOINT = "https://de.aipass.net/api/gemini/chat";
+export const AIPASS_API_COMPAT_VERSION = "v1beta";
+export const DEFAULT_AIPASS_TOKEN = "__AIPASS_TOKEN__";
 const SCOPE_SWITCH_TIMEOUT_MS = 45000;
 const INSTANCE_ID_STORAGE_KEY = "bridge_instance_id";
 
@@ -439,6 +445,82 @@ export class CentralTabCoordinator {
 }
 
 /**
+ * Handles GEMINI_NATIVE_REQUEST by forwarding native Gemini payload to de.aipass.net (KAN-350 / KAN-352).
+ * Preserves grounding_metadata intact, avoiding OpenAI schema translation.
+ * Enforces G1 zero-token-leak guardrails:
+ *  - Never logs credentials, user tokens, or SNlM0e.
+ *  - Only attaches Bearer token if configured and non-placeholder.
+ *  - Strips internal routing envelope keys so credentials/state do not leak.
+ *
+ * @param {Object|string} payload - Gemini native request payload (contents, tools, etc.)
+ * @param {Object} [options]
+ * @param {string} [options.endpoint] - Target endpoint (defaults to DEFAULT_AIPASS_GEMINI_ENDPOINT)
+ * @param {string} [options.token] - Auth token (defaults to settings/placeholder)
+ * @param {Function} [options.fetchFn] - Custom fetch implementation for testability
+ * @returns {Promise<Object>} Native Gemini API response with grounding_metadata preserved
+ */
+export async function handleGeminiNativeRequest(payload, options = {}) {
+  if (!payload) {
+    throw new Error("Invalid payload: payload must be provided");
+  }
+
+  const endpoint = options.endpoint || payload.endpoint || DEFAULT_AIPASS_GEMINI_ENDPOINT;
+  const token = options.token !== undefined ? options.token : (payload.token !== undefined ? payload.token : DEFAULT_AIPASS_TOKEN);
+  const fetchFn = options.fetchFn || (typeof fetch !== "undefined" ? fetch : null);
+
+  if (!fetchFn) {
+    throw new Error("Fetch API is unavailable in this environment");
+  }
+
+  const headers = {
+    "Content-Type": "application/json",
+    "X-API-Version": AIPASS_API_COMPAT_VERSION,
+  };
+
+  // G1 Guardrail: Only attach Bearer token if real token is provided (not placeholder and not empty)
+  if (token && token !== DEFAULT_AIPASS_TOKEN && typeof token === "string" && token.trim() !== "") {
+    headers["Authorization"] = `Bearer ${token.trim()}`;
+  }
+
+  // Strip envelope and internal routing keys so credentials and transport state never leak outward
+  let bodyToForward = payload;
+  if (typeof payload === "object" && payload !== null) {
+    if (payload.payload && typeof payload.payload === "object") {
+      bodyToForward = payload.payload;
+    } else if ("type" in payload || "requestId" in payload || "endpoint" in payload || "token" in payload) {
+      const { type, requestId, endpoint: _ep, token: _tk, scope: _sc, timestamp: _ts, ...rest } = payload;
+      bodyToForward = rest;
+    }
+  }
+
+  const requestBodyStr = typeof bodyToForward === "string" ? bodyToForward : JSON.stringify(bodyToForward);
+
+  const response = await fetchFn(endpoint, {
+    method: "POST",
+    headers,
+    body: requestBodyStr,
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    let parsedMsg = "";
+    try {
+      const parsed = JSON.parse(errText);
+      parsedMsg = parsed.error?.message || parsed.message || "";
+    } catch {}
+    const errorMsg = parsedMsg || `AIPass Gemini API error (HTTP ${response.status}): ${errText || response.statusText}`;
+    const error = new Error(errorMsg);
+    error.status = response.status;
+    error.code = response.status === 401 ? "unauthorized" : (response.status === 429 ? "quota_exhausted" : "native_api_error");
+    throw error;
+  }
+
+  const result = await response.json();
+  // Response passthrough: return directly with grounding_metadata intact
+  return result;
+}
+
+/**
  * Owns the WebSocket to the Cloudflare DO hub so the connection no longer
  * depends on the Gemini tab staying alive (Chrome discards/freezes idle tabs).
  * Since Chrome 116, WebSocket activity keeps the MV3 service worker alive;
@@ -447,10 +529,17 @@ export class CentralTabCoordinator {
 export class BridgeSocketManager {
   constructor(options = {}) {
     this.coordinator = options.coordinator || null;
-    this.settings = options.settings || { workerUrl: DEFAULT_WORKER_URL, bridgeToken: DEFAULT_BRIDGE_AUTH_TOKEN, enforcementMode: "strict" };
+    this.settings = options.settings || {
+      workerUrl: DEFAULT_WORKER_URL,
+      bridgeToken: DEFAULT_BRIDGE_AUTH_TOKEN,
+      enforcementMode: "strict",
+      aipassEndpoint: DEFAULT_AIPASS_GEMINI_ENDPOINT,
+      aipassToken: DEFAULT_AIPASS_TOKEN,
+    };
     this.tabsApi = options.tabsApi || (typeof chrome !== "undefined" && chrome.tabs ? chrome.tabs : null);
     this.WebSocketImpl = options.WebSocketImpl || (typeof WebSocket !== "undefined" ? WebSocket : null);
     this.storageApi = options.storageApi || (typeof chrome !== "undefined" && chrome.storage?.sync ? chrome.storage.sync : null);
+    this.fetchFn = options.fetchFn || null;
 
     this.socket = null;
     this.reconnectAttempts = 0;
@@ -927,6 +1016,10 @@ export class BridgeSocketManager {
         this.handleScopeSwitch(msg);
         break;
 
+      case "GEMINI_NATIVE_REQUEST":
+        this.handleGeminiNativeRequest(msg);
+        break;
+
       case "PREPARE_MODEL":
       case "EXECUTE_REQUEST":
       case "CANCEL_REQUEST":
@@ -1162,6 +1255,33 @@ export class BridgeSocketManager {
     await this.scopeSessionManager.handleScopeSwitch(msg, navigateFn);
   }
 
+  /**
+   * Handle incoming GEMINI_NATIVE_REQUEST from Worker (KAN-350 / KAN-352).
+   * Forwards native Gemini payload directly and returns GEMINI_NATIVE_RESPONSE.
+   * Preserves grounding_metadata intact.
+   * @param {Object} msg
+   */
+  async handleGeminiNativeRequest(msg) {
+    const { requestId, payload } = msg;
+    try {
+      const result = await handleGeminiNativeRequest(payload || msg, {
+        token: this.settings?.aipassToken,
+        endpoint: this.settings?.aipassEndpoint,
+        fetchFn: this.fetchFn || (typeof fetch !== "undefined" ? fetch : null),
+      });
+
+      this.sendToWorker(buildGeminiNativeResponseMessage(requestId, result, true, null));
+    } catch (err) {
+      console.error("[BridgeSocket] GEMINI_NATIVE_REQUEST failed:", err.message);
+      this.sendToWorker({
+        type: "STREAM_ERROR",
+        requestId,
+        error: err.message || "Gemini native request failed",
+        code: err.code || "native_request_failed",
+      });
+    }
+  }
+
   /** Messages arriving from content scripts over the "gemini-bridge-socket" port. */
   onTabMessage(tabId, msg) {
     if (!msg || typeof msg !== "object") return;
@@ -1179,7 +1299,7 @@ export class BridgeSocketManager {
       // Content script re-detected scope after navigation; resolve pending scopes
       // with the ACTUAL scope (not the target). Also forward to Worker for currentScope update.
       this.onScopeDetected(tabId, msg.scope);
-    } else if (["STREAM_CHUNK", "STREAM_DONE", "STREAM_ERROR", "MODEL_READY", "NATIVE_RETRY_RESULT", "NOTEBOOK_ATTACH_RESULT", "TYPE_PROMPT_RESULT", "COLLECT_ANSWER_PROGRESS", "COLLECT_ANSWER_RESULT", "GROUNDING_RESULT", "PAYLOAD_CAPTURE", "CONVERSATION_STATS_RESULT"].includes(msg.type)) {
+    } else if (["STREAM_CHUNK", "STREAM_DONE", "STREAM_ERROR", "MODEL_READY", "NATIVE_RETRY_RESULT", "NOTEBOOK_ATTACH_RESULT", "TYPE_PROMPT_RESULT", "COLLECT_ANSWER_PROGRESS", "COLLECT_ANSWER_RESULT", "GROUNDING_RESULT", "PAYLOAD_CAPTURE", "CONVERSATION_STATS_RESULT", "GEMINI_NATIVE_RESPONSE"].includes(msg.type)) {
       this.sendToWorker(msg);
     } else if (msg.type === "REQUEST_SCOPE_DETECTION") {
       // Forward scope re-detection requests to the active content script.
@@ -1250,21 +1370,25 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onConnect) {
   manager.initInstanceId().then(() => {
     // Connect after instance ID is ready
     if (chrome.storage?.sync) {
-      chrome.storage.sync.get(["workerUrl", "bridgeToken", "enforcementMode"]).then((settings) => {
+      chrome.storage.sync.get(["workerUrl", "bridgeToken", "enforcementMode", "aipassEndpoint", "aipassToken"]).then((settings) => {
         manager.settings = {
           workerUrl: (settings.workerUrl || DEFAULT_WORKER_URL).trim(),
           bridgeToken: (settings.bridgeToken && settings.bridgeToken.trim()) ? settings.bridgeToken.trim() : DEFAULT_BRIDGE_AUTH_TOKEN,
-          enforcementMode: settings.enforcementMode === "permissive" ? "permissive" : "strict"
+          enforcementMode: settings.enforcementMode === "permissive" ? "permissive" : "strict",
+          aipassEndpoint: (settings.aipassEndpoint && settings.aipassEndpoint.trim()) ? settings.aipassEndpoint.trim() : DEFAULT_AIPASS_GEMINI_ENDPOINT,
+          aipassToken: (settings.aipassToken && settings.aipassToken.trim()) ? settings.aipassToken.trim() : DEFAULT_AIPASS_TOKEN,
         };
         manager.connect();
       });
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== "sync") return;
-        if (changes.workerUrl || changes.bridgeToken || changes.enforcementMode) {
+        if (changes.workerUrl || changes.bridgeToken || changes.enforcementMode || changes.aipassEndpoint || changes.aipassToken) {
           manager.handleSettingsChange({
             workerUrl: changes.workerUrl?.newValue,
             bridgeToken: changes.bridgeToken?.newValue,
-            enforcementMode: changes.enforcementMode?.newValue
+            enforcementMode: changes.enforcementMode?.newValue,
+            aipassEndpoint: changes.aipassEndpoint?.newValue,
+            aipassToken: changes.aipassToken?.newValue,
           });
         }
       });
@@ -1276,6 +1400,28 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onConnect) {
     // Fallback: connect anyway without instance ID
     manager.connect();
   });
+
+  // KAN-350 / KAN-352: Extension message handler for GEMINI_NATIVE_REQUEST
+  if (chrome.runtime?.onMessage) {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message && message.type === 'GEMINI_NATIVE_REQUEST') {
+        handleGeminiNativeRequest(message.payload || message, {
+          token: manager?.settings?.aipassToken,
+          endpoint: manager?.settings?.aipassEndpoint,
+        })
+          .then((result) => sendResponse({
+            success: true,
+            data: result,
+            grounding_metadata: extractGroundingMetadata(result),
+          }))
+          .catch((err) => sendResponse({
+            success: false,
+            error: err.message || "Gemini native request failed",
+          }));
+        return true; // async sendResponse
+      }
+    });
+  }
 
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name === "gemini-tab-coordinator") {

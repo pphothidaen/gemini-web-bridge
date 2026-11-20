@@ -78,5 +78,9 @@ Gemini Web Bridge ทำหน้าที่เป็น Edge-to-Browser Gatewa
 
 ## Related Files
 - `cloudflare-worker/src/index.js` — Routing, request normalization, and Gemini native endpoint handling
-- `cloudflare-worker/tests/gemini-native-routes.test.mjs` — Comprehensive unit and integration test suite
+- `cloudflare-worker/tests/gemini-native-routes.test.mjs` — Core Worker unit and integration test suite
+- `dist/extension/background.js` — Extension Gemini Native Message Handler and de.aipass.net RPC forwarding (KAN-352)
+- `dist/extension/protocol-messages.js` — Protocol message types (`GEMINI_NATIVE_REQUEST`, `GEMINI_NATIVE_RESPONSE`) and helpers (KAN-352)
+- `dist/extension/manifest.json` — Extension permissions and host permissions for de.aipass.net (KAN-352)
+- `cloudflare-worker/tests/gemini-native-extension.test.mjs` — Extension RPC and end-to-end integration test suite (KAN-355)
 - `docs/architecture.md` — Mermaid architecture diagrams and ADR index table

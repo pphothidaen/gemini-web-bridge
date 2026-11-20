@@ -610,6 +610,10 @@ export const MessageTypes = Object.freeze({
   STREAM_DONE: 'STREAM_DONE',
   STREAM_ERROR: 'STREAM_ERROR',
 
+  // Gemini Native protocol (KAN-350 / KAN-352)
+  GEMINI_NATIVE_REQUEST: 'GEMINI_NATIVE_REQUEST',
+  GEMINI_NATIVE_RESPONSE: 'GEMINI_NATIVE_RESPONSE',
+
   // Preparation
   PREPARE_MODEL: 'PREPARE_MODEL',
   PREPARE_SCOPE: 'PREPARE_SCOPE',
@@ -1007,6 +1011,57 @@ export function buildExecuteRequestMessage(requestId, payload, scope) {
   });
 }
 
+/**
+ * Build a GEMINI_NATIVE_REQUEST message with scope routing (server → extension or client → extension).
+ * KAN-350 / KAN-352: Forwards native Gemini payload directly preserving grounding_metadata.
+ * @param {string} requestId - Unique request ID
+ * @param {Object} payload - The native Gemini request payload
+ * @param {string} [scope] - Target scope for this execution
+ * @returns {Object} GEMINI_NATIVE_REQUEST message
+ */
+export function buildGeminiNativeRequestMessage(requestId, payload, scope = 'app') {
+  return buildMessage(MessageTypes.GEMINI_NATIVE_REQUEST, {
+    requestId,
+    payload,
+    scope: validateScope(scope) || scope,
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Extracts grounding metadata from either root or candidates[0] in a Gemini response.
+ * @param {Object} [data]
+ * @returns {Object|null}
+ */
+export function extractGroundingMetadata(data) {
+  if (!data || typeof data !== 'object') return null;
+  return data.grounding_metadata ??
+    data.groundingMetadata ??
+    data.candidates?.[0]?.groundingMetadata ??
+    data.candidates?.[0]?.grounding_metadata ??
+    null;
+}
+
+/**
+ * Build a GEMINI_NATIVE_RESPONSE message (extension → server or extension → client).
+ * KAN-350 / KAN-352: Response passthrough preserving grounding_metadata intact.
+ * @param {string} requestId - The request ID being answered
+ * @param {Object} [data] - The native Gemini response data
+ * @param {boolean} [success=true] - Whether the request succeeded
+ * @param {string|null} [error=null] - Error message if failed
+ * @returns {Object} GEMINI_NATIVE_RESPONSE message
+ */
+export function buildGeminiNativeResponseMessage(requestId, data = null, success = true, error = null) {
+  return buildMessage(MessageTypes.GEMINI_NATIVE_RESPONSE, {
+    requestId,
+    success,
+    data,
+    error,
+    grounding_metadata: extractGroundingMetadata(data),
+    timestamp: Date.now(),
+  });
+}
+
 // ─── Protocol Version Negotiation ────────────────────────────
 /**
  * Check if the extension supports the multiplexed protocol (v3).
@@ -1059,7 +1114,8 @@ export function getProtocolInfo() {
       scopeSwitchWithoutReconnect: true,
       scopeRouting: true,
       jsonRpcStyle: true,
-      thinkingEffortLevels: ['off', 'low', 'medium', 'high', 'max']
+      thinkingEffortLevels: ['off', 'low', 'medium', 'high', 'max'],
+      geminiNativeProtocol: true,
     },
     note: 'Tii/fk are model capabilities, not scopes. They are reported via MODEL_UPDATED.',
   };
