@@ -645,7 +645,7 @@ jobs:
     name: Redteam — Token Validation
     runs-on: ubuntu-26.04
     needs: [security-scan]
-    if: !cancelled()
+    if: ${{ !cancelled() }}
     steps:
       - name: Token validation (auth-only probes, no hardcoded secrets)
         env:

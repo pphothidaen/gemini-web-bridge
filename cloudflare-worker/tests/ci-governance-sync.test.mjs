@@ -134,8 +134,8 @@ test('redteam-token-test is active on CI with !cancelled() and without main-only
   const redteamJob = CI_CONTENT.split('redteam-token-test:')[1] || '';
   assert.match(
     redteamJob,
-    /if:\s*!cancelled\(\)/,
-    'redteam-token-test must have if: !cancelled() to run across all CI events'
+    /if:\s*(\${{\s*)?!cancelled\(\)(\s*}})?/,
+    'redteam-token-test must have if: ${{ !cancelled() }} to run across all CI events'
   );
   assert.doesNotMatch(
     redteamJob.split('steps:')[0],
@@ -261,5 +261,16 @@ test('cd.yml supports secret fallback aliases for worker secrets', () => {
   assert.match(cdContent, /GH_BRIDGE_AUTH_TOKEN: \${{ secrets\.BRIDGE_AUTH_TOKEN \|\| secrets\.BRIDGE_SECRET/, 'cd.yml must support BRIDGE_SECRET fallback');
   assert.match(cdContent, /GH_CLIENT_TOKEN: \${{ secrets\.CLIENT_API_KEY \|\| secrets\.CLIENT_API_TOKEN/, 'cd.yml must support CLIENT_API_TOKEN fallback');
 });
+
+test('validate-workflows.py detects unquoted ! in workflow if-conditions', () => {
+  const scriptPath = path.join(REPO_ROOT, 'scripts/validate-workflows.py');
+  const scriptContent = fs.readFileSync(scriptPath, 'utf8');
+  assert.match(
+    scriptContent,
+    /cond\.startswith\(["']!["']\)/,
+    'validate-workflows.py must check for unquoted !'
+  );
+});
+
 
 

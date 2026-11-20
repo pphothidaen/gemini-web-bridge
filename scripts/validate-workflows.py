@@ -92,6 +92,24 @@ def check(path):
                         break
                     cond += " " + nxt
                     j += 1
+            elif not cond:
+                base = indent_of(line)
+                j = i
+                while j < len(lines):
+                    nxt = lines[j].strip()
+                    if not nxt or nxt.startswith("#"):
+                        j += 1
+                        continue
+                    if indent_of(lines[j]) <= base:
+                        break
+                    cond = nxt
+                    break
+            if cond.startswith("!"):
+                problems.append(
+                    "line %d: `if:` starts with unquoted `!` (%s) — YAML treats "
+                    "this as a tag specification and GitHub rejects the file with "
+                    "zero jobs. Wrap it in `${{ %s }}` or quote it." % (i, cond, cond)
+                )
             for ctx in FORBIDDEN_IN_IF:
                 if ctx in cond:
                     problems.append(
