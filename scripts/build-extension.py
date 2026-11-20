@@ -86,6 +86,7 @@ DEFAULT_VALUES = {
     "WSS_ENDPOINT": "wss://prod.gemini-web-bridge.workers.dev/bridge",
     "OPENAI_ENDPOINT": "https://prod.gemini-web-bridge.workers.dev/v1",
     "AIPASS_ENDPOINT": "https://de.aipass.net/api/gemini/chat",
+    "AIPASS_TOKEN": "",
 }
 
 
